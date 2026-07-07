@@ -75,7 +75,9 @@ jobs:
 
       - name: Publicar
         run: |
-          rsync -az \
+          # --chmod=F644: artifact pode vir com permissão restritiva e o
+          # www-data (nginx) precisa conseguir ler o arquivo
+          rsync -az --chmod=F644 \
             -e "ssh -o StrictHostKeyChecking=accept-new -i ~/.ssh/id_ed25519" \
             dist/index.html ${{ env.REMOTE }}:${{ env.WEBROOT }}/index.html
 
@@ -83,11 +85,12 @@ jobs:
         run: |
           ssh -i ~/.ssh/id_ed25519 ${{ env.REMOTE }} bash -s << 'EOF'
             set -euo pipefail
-            check() {
-              code=$(curl -sk -o /dev/null -w "%{http_code}" --resolve goa.mnrs.com.br:443:127.0.0.1 https://goa.mnrs.com.br/)
-              [ "$code" = "200" ] && curl -sk --resolve goa.mnrs.com.br:443:127.0.0.1 https://goa.mnrs.com.br/ | grep -q "SkyRescue"
-            }
-            if check; then
+            code=$(curl -sk -o /dev/null -w "%{http_code}" --resolve goa.mnrs.com.br:443:127.0.0.1 https://goa.mnrs.com.br/ || echo "curl-fail")
+            body_ok=0
+            curl -sk --resolve goa.mnrs.com.br:443:127.0.0.1 https://goa.mnrs.com.br/ | grep -q "SkyRescue" && body_ok=1
+            perms=$(stat -c '%a %U:%G' /var/www/skyrescue/index.html)
+            echo "diagnóstico: http=$code conteúdo=$body_ok perms=$perms"
+            if [ "$code" = "200" ] && [ "$body_ok" = "1" ]; then
               echo "healthcheck OK (200 + conteúdo)"
             else
               echo "ERRO: healthcheck falhou — restaurando versão anterior"
