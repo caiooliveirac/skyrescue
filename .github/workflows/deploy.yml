@@ -87,7 +87,12 @@ jobs:
             set -euo pipefail
             code=$(curl -sk -o /dev/null -w "%{http_code}" --resolve goa.mnrs.com.br:443:127.0.0.1 https://goa.mnrs.com.br/ || echo "curl-fail")
             body_ok=0
-            curl -sk --resolve goa.mnrs.com.br:443:127.0.0.1 https://goa.mnrs.com.br/ | grep -q "SkyRescue" && body_ok=1
+            # corpo em arquivo antes do grep: `curl | grep -q` morre de SIGPIPE
+            # no primeiro match e o pipefail reprovaria um site saudável
+            tmp=$(mktemp)
+            curl -sk --resolve goa.mnrs.com.br:443:127.0.0.1 -o "$tmp" https://goa.mnrs.com.br/ || true
+            grep -q "SkyRescue" "$tmp" && body_ok=1
+            rm -f "$tmp"
             perms=$(stat -c '%a %U:%G' /var/www/skyrescue/index.html)
             echo "diagnóstico: http=$code conteúdo=$body_ok perms=$perms"
             if [ "$code" = "200" ] && [ "$body_ok" = "1" ]; then
