@@ -60,6 +60,13 @@ export default function App() {
   const [showObs, setShowObs] = useState(false)
   const [editMode, setEditMode] = useState(false)
   const [focus, setFocus] = useState(null)
+  const [baseLayer, setBaseLayer] = useState(() => {
+    try { return localStorage.getItem('skyrescue_baselayer') || 'dark' } catch (e) { return 'dark' }
+  })
+  const pickBaseLayer = (v) => {
+    setBaseLayer(v)
+    try { localStorage.setItem('skyrescue_baselayer', v) } catch (e) { /* ok */ }
+  }
 
   const [events, setEvents] = useState({})
   const [cases, setCases] = useState(loadCases)
@@ -537,8 +544,14 @@ export default function App() {
               lz={lzList} lzSelId={lzSelId} manualLz={manualLz}
               obstacles={obstacles} route={route} mode={mapMode} showObs={showObs}
               editMode={editMode} focus={focus}
+              baseLayer={baseLayer} googleKey={cfg.map?.googleKey || ''}
               onMapClick={onMapClick} onBaseMove={onBaseMove} onPlaceMove={onPlaceMove}
             />
+            <div className="maplayers">
+              <button className={baseLayer === 'dark' ? 'on' : ''} onClick={() => pickBaseLayer('dark')}>Mapa</button>
+              <button className={baseLayer === 'sat' ? 'on' : ''} onClick={() => pickBaseLayer('sat')}>Satélite</button>
+              <button className={baseLayer === 'hybrid' ? 'on' : ''} onClick={() => pickBaseLayer('hybrid')}>Híbrido</button>
+            </div>
           </div>
 
           <div className="card">

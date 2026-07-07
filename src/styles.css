@@ -448,6 +448,22 @@ input[type="checkbox"] { accent-color: #22d3ee; width: 16px; height: 16px; }
 .mapmode button.on { background: var(--grad-primary); color: #fff; border-color: transparent; box-shadow: 0 3px 12px rgba(14, 165, 233, 0.4); }
 .mapmode button.on-edit { background: rgba(251, 191, 36, 0.9); color: #1c1400; border-color: transparent; }
 
+.maplayers {
+  position: absolute; z-index: 900; top: 20px; left: 64px;
+  display: flex; gap: 0;
+  background: rgba(8, 13, 24, 0.88); border: 1px solid var(--line-strong);
+  border-radius: 9px; overflow: hidden;
+}
+.maplayers button {
+  background: transparent; border: none; color: var(--muted);
+  padding: 6px 12px; font-size: 12px; font-weight: 600;
+  border-right: 1px solid var(--line);
+  transition: all .12s;
+}
+.maplayers button:last-child { border-right: none; }
+.maplayers button:hover { color: var(--ink); }
+.maplayers button.on { background: var(--grad-primary); color: #fff; }
+
 .maplegend {
   position: absolute; z-index: 900; bottom: 20px; left: 20px;
   display: flex; gap: 10px; flex-wrap: wrap;

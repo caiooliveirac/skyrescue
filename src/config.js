@@ -38,6 +38,12 @@ export const DEFAULTS = {
   ground: {
     trafficFactor: 1.25, // OSRM não considera trânsito em tempo real
   },
+  map: {
+    // Chave do Google Maps JS API (opcional): habilita satélite/híbrido do
+    // Google — imagem mais atual. Sem chave, cai no Esri World Imagery.
+    // Pode vir embutida no build via secret VITE_GMAPS_KEY.
+    googleKey: import.meta.env.VITE_GMAPS_KEY || '',
+  },
   ops: {
     nightAllowed: false,   // GOA opera VFR diurno
     sunsetMarginMin: 20,   // margem antes do pôr do sol

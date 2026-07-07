@@ -155,6 +155,21 @@ export default function ConfigModal({ cfg, onSave, onClose }) {
           </div>
         )}
 
+        <h4>Mapa</h4>
+        <div className="field">
+          <label>Chave Google Maps JS API (opcional — habilita Satélite/Híbrido do Google)</label>
+          <input
+            type="text"
+            value={c.map?.googleKey || ''}
+            placeholder="AIza… (sem chave, o satélite usa Esri/Maxar)"
+            onChange={(e) => setC((prev) => ({ ...prev, map: { ...(prev.map || {}), googleKey: e.target.value.trim() } }))}
+          />
+          <div className="small">
+            Crie em console.cloud.google.com → APIs e serviços → Credenciais, habilite <b>Maps JavaScript API</b> e restrinja a chave ao domínio goa.mnrs.com.br.
+            Nível gratuito: 10 mil carregamentos/mês. A chave fica salva só neste navegador.
+          </div>
+        </div>
+
         <h4>Hospitais de referência</h4>
         <div className="small" style={{ marginBottom: 8 }}>
           Confirme as posições com “buscar” (endereço), digitando lat/lon, ou arrastando no mapa (botão <b>Ajustar posições</b>).

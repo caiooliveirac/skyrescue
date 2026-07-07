@@ -30,6 +30,9 @@ jobs:
         run: npm ci
 
       - name: Build (arquivo único)
+        env:
+          # opcional: embute a chave Google Maps p/ todos os usuários do site
+          VITE_GMAPS_KEY: ${{ secrets.VITE_GMAPS_KEY }}
         run: npm run build
 
       - name: Smoke test do bundle

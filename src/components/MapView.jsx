@@ -1,6 +1,13 @@
 import { useEffect, useRef } from 'react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
+import 'leaflet.gridlayer.googlemutant'
+import { loadGoogleMaps } from '../lib/gmaps.js'
+
+// camadas base disponíveis
+const CARTO_DARK = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
+const ESRI_IMAGERY = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
+const CARTO_LABELS = 'https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png'
 
 // ---- ícones SVG dos marcadores (html puro p/ L.divIcon) ----
 const heliSvg =
@@ -29,12 +36,14 @@ const lzIcon = (letter, suitKey, sel) =>
 
 export default function MapView({
   cfg, scene, hospitalId, landingHelipad, lz, lzSelId, manualLz, obstacles, route,
-  mode, showObs, editMode, focus,
+  mode, showObs, editMode, focus, baseLayer = 'dark', googleKey = '',
   onMapClick, onBaseMove, onPlaceMove,
 }) {
   const divRef = useRef(null)
   const mapRef = useRef(null)
   const layerRef = useRef(null)
+  const tileRef = useRef(null)   // camada base atual
+  const labelsRef = useRef(null) // rótulos sobre o satélite (fallback híbrido)
   const modeRef = useRef(mode)
   const clickRef = useRef(onMapClick)
   const baseMoveRef = useRef(onBaseMove)
@@ -48,17 +57,59 @@ export default function MapView({
 
   useEffect(() => {
     const m = L.map(divRef.current, { zoomControl: true }).setView([cfg.base.lat, cfg.base.lon], 10)
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-      maxZoom: 20,
-      subdomains: 'abcd',
-      attribution: '&copy; OpenStreetMap &copy; CARTO',
-    }).addTo(m)
     m.on('click', (e) => clickRef.current && clickRef.current(e.latlng.lat, e.latlng.lng, modeRef.current))
     layerRef.current = L.layerGroup().addTo(m)
     mapRef.current = m
     return () => m.remove()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // camada base: escuro / satélite / híbrido — Google oficial com chave,
+  // senão Esri World Imagery (Maxar) como fallback
+  useEffect(() => {
+    const m = mapRef.current
+    if (!m) return
+    let cancelled = false
+
+    const clearBase = () => {
+      if (tileRef.current) { m.removeLayer(tileRef.current); tileRef.current = null }
+      if (labelsRef.current) { m.removeLayer(labelsRef.current); labelsRef.current = null }
+    }
+
+    const addEsri = (hybrid) => {
+      clearBase()
+      tileRef.current = L.tileLayer(ESRI_IMAGERY, {
+        maxZoom: 19,
+        attribution: 'Imagens &copy; Esri, Maxar, Earthstar Geographics',
+      }).addTo(m)
+      if (hybrid) {
+        labelsRef.current = L.tileLayer(CARTO_LABELS, {
+          maxZoom: 20, subdomains: 'abcd', attribution: '&copy; OpenStreetMap &copy; CARTO',
+        }).addTo(m)
+      }
+    }
+
+    if (baseLayer === 'dark') {
+      clearBase()
+      tileRef.current = L.tileLayer(CARTO_DARK, {
+        maxZoom: 20, subdomains: 'abcd', attribution: '&copy; OpenStreetMap &copy; CARTO',
+      }).addTo(m)
+    } else if (googleKey) {
+      loadGoogleMaps(googleKey)
+        .then(() => {
+          if (cancelled) return
+          clearBase()
+          tileRef.current = L.gridLayer
+            .googleMutant({ type: baseLayer === 'hybrid' ? 'hybrid' : 'satellite', maxZoom: 21 })
+            .addTo(m)
+        })
+        .catch(() => { if (!cancelled) addEsri(baseLayer === 'hybrid') })
+    } else {
+      addEsri(baseLayer === 'hybrid')
+    }
+
+    return () => { cancelled = true }
+  }, [baseLayer, googleKey])
 
   // voar até um ponto (ex.: LZ escolhida na lista)
   useEffect(() => {
