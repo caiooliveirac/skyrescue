@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { loadCfg, saveCfg, loadCases, saveCases, TAG_LABELS, hospitalHelipads } from './config.js'
+import { loadCfg, saveCfg, loadCases, saveCases, TAG_LABELS, hospitalHelipads, landingPoints } from './config.js'
 import { geocode, reverseGeocode, fetchWeather, fetchMetar, groundRoute, overpass, lzQuery, obstacleQuery } from './lib/api.js'
 import { haversineKm, fmtMin, fmtCoords, fmtCoordsDMS, gmapsLink } from './lib/geo.js'
 import { computeMission, autoChecks, daylightCheck, rangeCheck, combinedWeatherStatus, classifyWeather } from './lib/mission.js'
@@ -12,7 +12,7 @@ import ConfigModal from './components/ConfigModal.jsx'
 import { DecisionStrip, TimePanel, WeatherPanel, LZPanel, AlertsPanel, GatesPanel } from './components/Results.jsx'
 import {
   IconHeli, IconPlus, IconFolder, IconPrint, IconSettings, IconSearch, IconPin,
-  IconTarget, IconZap, IconEdit, IconCopy, IconSave, IconDownload,
+  IconTarget, IconZap, IconCopy, IconSave, IconDownload,
   IconClock, IconCloud, IconAlert, IconRoute, IconX,
 } from './components/Icons.jsx'
 
@@ -58,7 +58,6 @@ export default function App() {
   const [manualLz, setManualLz] = useState(null)
   const [mapMode, setMapMode] = useState('scene')
   const [showObs, setShowObs] = useState(false)
-  const [editMode, setEditMode] = useState(false)
   const [focus, setFocus] = useState(null)
   const [baseLayer, setBaseLayer] = useState(() => {
     try { return localStorage.getItem('skyrescue_baselayer') || 'dark' } catch (e) { return 'dark' }
@@ -94,13 +93,13 @@ export default function App() {
   const landingHelipad = useMemo(() => {
     if (!hospital || hospital.heliponto || landingSel === 'lz') return null
     if (landingSel === 'auto') return assocHelipads[0] || null
-    return (cfg.helipads || []).find((p) => p.id === landingSel) || null
+    return landingPoints(cfg).find((p) => p.id === landingSel) || null
     // eslint-disable-next-line
   }, [hospitalId, landingSel, cfg])
 
   // heliponto excluído na Config não pode ficar selecionado
   useEffect(() => {
-    if (landingSel !== 'auto' && landingSel !== 'lz' && !(cfg.helipads || []).some((p) => p.id === landingSel)) {
+    if (landingSel !== 'auto' && landingSel !== 'lz' && !landingPoints(cfg).some((p) => p.id === landingSel)) {
       setLandingSel('auto')
     }
   }, [cfg, landingSel])
@@ -261,8 +260,8 @@ export default function App() {
   // ---------- alertas ----------
   const alerts = useMemo(() => {
     const out = []
-    if (!cfg.base.verified) out.push({ level: 'warn', text: 'Posição da base aérea é aproximada — arraste o marcador do helicóptero no mapa ou ajuste em Config.' })
-    if (hospital && !hospital.verified) out.push({ level: 'info', text: `Posição de ${hospital.name} é aproximada — use “Ajustar posições” no mapa ou Config.` })
+    if (!cfg.base.verified) out.push({ level: 'warn', text: 'Posição da base aérea é aproximada — ajuste em Config.' })
+    if (hospital && !hospital.verified) out.push({ level: 'info', text: `Posição de ${hospital.name} é aproximada — ajuste em Config.` })
     if (hospital && !hospital.heliponto) {
       if (landingHelipad) {
         out.push({ level: 'info', text: `${hospital.name} sem heliponto próprio: desembarque no ${landingHelipad.name} + transbordo de ambulância (+${cfg.times.transbordoMin} min).${landingHelipad.kind === 'privado' ? ' Heliponto da rede privada — coordenar previamente o uso.' : ''}` })
@@ -326,21 +325,6 @@ export default function App() {
       const lbl = await reverseGeocode(lat, lon)
       if (lbl && seq === revGeoRef.current) setSceneLabel(lbl)
     }
-  }
-
-  const onBaseMove = (lat, lon) => {
-    const next = { ...cfg, base: { ...cfg.base, lat, lon, verified: true } }
-    setCfg(next); saveCfg(next)
-  }
-
-  // arrastar hospital/heliponto no modo de ajuste
-  const onPlaceMove = (kind, id, lat, lon) => {
-    const next = JSON.parse(JSON.stringify(cfg))
-    const list = kind === 'hospital' ? next.hospitals : next.helipads
-    const it = (list || []).find((x) => x.id === id)
-    if (!it) return
-    it.lat = lat; it.lon = lon; it.verified = true
-    setCfg(next); saveCfg(next)
   }
 
   const markEvent = (id) => setEvents((p) => ({ ...p, [id]: Date.now() }))
@@ -465,7 +449,7 @@ export default function App() {
 
       {!cfg.base.verified && (
         <div className="notice">
-          <b>Primeiro uso:</b> confirme a posição da base do GOA (arraste o marcador do helicóptero) e as posições de hospitais/helipontos — botão <b>Ajustar posições</b> no mapa ou tela Config.
+          <b>Primeiro uso:</b> confirme a posição da base do GOA e as posições de hospitais/helipontos na tela <b>Config</b>.
         </div>
       )}
 
@@ -534,18 +518,17 @@ export default function App() {
         <div className="col">
           <div className="card mapbox">
             <div className="mapmode">
-              <button className={mapMode === 'scene' && !editMode ? 'on' : ''} onClick={() => { setMapMode('scene'); setEditMode(false) }}><IconPin size={13} /> Ocorrência</button>
-              <button className={mapMode === 'lz' ? 'on' : ''} onClick={() => { setMapMode(mapMode === 'lz' ? 'scene' : 'lz'); setEditMode(false) }}><IconTarget size={13} /> Marcar LZ</button>
+              <button className={mapMode === 'scene' ? 'on' : ''} onClick={() => setMapMode('scene')}><IconPin size={13} /> Ocorrência</button>
+              <button className={mapMode === 'lz' ? 'on' : ''} onClick={() => setMapMode(mapMode === 'lz' ? 'scene' : 'lz')}><IconTarget size={13} /> Marcar LZ</button>
               <button className={showObs ? 'on' : ''} onClick={() => setShowObs(!showObs)}><IconZap size={13} /> Obstáculos</button>
-              <button className={editMode ? 'on-edit' : ''} onClick={() => setEditMode(!editMode)} title="Arraste hospitais e helipontos para corrigir posições"><IconEdit size={13} /> Ajustar posições</button>
             </div>
             <MapView
               cfg={cfg} scene={scene} hospitalId={hospitalId} landingHelipad={landingHelipad}
               lz={lzList} lzSelId={lzSelId} manualLz={manualLz}
               obstacles={obstacles} route={route} mode={mapMode} showObs={showObs}
-              editMode={editMode} focus={focus}
+              focus={focus}
               baseLayer={baseLayer} googleKey={cfg.map?.googleKey || ''}
-              onMapClick={onMapClick} onBaseMove={onBaseMove} onPlaceMove={onPlaceMove}
+              onMapClick={onMapClick}
             />
             <div className="maplayers">
               <button className={baseLayer === 'dark' ? 'on' : ''} onClick={() => pickBaseLayer('dark')}>Mapa</button>
@@ -579,7 +562,7 @@ export default function App() {
                   <option value="auto">
                     {assocHelipads.length ? `Padrão — ${assocHelipads[0].name}` : 'LZ próxima ao hospital + transbordo'}
                   </option>
-                  {(cfg.helipads || []).map((p) => (
+                  {landingPoints(cfg).map((p) => (
                     <option key={p.id} value={p.id}>
                       {hospital.helipadIds?.includes(p.id) ? '★ ' : ''}{p.name}{p.kind === 'privado' ? ' · rede privada' : ''}
                     </option>

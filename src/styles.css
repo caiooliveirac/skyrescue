@@ -446,7 +446,6 @@ input[type="checkbox"] { accent-color: #22d3ee; width: 16px; height: 16px; }
 }
 .mapmode button:hover { color: var(--ink); }
 .mapmode button.on { background: var(--grad-primary); color: #fff; border-color: transparent; box-shadow: 0 3px 12px rgba(14, 165, 233, 0.4); }
-.mapmode button.on-edit { background: rgba(251, 191, 36, 0.9); color: #1c1400; border-color: transparent; }
 
 .maplayers {
   position: absolute; z-index: 900; top: 20px; left: 64px;
@@ -474,6 +473,14 @@ input[type="checkbox"] { accent-color: #22d3ee; width: 16px; height: 16px; }
 }
 .maplegend span { display: inline-flex; align-items: center; gap: 5px; }
 .maplegend i { width: 8px; height: 8px; border-radius: 50%; }
+.maplegend .lg-hosp {
+  width: 13px; height: 13px; border-radius: 4px; flex: none;
+  background: #1d4ed8; border: 2px solid rgba(255, 255, 255, 0.85);
+  font-size: 8px; font-weight: 800; color: #fff;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.maplegend .lg-hosp.heli { border-color: #34d399; }
+.maplegend .lg-hosp.noheli { background: #3b4658; border-color: #fb923c; }
 
 /* marcadores */
 .mk { filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.55)); }
@@ -488,15 +495,22 @@ input[type="checkbox"] { accent-color: #22d3ee; width: 16px; height: 16px; }
   width: 26px; height: 26px; border-radius: 9px;
   background: #1d4ed8; color: #fff;
   display: flex; align-items: center; justify-content: center;
-  border: 2px solid rgba(255, 255, 255, 0.85);
+  border: 2.5px solid rgba(255, 255, 255, 0.85);
   position: relative;
 }
-.mk-hosp.dim { opacity: 0.62; transform: scale(0.86); background: #334155; }
-.mk-hosp.sel { box-shadow: 0 0 0 4px rgba(34, 211, 238, 0.35); }
+/* COM heliponto próprio: corpo azul vivo + borda e realce verdes (pousa direto) */
+.mk-hosp.heli { border-color: #34d399; box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.22); }
+/* SEM heliponto: corpo dessaturado + borda e realce âmbar (requer transbordo terrestre) */
+.mk-hosp.noheli { background: #3b4658; border-color: #fb923c; box-shadow: 0 0 0 3px rgba(251, 146, 60, 0.16); }
+.mk-hosp.dim { opacity: 0.82; transform: scale(0.9); }
+/* selecionado: anel ciano por FORA do realce de estado (não apaga a cor do heliponto) */
+.mk-hosp.heli.sel { box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.32), 0 0 0 6px rgba(34, 211, 238, 0.45); }
+.mk-hosp.noheli.sel { box-shadow: 0 0 0 3px rgba(251, 146, 60, 0.24), 0 0 0 6px rgba(34, 211, 238, 0.45); }
+/* "H" só existe onde HÁ heliponto */
 .mk-hosp .hbadge {
   position: absolute; top: -7px; right: -7px;
   width: 15px; height: 15px; border-radius: 50%;
-  background: #22d3ee; color: #03212b;
+  background: #34d399; color: #04231a;
   font-size: 9.5px; font-weight: 800;
   display: flex; align-items: center; justify-content: center;
   border: 1.5px solid #0b1220;

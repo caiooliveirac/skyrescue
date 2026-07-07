@@ -172,7 +172,7 @@ export default function ConfigModal({ cfg, onSave, onClose }) {
 
         <h4>Hospitais de referência</h4>
         <div className="small" style={{ marginBottom: 8 }}>
-          Confirme as posições com “buscar” (endereço), digitando lat/lon, ou arrastando no mapa (botão <b>Ajustar posições</b>).
+          Confirme as posições com “buscar” (endereço) ou digitando lat/lon.
           Marque <b>Heli</b> se o hospital tem heliponto próprio operacional; senão, associe um <b>heliponto de apoio</b> para o desembarque.
         </div>
         <div className="hosp-row" style={{ marginBottom: 2 }}>
@@ -223,7 +223,7 @@ export default function ConfigModal({ cfg, onSave, onClose }) {
         <h4>Helipontos de apoio / rede privada</h4>
         <div className="small" style={{ marginBottom: 8 }}>
           Pontos de pouso fora dos hospitais de destino (ex.: IML Nina Rodrigues p/ o HGE) e helipontos da rede privada emprestáveis
-          (Aliança, Cardio Pulmonar, Mater Dei). Também podem ser arrastados no mapa em <b>Ajustar posições</b>.
+          (Aliança, Cardio Pulmonar, Mater Dei). Posições ajustáveis por “buscar” ou lat/lon.
         </div>
         {(c.helipads || []).map((p, i) => (
           <div className="helipad-row" key={p.id}>

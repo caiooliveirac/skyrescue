@@ -12,7 +12,10 @@
 //   Hospital Aliança e Hospital Cardio Pulmonar.
 // ---------------------------------------------------------------
 
-export const CFG_KEY = 'skyrescue_cfg_v2'
+// v3: privados (Aliança/Cardio Pulmonar/Mater Dei) migraram de heliponto de
+// apoio para hospital-destino com heliponto próprio — bump força recarregar os
+// DEFAULTS (que já trazem as posições calibradas) e evita entradas duplicadas.
+export const CFG_KEY = 'skyrescue_cfg_v3'
 
 export const DEFAULTS = {
   base: {
@@ -52,51 +55,41 @@ export const DEFAULTS = {
     pickupHospitalId: 'metropolitano',
   },
 
-  // Helipontos que NÃO ficam dentro de hospital de destino do SUS,
-  // usados para desembarque + transbordo curto de ambulância.
+  // Helipontos de apoio que NÃO são hospital-destino (ex.: IML), usados só
+  // para desembarque + transbordo curto de ambulância. Hospitais privados com
+  // heliponto próprio (Aliança, Cardio Pulmonar, Mater Dei) ficam na lista de
+  // hospitais e também servem de ponto de pouso — ver landingPoints().
   helipads: [
     { id: 'iml', name: 'Heliponto IML Nina Rodrigues', kind: 'apoio',
       addr: 'Instituto Médico Legal Nina Rodrigues, Brotas, Salvador - BA',
-      lat: -12.989, lon: -38.488, verified: false,
+      lat: -12.992060322910149, lon: -38.512868285179145, verified: true,
       note: 'Apoio padrão ao HGE — transbordo curto de ambulância.' },
-    { id: 'materdei', name: 'Heliponto Hospital Mater Dei', kind: 'privado',
-      addr: 'Hospital Mater Dei Salvador - BA',
-      lat: -12.986, lon: -38.462, verified: false,
-      note: 'Rede privada — apoio ao HGE mediante coordenação prévia.' },
-    { id: 'alianca', name: 'Heliponto Hospital Aliança', kind: 'privado',
-      addr: 'Hospital Aliança, Av. Juracy Magalhães Júnior, Rio Vermelho, Salvador - BA',
-      lat: -13.0, lon: -38.489, verified: false,
-      note: 'Rede privada de alto padrão — empresta mediante coordenação.' },
-    { id: 'cardiopulmonar', name: 'Heliponto Hospital Cardio Pulmonar', kind: 'privado',
-      addr: 'Hospital Cardio Pulmonar, Av. Anita Garibaldi, Salvador - BA',
-      lat: -13.003, lon: -38.508, verified: false,
-      note: 'Rede privada de alto padrão — empresta mediante coordenação.' },
   ],
 
   hospitals: [
     { id: 'hge', name: 'HGE — Hospital Geral do Estado', tags: ['trauma', 'neuro', 'queimados'],
       addr: 'Av. Vasco da Gama, s/n, Brotas, Salvador - BA',
-      lat: -12.9889, lon: -38.4879, heliponto: false, helipadIds: ['iml', 'materdei'], verified: false,
+      lat: -12.994944067305742, lon: -38.48873376846314, heliponto: false, helipadIds: ['iml', 'materdei'], verified: true,
       note: 'Grande centro de trauma. Sem heliponto próprio: desembarque no IML Nina Rodrigues ou Mater Dei + transbordo.' },
     { id: 'metropolitano', name: 'Hospital Metropolitano', tags: ['trauma', 'neuro'],
       addr: 'Estrada do Coco (Av. Luiz Tarquínio Pontes), Lauro de Freitas - BA',
-      lat: -12.8899, lon: -38.3225, heliponto: true, verified: false,
+      lat: -12.852206026257003, lon: -38.35188478231431, heliponto: true, verified: true,
       note: 'Heliponto próprio operacional; usado pelo GOA para embarque de equipe SAMU.' },
     { id: 'municipal', name: 'Hospital Municipal de Salvador', tags: ['trauma'],
       addr: 'Hospital Municipal de Salvador, Boca da Mata/Cajazeiras, Salvador - BA',
-      lat: -12.899, lon: -38.399, heliponto: true, verified: false,
+      lat: -12.897609301453441, lon: -38.38957250118256, heliponto: true, verified: true,
       note: 'Heliponto próprio operacional.' },
     { id: 'hgrs', name: 'Hospital Geral Roberto Santos', tags: ['avc', 'neuro', 'hemodinamica'],
       addr: 'Rua Direta do Saboeiro, s/n, Cabula, Salvador - BA',
-      lat: -12.9481, lon: -38.4666, heliponto: false, verified: false,
+      lat: -12.956372124908487, lon: -38.45131158828736, heliponto: false, verified: true,
       note: 'Referência AVC/neuro. Sem heliponto próprio: pouso em LZ ou heliponto de apoio + transbordo.' },
     { id: 'ananery', name: 'Hospital Ana Nery', tags: ['iam', 'hemodinamica'],
       addr: 'Rua Saldanha Marinho, s/n, Caixa D’Água, Salvador - BA',
-      lat: -12.96, lon: -38.48, heliponto: false, verified: false,
+      lat: -12.957342119006197, lon: -38.49581480026246, heliponto: false, verified: true,
       note: 'Referência cardiologia / hemodinâmica.' },
     { id: 'suburbio', name: 'Hospital do Subúrbio', tags: ['trauma'],
       addr: 'Av. Afrânio Peixoto (Suburbana), Periperi, Salvador - BA',
-      lat: -12.88, lon: -38.47, heliponto: true, verified: false,
+      lat: -12.863696823860463, lon: -38.456692099571235, heliponto: true, verified: true,
       note: 'Porta de urgência/trauma do Subúrbio. Heliponto próprio operacional.' },
     { id: 'martagao', name: 'Hospital Martagão Gesteira', tags: ['ped'],
       addr: 'Rua José Duarte, Tororó, Salvador - BA',
@@ -104,8 +97,26 @@ export const DEFAULTS = {
       note: 'Referência pediátrica.' },
     { id: 'iperba', name: 'IPERBA — Inst. de Perinatologia da Bahia', tags: ['obst'],
       addr: 'IPERBA, Salvador - BA',
-      lat: -12.99, lon: -38.47, heliponto: false, verified: false,
+      lat: -12.987976377127495, lon: -38.47862720489503, heliponto: false, verified: true,
       note: 'Referência obstétrica.' },
+
+    // Hospitais da rede privada com heliponto próprio. Podem ser destino da
+    // ocorrência (pouso direto) e também emprestam o heliponto como ponto de
+    // desembarque de hospitais sem heliponto (HGE etc.) — kind:'privado' os
+    // habilita em landingPoints(). Tags vazias: não entram na sugestão
+    // automática, o comandante seleciona manualmente (ajustável em Config).
+    { id: 'alianca', name: 'Hospital Aliança', tags: [], kind: 'privado',
+      addr: 'Hospital Aliança, Av. Juracy Magalhães Júnior, Rio Vermelho, Salvador - BA',
+      lat: -13.000188195853148, lon: -38.47946405410767, heliponto: true, verified: true,
+      note: 'Rede privada de alto padrão. Heliponto próprio — coordenar previamente o uso.' },
+    { id: 'cardiopulmonar', name: 'Hospital Cardio Pulmonar', tags: [], kind: 'privado',
+      addr: 'Hospital Cardio Pulmonar, Av. Anita Garibaldi, Salvador - BA',
+      lat: -13.005979943077016, lon: -38.50037455558777, heliponto: true, verified: true,
+      note: 'Rede privada de alto padrão. Heliponto próprio — coordenar previamente o uso.' },
+    { id: 'materdei', name: 'Hospital Mater Dei', tags: [], kind: 'privado',
+      addr: 'Hospital Mater Dei Salvador - BA',
+      lat: -13.006921128177416, lon: -38.493164777755744, heliponto: true, verified: true,
+      note: 'Rede privada. Heliponto próprio — apoio ao HGE mediante coordenação prévia.' },
   ],
   ambBases: [], // bases SAMU opcionais: {id, name, lat, lon}
 }
@@ -121,11 +132,21 @@ export const HELIPAD_KIND_LABELS = {
   privado: 'rede privada',
 }
 
+// pontos de pouso p/ desembarque de hospital SEM heliponto próprio:
+// helipontos de apoio (IML) + hospitais privados com heliponto próprio.
+export function landingPoints(cfg) {
+  return [
+    ...(cfg.helipads || []),
+    ...(cfg.hospitals || []).filter((h) => h.heliponto && h.kind === 'privado'),
+  ]
+}
+
 // heliponto de apoio associado a um hospital (1º da lista = padrão)
 export function hospitalHelipads(cfg, hospital) {
   if (!hospital || hospital.heliponto || !hospital.helipadIds?.length) return []
+  const pool = landingPoints(cfg)
   return hospital.helipadIds
-    .map((id) => (cfg.helipads || []).find((p) => p.id === id))
+    .map((id) => pool.find((p) => p.id === id))
     .filter(Boolean)
 }
 

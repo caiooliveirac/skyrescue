@@ -20,7 +20,9 @@ const baseIcon = () =>
 const hospIcon = (sel, heliponto) =>
   L.divIcon({
     className: 'mk',
-    html: `<div class="mk-hosp${sel ? ' sel' : ' dim'}">${crossSvg}${heliponto ? '<span class="hbadge">H</span>' : ''}</div>`,
+    // estado do heliponto no próprio marcador: verde (com "H") vs âmbar dessaturado.
+    // classe heli/noheli dirige borda + realce; "H" só aparece onde há heliponto.
+    html: `<div class="mk-hosp ${heliponto ? 'heli' : 'noheli'}${sel ? ' sel' : ' dim'}">${crossSvg}${heliponto ? '<span class="hbadge">H</span>' : ''}</div>`,
     iconSize: [26, 26], iconAnchor: [13, 13],
   })
 const helipadIcon = (landing) =>
@@ -36,8 +38,8 @@ const lzIcon = (letter, suitKey, sel) =>
 
 export default function MapView({
   cfg, scene, hospitalId, landingHelipad, lz, lzSelId, manualLz, obstacles, route,
-  mode, showObs, editMode, focus, baseLayer = 'dark', googleKey = '',
-  onMapClick, onBaseMove, onPlaceMove,
+  mode, showObs, focus, baseLayer = 'dark', googleKey = '',
+  onMapClick,
 }) {
   const divRef = useRef(null)
   const mapRef = useRef(null)
@@ -47,14 +49,10 @@ export default function MapView({
   const errPollRef = useRef(null) // vigia do aviso de erro do Google
   const modeRef = useRef(mode)
   const clickRef = useRef(onMapClick)
-  const baseMoveRef = useRef(onBaseMove)
-  const placeMoveRef = useRef(onPlaceMove)
   const fitKeyRef = useRef('')
 
   modeRef.current = mode
   clickRef.current = onMapClick
-  baseMoveRef.current = onBaseMove
-  placeMoveRef.current = onPlaceMove
 
   useEffect(() => {
     const m = L.map(divRef.current, { zoomControl: true }).setView([cfg.base.lat, cfg.base.lon], 10)
@@ -146,49 +144,29 @@ export default function MapView({
     if (!m || !lay) return
     lay.clearLayers()
 
-    // base (sempre arrastável p/ calibrar)
-    const baseMk = L.marker([cfg.base.lat, cfg.base.lon], { icon: baseIcon(), draggable: true, zIndexOffset: 500 })
-      .bindTooltip(cfg.base.name + (cfg.base.verified ? '' : ' — posição aproximada, arraste p/ ajustar'))
-    baseMk.on('dragend', (e) => {
-      const p = e.target.getLatLng()
-      baseMoveRef.current && baseMoveRef.current(p.lat, p.lng)
-    })
-    baseMk.addTo(lay)
+    // base
+    L.marker([cfg.base.lat, cfg.base.lon], { icon: baseIcon(), zIndexOffset: 500 })
+      .bindTooltip(cfg.base.name)
+      .addTo(lay)
 
     // hospitais
     for (const h of cfg.hospitals) {
       const sel = h.id === hospitalId
-      const mk = L.marker([h.lat, h.lon], {
+      L.marker([h.lat, h.lon], {
         icon: hospIcon(sel, h.heliponto),
-        draggable: !!editMode,
         zIndexOffset: sel ? 400 : 100,
-      }).bindTooltip(
-        `${h.name}${h.heliponto ? ' · heliponto próprio' : ''}${editMode ? ' — arraste p/ ajustar' : ''}`
-      )
-      if (editMode) {
-        mk.on('dragend', (e) => {
-          const p = e.target.getLatLng()
-          placeMoveRef.current && placeMoveRef.current('hospital', h.id, p.lat, p.lng)
-        })
-      }
-      mk.addTo(lay)
+      }).bindTooltip(`${h.name}${h.heliponto ? ' · heliponto próprio' : ' · sem heliponto (transbordo terrestre)'}`)
+        .addTo(lay)
     }
 
     // helipontos de apoio / rede privada
     for (const p of cfg.helipads || []) {
       const isLanding = landingHelipad && landingHelipad.id === p.id
-      const mk = L.marker([p.lat, p.lon], {
+      L.marker([p.lat, p.lon], {
         icon: helipadIcon(isLanding),
-        draggable: !!editMode,
         zIndexOffset: isLanding ? 450 : 150,
-      }).bindTooltip(`${p.name}${p.note ? ' — ' + p.note : ''}${editMode ? ' — arraste p/ ajustar' : ''}`)
-      if (editMode) {
-        mk.on('dragend', (e) => {
-          const q = e.target.getLatLng()
-          placeMoveRef.current && placeMoveRef.current('helipad', p.id, q.lat, q.lng)
-        })
-      }
-      mk.addTo(lay)
+      }).bindTooltip(`${p.name}${p.note ? ' — ' + p.note : ''}`)
+        .addTo(lay)
     }
 
     // cena
@@ -272,7 +250,7 @@ export default function MapView({
         m.fitBounds(b.pad(0.18))
       }
     }
-  }, [cfg, scene, hospitalId, landingHelipad, lz, lzSelId, manualLz, obstacles, route, showObs, editMode])
+  }, [cfg, scene, hospitalId, landingHelipad, lz, lzSelId, manualLz, obstacles, route, showObs])
 
   return (
     <>
@@ -281,8 +259,9 @@ export default function MapView({
         <span><i style={{ background: '#34d399' }} /> LZ boa</span>
         <span><i style={{ background: '#fbbf24' }} /> avaliar</span>
         <span><i style={{ background: '#fb7185' }} /> restrita</span>
-        <span><i style={{ background: '#7c3aed' }} /> heliponto</span>
-        <span><i style={{ background: '#1d4ed8', borderRadius: 3 }} /> hospital</span>
+        <span><b className="lg-hosp heli">H</b> hospital c/ heliponto</span>
+        <span><b className="lg-hosp noheli" /> hospital s/ heliponto</span>
+        <span><i style={{ background: '#7c3aed' }} /> heliponto de apoio</span>
       </div>
     </>
   )
