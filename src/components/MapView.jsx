@@ -1,8 +1,8 @@
 import { useEffect, useRef } from 'react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
-import 'leaflet.gridlayer.googlemutant'
-import { loadGoogleMaps } from '../lib/gmaps.js'
+import GoogleMutant from 'leaflet.gridlayer.googlemutant'
+import { loadGoogleMaps, googleAuthFailed, onGoogleAuthFailure } from '../lib/gmaps.js'
 
 // camadas base disponíveis
 const CARTO_DARK = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
@@ -44,6 +44,7 @@ export default function MapView({
   const layerRef = useRef(null)
   const tileRef = useRef(null)   // camada base atual
   const labelsRef = useRef(null) // rótulos sobre o satélite (fallback híbrido)
+  const errPollRef = useRef(null) // vigia do aviso de erro do Google
   const modeRef = useRef(mode)
   const clickRef = useRef(onMapClick)
   const baseMoveRef = useRef(onBaseMove)
@@ -89,26 +90,49 @@ export default function MapView({
       }
     }
 
+    // se o Google recusar a chave depois de carregar (API não habilitada,
+    // domínio não autorizado…), troca na hora para o satélite Esri
+    const offAuthFail = onGoogleAuthFailure(() => {
+      if (!cancelled && baseLayer !== 'dark') addEsri(baseLayer === 'hybrid')
+    })
+
     if (baseLayer === 'dark') {
       clearBase()
       tileRef.current = L.tileLayer(CARTO_DARK, {
         maxZoom: 20, subdomains: 'abcd', attribution: '&copy; OpenStreetMap &copy; CARTO',
       }).addTo(m)
-    } else if (googleKey) {
+    } else if (googleKey && !googleAuthFailed()) {
       loadGoogleMaps(googleKey)
         .then(() => {
-          if (cancelled) return
+          if (cancelled || googleAuthFailed()) return
           clearBase()
-          tileRef.current = L.gridLayer
-            .googleMutant({ type: baseLayer === 'hybrid' ? 'hybrid' : 'satellite', maxZoom: 21 })
-            .addTo(m)
+          // o build ESM do plugin exporta a classe (a factory L.gridLayer.googleMutant é só do UMD)
+          tileRef.current = new GoogleMutant({ type: baseLayer === 'hybrid' ? 'hybrid' : 'satellite', maxZoom: 21 }).addTo(m)
+          // ApiNotActivated/BillingNotEnabled não disparam gm_authFailure.
+          // Critério universal: se nenhum tile renderizou em 7s, usa o Esri.
+          errPollRef.current = setTimeout(() => {
+            if (cancelled) return
+            const pane = m.getContainer().querySelector('.leaflet-tile-pane')
+            const ok = pane && [...pane.querySelectorAll('img')].some((i) => i.complete && i.naturalWidth > 0)
+            if (!ok) {
+              console.warn('[skyrescue] satélite Google não renderizou (chave/API não habilitada?) — usando Esri')
+              addEsri(baseLayer === 'hybrid')
+            }
+          }, 7000)
         })
-        .catch(() => { if (!cancelled) addEsri(baseLayer === 'hybrid') })
+        .catch((e) => {
+          console.warn('[skyrescue] satélite Google indisponível, usando Esri:', e)
+          if (!cancelled) addEsri(baseLayer === 'hybrid')
+        })
     } else {
       addEsri(baseLayer === 'hybrid')
     }
 
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+      offAuthFail()
+      if (errPollRef.current) { clearTimeout(errPollRef.current); errPollRef.current = null }
+    }
   }, [baseLayer, googleKey])
 
   // voar até um ponto (ex.: LZ escolhida na lista)
