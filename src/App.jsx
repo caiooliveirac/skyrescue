@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { loadCfg, saveCfg, loadCases, saveCases, TAG_LABELS, hospitalHelipads } from './config.js'
-import { geocode, reverseGeocode, fetchWeather, fetchMetar, osrmRoute, overpass, lzQuery, obstacleQuery } from './lib/api.js'
+import { geocode, reverseGeocode, fetchWeather, fetchMetar, groundRoute, overpass, lzQuery, obstacleQuery } from './lib/api.js'
 import { haversineKm, fmtMin, fmtCoords, fmtCoordsDMS, gmapsLink } from './lib/geo.js'
 import { computeMission, autoChecks, daylightCheck, rangeCheck, combinedWeatherStatus, classifyWeather } from './lib/mission.js'
 import { computeScore, recommendation, evaluateGates, ITEM_BY_ID } from './lib/score.js'
@@ -148,15 +148,15 @@ export default function App() {
     return () => { alive = false }
   }, [scene, cfg.base.lat, cfg.base.lon])
 
-  // rota terrestre cena -> hospital
+  // rota terrestre cena -> hospital (Google Routes c/ trânsito, OSRM reserva)
   useEffect(() => {
     setRoute(null); setRouteErr(null)
     if (!scene || !hospital) return
     const seq = ++routeSeqRef.current
-    osrmRoute(scene, hospital)
+    groundRoute(scene, hospital, cfg.map?.googleKey)
       .then((r) => seq === routeSeqRef.current && setRoute(r))
       .catch((e) => seq === routeSeqRef.current && setRouteErr(e.message || String(e)))
-  }, [scene, hospitalId, hospital?.lat, hospital?.lon]) // eslint-disable-line
+  }, [scene, hospitalId, hospital?.lat, hospital?.lon, cfg.map?.googleKey]) // eslint-disable-line
 
   // sugestão de ETA de ambulância a partir das bases cadastradas
   useEffect(() => {
@@ -168,12 +168,12 @@ export default function App() {
       .slice(0, 3)
     Promise.all(
       nearest.map((b) =>
-        osrmRoute(b, scene)
-          .then((r) => ({ name: b.name, min: Math.round(r.durMin * cfg.ground.trafficFactor) }))
+        groundRoute(b, scene, cfg.map?.googleKey)
+          .then((r) => ({ name: b.name, min: Math.round(r.durMin * (r.traffic ? 1 : cfg.ground.trafficFactor)) }))
           .catch(() => null)
       )
     ).then((rs) => setAmbSug(rs.filter(Boolean).sort((a, b) => a.min - b.min)))
-  }, [scene, cfg.ambBases, cfg.ground.trafficFactor])
+  }, [scene, cfg.ambBases, cfg.ground.trafficFactor, cfg.map?.googleKey]) // eslint-disable-line
 
   // ---------- cálculo ----------
   const lzPoint = manualLz || (lzList || []).find((c) => c.id === lzSelId) || null

@@ -84,7 +84,79 @@ export async function osrmRoute(a, b) {
     durMin: r.duration / 60,
     distKm: r.distance / 1000,
     geo: r.geometry.coordinates.map((c) => [c[1], c[0]]), // [lat,lon]
+    traffic: false,
   }
+}
+
+// polyline codificada (Google, precisão 5) -> [[lat,lon], ...]
+function decodePolyline(str) {
+  const pts = []
+  let lat = 0, lon = 0, i = 0
+  while (i < str.length) {
+    for (const which of [0, 1]) {
+      let shift = 0, result = 0, byte
+      do {
+        byte = str.charCodeAt(i++) - 63
+        result |= (byte & 0x1f) << shift
+        shift += 5
+      } while (byte >= 0x20)
+      const delta = result & 1 ? ~(result >> 1) : result >> 1
+      if (which === 0) lat += delta
+      else lon += delta
+    }
+    pts.push([lat / 1e5, lon / 1e5])
+  }
+  return pts
+}
+
+// Google Routes API (computeRoutes) — rota com TRÂNSITO EM TEMPO REAL.
+// Chamável do navegador com chave restrita por referrer (CORS habilitado).
+export async function googleRoute(a, b, key) {
+  const r = await fetch('https://routes.googleapis.com/directions/v2:computeRoutes', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Goog-Api-Key': key,
+      'X-Goog-FieldMask': 'routes.duration,routes.distanceMeters,routes.polyline.encodedPolyline',
+    },
+    body: JSON.stringify({
+      origin: { location: { latLng: { latitude: a.lat, longitude: a.lon } } },
+      destination: { location: { latLng: { latitude: b.lat, longitude: b.lon } } },
+      travelMode: 'DRIVE',
+      routingPreference: 'TRAFFIC_AWARE',
+    }),
+    signal: signal(15000),
+  })
+  if (!r.ok) {
+    const err = new Error('Routes API HTTP ' + r.status)
+    err.status = r.status
+    throw err
+  }
+  const j = await r.json()
+  const rt = j.routes?.[0]
+  if (!rt?.duration) throw new Error('sem rota (Routes API)')
+  return {
+    durMin: parseFloat(rt.duration) / 60, // duração vem como "1234s"
+    distKm: (rt.distanceMeters || 0) / 1000,
+    geo: rt.polyline?.encodedPolyline ? decodePolyline(rt.polyline.encodedPolyline) : null,
+    traffic: true,
+  }
+}
+
+// 4xx = chave sem a Routes API / bloqueada — não insistir nesta sessão.
+// Erros transitórios (rede/5xx) continuam tentando o Google na próxima rota.
+let googleRouteBlocked = false
+
+export async function groundRoute(a, b, googleKey) {
+  if (googleKey && !googleRouteBlocked) {
+    try {
+      return await googleRoute(a, b, googleKey)
+    } catch (e) {
+      if (e.status >= 400 && e.status < 500) googleRouteBlocked = true
+      console.warn('[skyrescue] Routes API indisponível, usando OSRM:', e.message || e)
+    }
+  }
+  return osrmRoute(a, b)
 }
 
 const OVERPASS = [

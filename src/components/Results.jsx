@@ -94,13 +94,15 @@ export function TimePanel({ mission }) {
             </tr>
           ))}
           <tr>
-            <td>Rota terrestre cena → hospital {mission.ground.distKm != null ? `(${fmtKm(mission.ground.distKm)}, c/ fator trânsito)` : ''}</td>
+            <td>Rota terrestre cena → hospital {mission.ground.distKm != null ? `(${fmtKm(mission.ground.distKm)}${mission.ground.traffic ? ', trânsito em tempo real' : ', c/ fator trânsito'})` : ''}</td>
             <td>{fmtMin(mission.ground.toHospMin)}</td>
           </tr>
         </tbody>
       </table>
       <div className="small" style={{ marginTop: 8 }}>
-        Estimativas: voo em linha reta ×fator de rota; terrestre via OSRM <b>sem trânsito em tempo real</b> (fator ajustável em Config).
+        {mission.ground.traffic
+          ? <>Estimativas: voo em linha reta ×fator de rota; terrestre via Google Routes <b>com trânsito em tempo real</b>.</>
+          : <>Estimativas: voo em linha reta ×fator de rota; terrestre via OSRM <b>sem trânsito em tempo real</b> (fator ajustável em Config).</>}
       </div>
     </div>
   )

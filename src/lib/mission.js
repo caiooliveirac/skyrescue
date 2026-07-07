@@ -63,8 +63,10 @@ export function computeMission({ cfg, scene, hospital, lzPoint, landingHelipad, 
     })
   }
 
-  // terrestre
-  const gToHospMin = groundRoute ? groundRoute.durMin * ground.trafficFactor : null
+  // terrestre — rota traffic-aware (Google) já embute o trânsito;
+  // o fator manual só se aplica ao OSRM (sem trânsito em tempo real)
+  const gFactor = groundRoute?.traffic ? 1 : ground.trafficFactor
+  const gToHospMin = groundRoute ? groundRoute.durMin * gFactor : null
   const eta = ambulanceEtaMin != null && ambulanceEtaMin !== '' ? Number(ambulanceEtaMin) : null
   const gTotal = eta != null && gToHospMin != null ? eta + t.cenaMin + gToHospMin : null
   const gPartial = gToHospMin != null ? t.cenaMin + gToHospMin : null // sem ETA da ambulância
@@ -85,7 +87,7 @@ export function computeMission({ cfg, scene, hospital, lzPoint, landingHelipad, 
     pickup,
     landing: landing ? { lat: landing.lat, lon: landing.lon, name: landing.name, isHelipad: !!(hospital?.heliponto || landingHelipad) } : null,
     landingHelipad: landingHelipad || null,
-    ground: { etaMin: eta, cenaMin: t.cenaMin, toHospMin: gToHospMin, total: gTotal, partial: gPartial, distKm: groundRoute?.distKm ?? null },
+    ground: { etaMin: eta, cenaMin: t.cenaMin, toHospMin: gToHospMin, total: gTotal, partial: gPartial, distKm: groundRoute?.distKm ?? null, traffic: !!groundRoute?.traffic },
     delta,
     missionKm,
     dOut,
