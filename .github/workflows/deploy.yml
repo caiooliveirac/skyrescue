@@ -1,0 +1,126 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: skyrescue-deploy
+  cancel-in-progress: false
+
+env:
+  REMOTE: ${{ secrets.PROD_SSH_USER }}@${{ secrets.PROD_SSH_HOST }}
+  WEBROOT: /var/www/skyrescue
+
+jobs:
+  test:
+    name: Build + smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Build (arquivo único)
+        run: npm run build
+
+      - name: Smoke test do bundle
+        run: |
+          test -f dist/index.html
+          grep -q "SkyRescue" dist/index.html
+          grep -q "Hospital do Sub" dist/index.html   # dados de hospitais embutidos
+          size=$(wc -c < dist/index.html)
+          if [ "$size" -lt 100000 ]; then
+            echo "ERRO: bundle suspeito de estar incompleto ($size bytes)"
+            exit 1
+          fi
+          echo "bundle OK ($size bytes)"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/index.html
+          retention-days: 7
+
+  deploy:
+    name: Deploy (rsync + healthcheck + auto-rollback)
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.PROD_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H ${{ secrets.PROD_SSH_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Backup da versão atual (rollback rápido)
+        run: |
+          ssh -i ~/.ssh/id_ed25519 ${{ env.REMOTE }} \
+            "cp -f ${{ env.WEBROOT }}/index.html ${{ env.WEBROOT }}/index.html.prev 2>/dev/null || true"
+
+      - name: Publicar
+        run: |
+          rsync -az \
+            -e "ssh -o StrictHostKeyChecking=accept-new -i ~/.ssh/id_ed25519" \
+            dist/index.html ${{ env.REMOTE }}:${{ env.WEBROOT }}/index.html
+
+      - name: Healthcheck (com auto-rollback)
+        run: |
+          ssh -i ~/.ssh/id_ed25519 ${{ env.REMOTE }} bash -s << 'EOF'
+            set -euo pipefail
+            check() {
+              code=$(curl -sk -o /dev/null -w "%{http_code}" --resolve goa.mnrs.com.br:443:127.0.0.1 https://goa.mnrs.com.br/)
+              [ "$code" = "200" ] && curl -sk --resolve goa.mnrs.com.br:443:127.0.0.1 https://goa.mnrs.com.br/ | grep -q "SkyRescue"
+            }
+            if check; then
+              echo "healthcheck OK (200 + conteúdo)"
+            else
+              echo "ERRO: healthcheck falhou — restaurando versão anterior"
+              cp -f /var/www/skyrescue/index.html.prev /var/www/skyrescue/index.html 2>/dev/null || true
+              exit 1
+            fi
+          EOF
+
+      - name: Notify Telegram (success)
+        if: success()
+        env:
+          TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TG_CHAT: ${{ secrets.TELEGRAM_ADMIN_CHAT_ID }}
+          GIT_SHA: ${{ github.sha }}
+        run: |
+          if [ -z "${TG_TOKEN:-}" ] || [ -z "${TG_CHAT:-}" ]; then
+            echo "telegram secrets ausentes, pulando notificacao"; exit 0
+          fi
+          curl -sS -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TG_CHAT}" \
+            --data-urlencode "text=SkyRescue deploy OK -- goa.mnrs.com.br -- ${GIT_SHA}" || true
+
+      - name: Notify Telegram (failure)
+        if: failure()
+        env:
+          TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TG_CHAT: ${{ secrets.TELEGRAM_ADMIN_CHAT_ID }}
+          GIT_SHA: ${{ github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "${TG_TOKEN:-}" ] || [ -z "${TG_CHAT:-}" ]; then
+            echo "telegram secrets ausentes, pulando notificacao"; exit 0
+          fi
+          curl -sS -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TG_CHAT}" \
+            --data-urlencode "text=SkyRescue deploy FALHOU -- ${GIT_SHA} -- ${RUN_URL}" || true
