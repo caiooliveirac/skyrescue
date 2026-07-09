@@ -1,0 +1,9 @@
+node_modules/
+.env
+.env.production
+.env.*.local
+*.log
+
+# o template abaixo NÃO tem segredos e deve ser versionado
+# (re-inclui apesar do `.env.*` do .gitignore raiz)
+!.env.example

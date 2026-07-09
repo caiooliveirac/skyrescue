@@ -11,6 +11,8 @@ export default defineConfig(({ mode }) => {
   const gmapsKey = env.VITE_GMAPS_KEY || env.Google_API_KEY || env.Google_API_key || ''
   return {
     plugins: [react(), viteSingleFile()],
+    // em dev, encaminha /api para a API local (server/, porta 3012)
+    server: { proxy: { '/api': 'http://127.0.0.1:3012' } },
     build: { target: 'es2018', chunkSizeWarningLimit: 4000 },
     define: {
       'import.meta.env.VITE_GMAPS_KEY': JSON.stringify(gmapsKey),

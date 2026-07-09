@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { loadCfg, saveCfg, loadCases, saveCases, TAG_LABELS, hospitalHelipads, landingPoints } from './config.js'
+import { loadCfg, saveCfg, TAG_LABELS, hospitalHelipads, landingPoints } from './config.js'
+import { api } from './lib/backend.js'
 import { geocode, reverseGeocode, fetchWeather, fetchMetar, groundRoute, overpass, lzQuery, obstacleQuery } from './lib/api.js'
 import { haversineKm, fmtMin, fmtCoords, fmtCoordsDMS, gmapsLink } from './lib/geo.js'
 import { computeMission, autoChecks, daylightCheck, rangeCheck, combinedWeatherStatus, classifyWeather } from './lib/mission.js'
@@ -16,7 +17,7 @@ import {
   IconClock, IconCloud, IconAlert, IconRoute, IconX,
 } from './components/Icons.jsx'
 
-export default function App() {
+export default function App({ user, onLogout }) {
   const [cfg, setCfg] = useState(loadCfg)
   const [showCfg, setShowCfg] = useState(false)
   const [showCases, setShowCases] = useState(false)
@@ -68,7 +69,16 @@ export default function App() {
   }
 
   const [events, setEvents] = useState({})
-  const [cases, setCases] = useState(loadCases)
+  const [cases, setCases] = useState([])
+  const [casesErr, setCasesErr] = useState('')
+  const [dbId, setDbId] = useState(null) // id do caso no banco (null = ainda não salvo)
+  const [saving, setSaving] = useState(false)
+
+  const refreshCases = async () => {
+    try { const { cases } = await api.listCases(); setCases(cases); setCasesErr('') }
+    catch (e) { setCasesErr(e.message || 'falha ao carregar casos') }
+  }
+  useEffect(() => { refreshCases() }, [])
 
   const seqRef = useRef(0)
   const routeSeqRef = useRef(0)
@@ -382,32 +392,71 @@ export default function App() {
     v: 2,
     id: caseId || 'caso-' + new Date().toISOString().slice(0, 19).replace('T', '-').replace(/:/g, ''),
     ts: Date.now(),
-    scene, sceneLabel, hospitalId, landingSel, ambEta, notes,
+    scene, sceneLabel, hospitalId, hospitalName: hospital?.name || null, landingSel, ambEta, notes,
     manualChecked, autoOverrides, gateManual, gateOverrides,
     lzSelId, manualLz, events,
     scoreTotal: score.total, band: score.band.key,
+    recommendation: rec?.title || null, gatesOk: gates.ok,
     mission: mission ? { airTotal: mission.airTotal, groundTotal: mission.ground.total, delta: mission.delta } : null,
   })
 
-  const saveCase = () => {
+  // grava no servidor (Postgres). dbId != null => atualiza o mesmo caso.
+  const saveCase = async () => {
+    if (saving) return
+    setSaving(true)
     const snap = snapshot()
-    if (!caseId) setCaseId(snap.id) // re-salvar atualiza o mesmo caso em vez de duplicar
-    const list = [snap, ...cases.filter((c) => c.id !== snap.id)].slice(0, 60)
-    setCases(list); saveCases(list)
-    alert('Caso salvo neste computador.')
+    if (!caseId) setCaseId(snap.id)
+    try {
+      if (dbId != null) {
+        await api.updateCase(dbId, snap)
+      } else {
+        const { id } = await api.createCase(snap)
+        setDbId(id)
+      }
+      await refreshCases()
+      alert('Caso salvo no servidor.')
+    } catch (e) {
+      alert('Falha ao salvar o caso no servidor: ' + (e.message || e))
+    } finally {
+      setSaving(false)
+    }
   }
 
-  const loadCase = (c) => {
-    revGeoRef.current++
-    pendingLzSelRef.current = c.scene ? c.lzSelId || null : null
-    setCaseId(c.id); setSceneLabel(c.sceneLabel); setScene(c.scene)
-    const hospOk = cfg.hospitals.some((h) => h.id === c.hospitalId)
-    setHospitalId(hospOk ? c.hospitalId : cfg.hospitals[0]?.id || '')
-    setLandingSel(c.landingSel || 'auto'); setAmbEta(c.ambEta); setNotes(c.notes || '')
-    setManualChecked(c.manualChecked || {}); setAutoOverrides(c.autoOverrides || {})
-    setGateManual(c.gateManual || {}); setGateOverrides(c.gateOverrides || {})
-    setLzSelId(c.lzSelId || null); setManualLz(c.manualLz || null); setEvents(c.events || {})
-    setShowCases(false)
+  // carrega o snapshot completo do banco e restaura o estado do app
+  const loadCase = async (row) => {
+    try {
+      const { case: full } = await api.getCase(row.id)
+      const c = full.snapshot || {}
+      revGeoRef.current++
+      pendingLzSelRef.current = c.scene ? c.lzSelId || null : null
+      setDbId(row.id)
+      setCaseId(c.id || ''); setSceneLabel(c.sceneLabel); setScene(c.scene)
+      const hospOk = cfg.hospitals.some((h) => h.id === c.hospitalId)
+      setHospitalId(hospOk ? c.hospitalId : cfg.hospitals[0]?.id || '')
+      setLandingSel(c.landingSel || 'auto'); setAmbEta(c.ambEta); setNotes(c.notes || '')
+      setManualChecked(c.manualChecked || {}); setAutoOverrides(c.autoOverrides || {})
+      setGateManual(c.gateManual || {}); setGateOverrides(c.gateOverrides || {})
+      setLzSelId(c.lzSelId || null); setManualLz(c.manualLz || null); setEvents(c.events || {})
+      setShowCases(false)
+    } catch (e) {
+      alert('Falha ao abrir o caso: ' + (e.message || e))
+    }
+  }
+
+  const deleteCase = async (row) => {
+    if (!confirm(`Excluir o caso ${row.case_ref || row.id} do servidor?`)) return
+    try {
+      await api.deleteCase(row.id)
+      if (dbId === row.id) setDbId(null)
+      await refreshCases()
+    } catch (e) {
+      alert('Falha ao excluir: ' + (e.message || e))
+    }
+  }
+
+  const doLogout = async () => {
+    try { await api.logout() } catch (e) { /* segue mesmo assim */ }
+    onLogout?.()
   }
 
   const exportJSON = () => {
@@ -420,6 +469,7 @@ export default function App() {
 
   const newCase = () => {
     revGeoRef.current++
+    setDbId(null)
     setScene(null); setSceneLabel(''); setQ(''); setCaseId(''); setNotes(''); setGeoResults(null)
     setManualChecked({}); setAutoOverrides({}); setGateManual({}); setGateOverrides({})
     setAmbEta(''); setLzSelId(null); setManualLz(null); setEvents({}); setLandingSel('auto')
@@ -443,6 +493,8 @@ export default function App() {
         <button className="tbtn" onClick={() => setShowCases(true)}><IconFolder size={14} /> Casos ({cases.length})</button>
         <button className="tbtn" onClick={() => window.print()}><IconPrint size={14} /> Registro</button>
         <button className="tbtn" onClick={() => setShowCfg(true)}><IconSettings size={14} /> Config</button>
+        {user && <span className="who" title={user.role}>{user.full_name || user.username}</span>}
+        <button className="tbtn" onClick={doLogout} title="Encerrar sessão"><IconX size={14} /> Sair</button>
       </div>
 
       <DecisionStrip scene={scene} score={score} gates={gates} rec={rec} onCopy={copyResumo} />
@@ -631,7 +683,7 @@ export default function App() {
             <div className="card">
               <h2><IconSave size={14} /> Registro</h2>
               <div className="row">
-                <button className="btn" onClick={saveCase}><IconSave size={14} /> Salvar caso</button>
+                <button className="btn" onClick={saveCase} disabled={saving}>{saving ? <span className="spin" /> : <IconSave size={14} />} {dbId != null ? 'Atualizar caso' : 'Salvar caso'}</button>
                 <button className="btn sec" onClick={copyResumo}><IconCopy size={14} /> Copiar resumo</button>
                 <button className="btn sec" onClick={() => window.print()}><IconPrint size={14} /> Imprimir</button>
                 <button className="btn sec" onClick={exportJSON}><IconDownload size={14} /> Exportar JSON</button>
@@ -642,7 +694,7 @@ export default function App() {
       </div>
 
       <div className="footer">
-        <b>SkyRescue β</b> — ferramenta de apoio à decisão em fase piloto. Não substitui o julgamento do médico regulador, os protocolos do SAMU 192 / SESAB, nem a decisão final do comandante da aeronave (GOA/CBMBA). Meteorologia (Open-Meteo) e áreas de pouso (OpenStreetMap) são indicativas e exigem confirmação operacional. Rotas terrestres via OSRM, sem trânsito em tempo real. Não insira dados pessoais de pacientes (LGPD). Dados ficam armazenados apenas neste computador.
+        <b>SkyRescue β</b> — ferramenta de apoio à decisão em fase piloto. Não substitui o julgamento do médico regulador, os protocolos do SAMU 192 / SESAB, nem a decisão final do comandante da aeronave (GOA/CBMBA). Meteorologia (Open-Meteo) e áreas de pouso (OpenStreetMap) são indicativas e exigem confirmação operacional. Rotas terrestres via OSRM, sem trânsito em tempo real. Não insira dados pessoais de pacientes (LGPD). Os casos são registrados no servidor do GOA com controle de acesso e autoria.
       </div>
 
       {showCfg && <ConfigModal cfg={cfg} onClose={() => setShowCfg(false)} onSave={(c) => { setCfg(c); saveCfg(c); setShowCfg(false) }} />}
@@ -650,16 +702,20 @@ export default function App() {
       {showCases && (
         <div className="modal-bg" onClick={() => setShowCases(false)}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <h3><IconFolder size={17} /> Casos salvos (neste computador)</h3>
-            {!cases.length && <div className="small">Nenhum caso salvo ainda.</div>}
+            <h3><IconFolder size={17} /> Casos registrados (servidor)</h3>
+            {casesErr && <div className="login-err">Falha ao carregar casos: {casesErr}</div>}
+            {!cases.length && !casesErr && <div className="small">Nenhum caso registrado ainda.</div>}
             {cases.map((c) => (
-              <div key={c.id + c.ts} className="lzrow" style={{ cursor: 'default' }}>
+              <div key={c.id} className="lzrow" style={{ cursor: 'default' }}>
                 <div className="lzmain">
-                  <div className="n">{c.id} <span className="type">{new Date(c.ts).toLocaleString('pt-BR')}</span></div>
-                  <div className="m">{c.sceneLabel || '—'} · score {c.scoreTotal} ({c.band})</div>
+                  <div className="n">{c.case_ref || `#${c.id}`} <span className="type">{new Date(c.updated_at).toLocaleString('pt-BR')}</span></div>
+                  <div className="m">
+                    {c.scene_label || '—'} · score {c.score_total ?? '—'}{c.score_band ? ` (${c.score_band})` : ''}
+                    {c.created_by_name || c.created_by_username ? ` · por ${c.created_by_name || c.created_by_username}` : ''}
+                  </div>
                 </div>
                 <button className="btn xs sec" onClick={() => loadCase(c)}>abrir</button>
-                <button className="btn xs warn" onClick={() => { const l = cases.filter((x) => x !== c); setCases(l); saveCases(l) }}><IconX size={12} /></button>
+                <button className="btn xs warn" onClick={() => deleteCase(c)}><IconX size={12} /></button>
               </div>
             ))}
           </div>

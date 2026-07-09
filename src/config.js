@@ -185,10 +185,4 @@ export function saveCfg(c) {
   try { localStorage.setItem(CFG_KEY, JSON.stringify(c)) } catch (e) { /* ok */ }
 }
 
-export const CASES_KEY = 'skyrescue_cases_v1'
-export function loadCases() {
-  try { return JSON.parse(localStorage.getItem(CASES_KEY) || '[]') } catch (e) { return [] }
-}
-export function saveCases(list) {
-  try { localStorage.setItem(CASES_KEY, JSON.stringify(list)) } catch (e) { /* ok */ }
-}
+// Casos migraram do localStorage para o backend (Postgres) — ver src/lib/backend.js.

@@ -1,0 +1,68 @@
+-- ============================================================
+-- SkyRescue — schema de auth + registro de casos (PostgreSQL 16)
+-- Idempotente: pode rodar várias vezes (migrate.js aplica no boot).
+-- ============================================================
+
+-- ---------- usuários ----------
+CREATE TABLE IF NOT EXISTS users (
+  id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  username      TEXT        NOT NULL UNIQUE,
+  password_hash TEXT        NOT NULL,            -- formato scrypt: N:r:p:salt:hash (hex)
+  full_name     TEXT,
+  role          TEXT        NOT NULL DEFAULT 'regulador'
+                            CHECK (role IN ('admin', 'regulador', 'operador')),
+  active        BOOLEAN     NOT NULL DEFAULT TRUE,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_login_at TIMESTAMPTZ
+);
+
+-- ---------- sessões ----------
+CREATE TABLE IF NOT EXISTS sessions (
+  token_hash  TEXT        PRIMARY KEY,           -- sha256(token) — o token cru só existe no cookie
+  user_id     BIGINT      NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at  TIMESTAMPTZ NOT NULL,
+  user_agent  TEXT,
+  ip          TEXT
+);
+CREATE INDEX IF NOT EXISTS sessions_user_idx    ON sessions (user_id);
+CREATE INDEX IF NOT EXISTS sessions_expires_idx ON sessions (expires_at);
+
+-- ---------- casos (registro de acionamento) ----------
+CREATE TABLE IF NOT EXISTS cases (
+  id               BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  case_ref         TEXT,                         -- identificador informado (NÃO-PII)
+  created_by       BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  updated_by       BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- campos promovidos p/ listagem e relatório
+  scene_label      TEXT,
+  scene_lat        DOUBLE PRECISION,
+  scene_lon        DOUBLE PRECISION,
+  score_total      INTEGER,
+  score_band       TEXT,
+  recommendation   TEXT,
+  hospital_name    TEXT,
+  air_total_min    NUMERIC,
+  ground_total_min NUMERIC,
+  delta_min        NUMERIC,
+  gates_ok         BOOLEAN,
+  notes            TEXT,
+  -- snapshot completo do app (fonte da verdade p/ reabrir o caso)
+  snapshot         JSONB NOT NULL
+);
+CREATE INDEX IF NOT EXISTS cases_created_by_idx ON cases (created_by);
+CREATE INDEX IF NOT EXISTS cases_created_at_idx ON cases (created_at DESC);
+CREATE INDEX IF NOT EXISTS cases_ref_idx        ON cases (case_ref);
+
+-- ---------- trilha de auditoria dos casos ----------
+CREATE TABLE IF NOT EXISTS case_audit (
+  id       BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  case_id  BIGINT,                               -- sem FK: preserva histórico após DELETE
+  user_id  BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  action   TEXT NOT NULL,                        -- 'create' | 'update' | 'delete'
+  at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  case_ref TEXT
+);
+CREATE INDEX IF NOT EXISTS case_audit_case_idx ON case_audit (case_id);

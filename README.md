@@ -2,23 +2,32 @@
 
 MVP para a regulação do SAMU 192 Salvador avaliar acionamento do helicóptero do GOA/CBMBA (base em Simões Filho): score de elegibilidade, tempos aéreo × terrestre, meteorologia, áreas de pouso e acompanhamento da missão. Interface dark "mission control" em React, otimizada para decisão rápida: a faixa superior mostra o score, a recomendação e os gates o tempo todo.
 
-## Usar agora (sem instalar nada)
+## Acesso
 
-Abra o arquivo `dist/index.html` em qualquer navegador com internet. Todo o app está embutido nesse único arquivo — pode copiá-lo para um pendrive ou enviar para a central.
+A versão em produção (**https://goa.mnrs.com.br**) exige **login** e registra os casos no servidor (Postgres) com autoria e trilha de auditoria — ver [`server/`](server/README.md). Acesso restrito à equipe autorizada; os usuários são criados pelo administrador.
+
+> A partir da introdução do backend, o app **não** funciona mais aberto direto do disco (`file://`): login e registro de casos dependem da API. O restante (mapa, score, tempos, meteorologia) continua no navegador.
 
 ## Rodar em desenvolvimento
 
-Requisitos: [Node.js](https://nodejs.org) 18+.
+Requisitos: [Node.js](https://nodejs.org) 18+ e PostgreSQL.
 
 ```bash
+# 1) backend (API + banco)
+cd server && npm install
+createdb skyrescue_dev
+DATABASE_URL=postgres://localhost/skyrescue_dev npm run migrate   # cria schema + admin goa.samu
+DATABASE_URL=postgres://localhost/skyrescue_dev npm start          # porta 3012
+
+# 2) frontend (noutro terminal, na raiz) — o Vite faz proxy de /api → 3012
 npm install
-npm run dev      # abre em http://localhost:5173
-npm run build    # gera dist/index.html (arquivo único)
+npm run dev      # http://localhost:5173
+npm run build    # gera dist/index.html (arquivo único, servido pelo nginx)
 ```
 
-## Publicar na web (opcional)
+## Deploy (produção)
 
-O build é estático: hospede `dist/` no Netlify, Vercel ou GitHub Pages (arraste a pasta no Netlify Drop e pronto).
+`git push` na `main` dispara o GitHub Actions ([`.github/workflows/deploy.yml`](.github/workflows/deploy.yml)): publica o backend (`skyrescue-api` no PM2, porta 3012) e o frontend estático em `/var/www/skyrescue`, com healthcheck e auto-rollback. Detalhes de infra e criação de usuários em [`server/README.md`](server/README.md).
 
 ## Modelo de helipontos (Salvador/RMS)
 
@@ -35,7 +44,7 @@ O build é estático: hospede `dist/` no Netlify, Vercel ou GitHub Pages (arrast
 4. Ajuste velocidade de cruzeiro, tempos fixos e fator de trânsito conforme a experiência real da equipe.
 5. (Opcional) Cadastre bases SAMU para sugestão automática do ETA da ambulância.
 
-Tudo fica salvo no navegador do computador (localStorage) — nada vai para servidor.
+A calibração (base, hospitais, tempos) fica no navegador do computador (localStorage). Já os **casos** são registrados no servidor, com o usuário que os criou.
 
 ## Fluxo de uso na regulação
 

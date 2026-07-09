@@ -12,6 +12,7 @@ concurrency:
 env:
   REMOTE: ${{ secrets.PROD_SSH_USER }}@${{ secrets.PROD_SSH_HOST }}
   WEBROOT: /var/www/skyrescue
+  API_DIR: /home/ubuntu/skyrescue-api
 
 jobs:
   test:
@@ -59,6 +60,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           name: dist
@@ -70,6 +73,36 @@ jobs:
           echo "${{ secrets.PROD_SSH_KEY }}" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -H ${{ secrets.PROD_SSH_HOST }} >> ~/.ssh/known_hosts
+
+      # ---- backend primeiro: garante a API pronta antes do novo frontend ----
+      - name: Deploy backend (skyrescue-api)
+        run: |
+          # .env.production e node_modules ficam só no servidor (não sobrescreve)
+          rsync -az --delete \
+            --exclude 'node_modules/' --exclude '.env' --exclude '.env.production' --exclude '*.log' \
+            -e "ssh -o StrictHostKeyChecking=accept-new -i ~/.ssh/id_ed25519" \
+            server/ ${{ env.REMOTE }}:${{ env.API_DIR }}/
+          ssh -i ~/.ssh/id_ed25519 ${{ env.REMOTE }} bash -s << 'EOF'
+            set -euo pipefail
+            cd /home/ubuntu/skyrescue-api
+            npm ci --omit=dev
+            set -a; . ./.env.production; set +a
+            node scripts/migrate.js          # idempotente (schema IF NOT EXISTS)
+            pm2 reload skyrescue-api --update-env
+            pm2 save
+          EOF
+
+      - name: Healthcheck da API
+        run: |
+          ssh -i ~/.ssh/id_ed25519 ${{ env.REMOTE }} bash -s << 'EOF'
+            set -euo pipefail
+            for i in $(seq 1 10); do
+              code=$(curl -sk -o /dev/null -w "%{http_code}" --resolve goa.mnrs.com.br:443:127.0.0.1 https://goa.mnrs.com.br/api/health || echo 000)
+              [ "$code" = "200" ] && { echo "API OK (200)"; exit 0; }
+              echo "tentativa $i: http=$code — aguardando"; sleep 2
+            done
+            echo "ERRO: API não respondeu 200 em /api/health"; exit 1
+          EOF
 
       - name: Backup da versão atual (rollback rápido)
         run: |
