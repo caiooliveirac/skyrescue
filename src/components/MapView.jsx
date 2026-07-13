@@ -69,7 +69,9 @@ export default function MapView({
   clickRef.current = onMapClick
 
   useEffect(() => {
-    const m = L.map(divRef.current, { zoomControl: true }).setView([cfg.base.lat, cfg.base.lon], 10)
+    // rotateControl: o leaflet-rotate (carregado pelo modo navegação) injeta
+    // uma bússola por padrão em todo mapa — aqui o mapa não gira, então fora
+    const m = L.map(divRef.current, { zoomControl: true, rotateControl: false }).setView([cfg.base.lat, cfg.base.lon], 10)
     m.on('click', (e) => clickRef.current && clickRef.current(e.latlng.lat, e.latlng.lng, modeRef.current))
     layerRef.current = L.layerGroup().addTo(m)
     mapRef.current = m

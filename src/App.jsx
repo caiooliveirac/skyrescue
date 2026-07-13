@@ -8,6 +8,7 @@ import { computeMission, autoChecks, daylightCheck, rangeCheck, combinedWeatherS
 import { computeScore, recommendation, evaluateGates, ITEM_BY_ID } from './lib/score.js'
 import { rankLZ, parseObstacles } from './lib/lz.js'
 import MapView from './components/MapView.jsx'
+import NavMode from './components/NavMode.jsx'
 import CommunityModal from './components/Community.jsx'
 import Checklist from './components/Checklist.jsx'
 import Tracking, { MILESTONES } from './components/Tracking.jsx'
@@ -87,6 +88,7 @@ export default function App({ user, onLogout }) {
   // pontos de pouso sugeridos pela comunidade (pendentes + validados)
   const [communityLz, setCommunityLz] = useState([])
   const [showComm, setShowComm] = useState(false)
+  const [showNav, setShowNav] = useState(false) // modo navegação do piloto (GPS)
   const [commDraft, setCommDraft] = useState(null) // {lat, lon} clicado no mapa
   const communityRef = useRef([]) // leitura na busca de LZ sem refazer o Overpass a cada refresh
   communityRef.current = communityLz
@@ -628,6 +630,9 @@ export default function App({ user, onLogout }) {
               <button className={baseLayer === 'sat' ? 'on' : ''} onClick={() => pickBaseLayer('sat')}>Satélite</button>
               <button className={baseLayer === 'hybrid' ? 'on' : ''} onClick={() => pickBaseLayer('hybrid')}>Híbrido</button>
             </div>
+            <button className="navlaunch" onClick={() => setShowNav(true)} title="Modo navegação do piloto — posição GPS ao vivo, rumo e ETE">
+              <IconRoute size={15} /> Navegar
+            </button>
           </div>
 
           <div className="card">
@@ -763,6 +768,14 @@ export default function App({ user, onLogout }) {
       </div>
 
       {showCfg && <ConfigModal cfg={cfg} onClose={() => setShowCfg(false)} onSave={(c) => { setCfg(c); saveCfg(c); setShowCfg(false) }} />}
+
+      {showNav && (
+        <NavMode
+          cfg={cfg} scene={scene} lzPoint={lzPoint}
+          hospital={hospital} landingHelipad={landingHelipad}
+          onClose={() => setShowNav(false)}
+        />
+      )}
 
       {showComm && (
         <CommunityModal

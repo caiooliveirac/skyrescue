@@ -36,6 +36,10 @@ npm run build    # gera dist/index.html (arquivo único, servido pelo nginx)
 - **Rede privada que empresta heliponto** (mediante coordenação prévia): Hospital Aliança e Hospital Cardio Pulmonar — disponíveis no seletor "Heliponto de desembarque".
 - Hospitais sem heliponto e sem apoio associado: pouso em LZ próxima + transbordo (tempo configurável).
 
+## Modo navegação (piloto)
+
+O botão **Navegar** no mapa abre uma tela cheia estilo "Waze aéreo" para uso no tablet a bordo: posição GPS ao vivo (seta apontando o rumo, rastro do voo e círculo de precisão), HUD com **GS** (km/h e kt), **rumo verdadeiro**, **distância** (km e NM), **ETE/ETA** até o alvo, e linha-guia direta ao ponto selecionado (**CENA/LZ → DESTINO → BASE**, trocável em voo). A orientação do mapa alterna entre **N ↑** (norte verdadeiro em cima) e **RUMO ↑** (a direção do voo fica para cima e o mapa gira — leaflet-rotate). A tela fica sempre acesa (Wake Lock) e o mapa segue a aeronave (arrastar pausa; "Seguir" retoma). Requer HTTPS + permissão de localização no dispositivo; rumo e distâncias são verdadeiros (GPS), sem correção magnética. Em dev, o botão **SIM** simula um voo da base ao alvo na velocidade de cruzeiro. Apoio à consciência situacional — não substitui instrumentos nem cartas aeronáuticas.
+
 ## Pontos de pouso da comunidade
 
 Usuários logados podem sugerir locais onde a equipe já pousou (campo de futebol, praça, pátio de prefeitura…) pelo botão **Comunidade** no mapa: clica-se no local (coordenadas ajustáveis à mão no formulário) e a sugestão aparece para todos como um **H âmbar tracejado** — deixando claro que foi adicionada por usuário e ainda não validada. Quando um **admin valida**, o ponto assume a cor padrão da base, passa a integrar o ranking de **áreas de pouso** perto da ocorrência (badge "Validada — pouso de rotina") e leva junto a observação operacional de quem sugeriu. Pontos rejeitados saem do mapa (o autor e o admin ainda os veem na lista). Não são helipontos homologados: reconhecimento visual pelo piloto continua obrigatório.
