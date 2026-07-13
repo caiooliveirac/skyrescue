@@ -41,6 +41,19 @@ export function toDMS(v, isLat) {
   return `${deg}°${String(min).padStart(2, '0')}'${sec.toFixed(1)}"${dir}`
 }
 
+// Graus e minutos decimais (DDM) — formato padrão da aviação, usado em
+// cartas, GPS e FMS. Latitude com 2 dígitos de grau, longitude com 3.
+// Ex.: "12°58.31'S 038°30.07'W"
+export function toDDM(v, isLat) {
+  const dir = isLat ? (v >= 0 ? 'N' : 'S') : (v >= 0 ? 'E' : 'W')
+  const abs = Math.abs(v)
+  const deg = Math.floor(abs)
+  const min = (abs - deg) * 60
+  const dd = String(deg).padStart(isLat ? 2 : 3, '0')
+  const mm = min.toFixed(2).padStart(5, '0')
+  return `${dd}°${mm}'${dir}`
+}
+
 export function fmtCoords(p) {
   if (!p) return '—'
   return `${p.lat.toFixed(5)}, ${p.lon.toFixed(5)}`
@@ -49,6 +62,12 @@ export function fmtCoords(p) {
 export function fmtCoordsDMS(p) {
   if (!p) return '—'
   return `${toDMS(p.lat, true)} ${toDMS(p.lon, false)}`
+}
+
+// Coordenadas no formato aeronáutico (DDM) — o que os pilotos leem/inserem.
+export function fmtCoordsDDM(p) {
+  if (!p) return '—'
+  return `${toDDM(p.lat, true)} ${toDDM(p.lon, false)}`
 }
 
 export function gmapsLink(p) {

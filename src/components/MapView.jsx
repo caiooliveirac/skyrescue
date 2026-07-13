@@ -3,6 +3,8 @@ import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import GoogleMutant from 'leaflet.gridlayer.googlemutant'
 import { loadGoogleMaps, googleAuthFailed, onGoogleAuthFailure } from '../lib/gmaps.js'
+import { HELIPAD_CATALOG } from '../data/helipads-catalog.js'
+import { haversineKm } from '../lib/geo.js'
 
 // camadas base disponíveis
 const CARTO_DARK = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
@@ -27,18 +29,26 @@ const hospIcon = (sel, heliponto) =>
   })
 const helipadIcon = (landing) =>
   L.divIcon({ className: 'mk', html: `<div class="mk-helipad${landing ? ' landing' : ''}">H</div>`, iconSize: [24, 24], iconAnchor: [12, 12] })
+// heliponto registrado ANAC (catálogo): círculo escuro c/ "H" ciano —
+// mesma família visual dos helipontos (círculo-H), mas discreto: é
+// infraestrutura registrada, não um ponto já coordenado da missão
+const anacIcon = () =>
+  L.divIcon({ className: 'mk', html: '<div class="mk-anac">H</div>', iconSize: [20, 20], iconAnchor: [10, 10] })
 const sceneIcon = () =>
   L.divIcon({ className: 'mk', html: '<div class="mk-scene"><span class="ring"></span><span class="core"></span></div>', iconSize: [34, 34], iconAnchor: [17, 17] })
-const lzIcon = (letter, suitKey, sel) =>
+const lzIcon = (letter, suitKey, sel, isHeli) =>
+  // candidato que é heliponto mantém a identidade círculo-H; a letra vira badge
   L.divIcon({
     className: 'mk',
-    html: `<div class="mk-lz ${suitKey === 'restrita' ? 'restrita' : suitKey === 'avaliar' ? 'avaliar' : ''}${sel ? ' sel' : ''}">${letter}</div>`,
+    html: isHeli
+      ? `<div class="mk-lz heli${sel ? ' sel' : ''}">H<span class="lzletter">${letter}</span></div>`
+      : `<div class="mk-lz ${suitKey === 'restrita' ? 'restrita' : suitKey === 'avaliar' ? 'avaliar' : ''}${sel ? ' sel' : ''}">${letter}</div>`,
     iconSize: [25, 25], iconAnchor: [12.5, 12.5],
   })
 
 export default function MapView({
   cfg, scene, hospitalId, landingHelipad, lz, lzSelId, manualLz, obstacles, route,
-  mode, showObs, focus, baseLayer = 'dark', googleKey = '',
+  mode, showObs, showPads = true, focus, baseLayer = 'dark', googleKey = '',
   onMapClick,
 }) {
   const divRef = useRef(null)
@@ -169,6 +179,23 @@ export default function MapView({
         .addTo(lay)
     }
 
+    // helipontos registrados ANAC (catálogo) — camada persistente, sempre no
+    // mapa. Omite os que já têm marcador próprio: hospital com heliponto /
+    // heliponto de apoio a <150 m, ou candidato de LZ com letra na cena atual.
+    if (showPads) {
+      const covered = [
+        ...cfg.hospitals.filter((h) => h.heliponto),
+        ...(cfg.helipads || []),
+      ]
+      for (const p of HELIPAD_CATALOG) {
+        if (covered.some((c) => haversineKm(c, p) * 1000 < 150)) continue
+        if (scene && (lz || []).some((c) => c.id === `cat/${p.icao}`)) continue
+        L.marker([p.lat, p.lon], { icon: anacIcon(), zIndexOffset: 40 })
+          .bindTooltip(`${p.name} [${p.icao}] · ${p.bairro} — registro ANAC, coordenar uso com o operador`)
+          .addTo(lay)
+      }
+    }
+
     // cena
     if (scene) {
       L.marker([scene.lat, scene.lon], { icon: sceneIcon(), zIndexOffset: 600 }).bindTooltip('Ocorrência').addTo(lay)
@@ -181,8 +208,8 @@ export default function MapView({
     if (scene && lz) {
       for (const c of lz) {
         const sel = c.id === lzSelId
-        L.marker([c.lat, c.lon], { icon: lzIcon(c.letter, c.obstFlag ? 'avaliar' : c.suitKey, sel), zIndexOffset: sel ? 300 : 50 })
-          .bindTooltip(`${c.letter} · ${c.name} (${c.type}) — ${c.distM} m da ocorrência`)
+        L.marker([c.lat, c.lon], { icon: lzIcon(c.letter, c.obstFlag ? 'avaliar' : c.suitKey, sel, c.typeKey === 'heli'), zIndexOffset: sel ? 300 : 50 })
+          .bindTooltip(`${c.letter} · ${c.name}${c.icao ? ' [' + c.icao + ']' : ''} (${c.type}) — ${c.distM} m da ocorrência`)
           .addTo(lay)
         if (sel && c.bounds) {
           L.rectangle(
@@ -250,7 +277,7 @@ export default function MapView({
         m.fitBounds(b.pad(0.18))
       }
     }
-  }, [cfg, scene, hospitalId, landingHelipad, lz, lzSelId, manualLz, obstacles, route, showObs])
+  }, [cfg, scene, hospitalId, landingHelipad, lz, lzSelId, manualLz, obstacles, route, showObs, showPads])
 
   return (
     <>
@@ -261,7 +288,8 @@ export default function MapView({
         <span><i style={{ background: '#fb7185' }} /> restrita</span>
         <span><b className="lg-hosp heli">H</b> hospital c/ heliponto</span>
         <span><b className="lg-hosp noheli" /> hospital s/ heliponto</span>
-        <span><i style={{ background: '#7c3aed' }} /> heliponto de apoio</span>
+        <span><b className="lg-pad apoio">H</b> heliponto de apoio</span>
+        <span><b className="lg-pad anac">H</b> heliponto ANAC</span>
       </div>
     </>
   )

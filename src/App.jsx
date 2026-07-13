@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { loadCfg, saveCfg, TAG_LABELS, hospitalHelipads, landingPoints } from './config.js'
 import { api } from './lib/backend.js'
-import { geocode, reverseGeocode, fetchWeather, fetchMetar, groundRoute, overpass, lzQuery, obstacleQuery } from './lib/api.js'
-import { haversineKm, fmtMin, fmtCoords, fmtCoordsDMS, gmapsLink } from './lib/geo.js'
+import { geocode, reverseGeocode, fetchWeather, fetchMetar, groundRoute, overpass, lzQuery, obstacleQuery, heliRadius } from './lib/api.js'
+import { catalogNear } from './data/helipads-catalog.js'
+import { haversineKm, fmtMin, fmtCoords, fmtCoordsDMS, fmtCoordsDDM, gmapsLink } from './lib/geo.js'
 import { computeMission, autoChecks, daylightCheck, rangeCheck, combinedWeatherStatus, classifyWeather } from './lib/mission.js'
 import { computeScore, recommendation, evaluateGates, ITEM_BY_ID } from './lib/score.js'
 import { rankLZ, parseObstacles } from './lib/lz.js'
@@ -10,10 +11,10 @@ import MapView from './components/MapView.jsx'
 import Checklist from './components/Checklist.jsx'
 import Tracking, { MILESTONES } from './components/Tracking.jsx'
 import ConfigModal from './components/ConfigModal.jsx'
-import { DecisionStrip, TimePanel, WeatherPanel, LZPanel, AlertsPanel, GatesPanel } from './components/Results.jsx'
+import { DecisionStrip, TimePanel, WeatherPanel, LZPanel, AlertsPanel, GatesPanel, CoordReadout } from './components/Results.jsx'
 import {
   IconHeli, IconPlus, IconFolder, IconPrint, IconSettings, IconSearch, IconPin,
-  IconTarget, IconZap, IconCopy, IconSave, IconDownload,
+  IconTarget, IconZap, IconCopy, IconSave, IconDownload, IconHelipadH,
   IconClock, IconCloud, IconAlert, IconRoute, IconX,
 } from './components/Icons.jsx'
 
@@ -59,6 +60,7 @@ export default function App({ user, onLogout }) {
   const [manualLz, setManualLz] = useState(null)
   const [mapMode, setMapMode] = useState('scene')
   const [showObs, setShowObs] = useState(false)
+  const [showPads, setShowPads] = useState(true) // camada de helipontos ANAC
   const [focus, setFocus] = useState(null)
   const [baseLayer, setBaseLayer] = useState(() => {
     try { return localStorage.getItem('skyrescue_baselayer') || 'dark' } catch (e) { return 'dark' }
@@ -73,6 +75,8 @@ export default function App({ user, onLogout }) {
   const [casesErr, setCasesErr] = useState('')
   const [dbId, setDbId] = useState(null) // id do caso no banco (null = ainda não salvo)
   const [saving, setSaving] = useState(false)
+  const [saveFlash, setSaveFlash] = useState(false) // confirmação transitória de gravação
+  const [saveErr, setSaveErr] = useState('')
 
   const refreshCases = async () => {
     try { const { cases } = await api.listCases(); setCases(cases); setCasesErr('') }
@@ -137,9 +141,14 @@ export default function App({ user, onLogout }) {
         if (seq !== seqRef.current) return
         const obs = parseObstacles(obEls)
         setObstacles(obs)
-        setLzList(rankLZ(lzEls, scene, obs))
+        setLzList(rankLZ(lzEls, scene, obs, { catalog: catalogNear(scene, heliRadius(cfg.ops.lzRadiusM)) }))
       } catch (e) {
-        if (seq === seqRef.current) setLzErr(e.message || String(e))
+        if (seq === seqRef.current) {
+          setLzErr(e.message || String(e))
+          // OSM fora do ar não apaga os helipontos conhecidos do catálogo
+          const cat = catalogNear(scene, heliRadius(cfg.ops.lzRadiusM))
+          if (cat.length) setLzList(rankLZ([], scene, null, { catalog: cat }))
+        }
       } finally {
         if (seq === seqRef.current) setLzLoading(false)
       }
@@ -359,7 +368,7 @@ export default function App({ user, onLogout }) {
     L.push(`${new Date().toLocaleString('pt-BR')}  ${caseId ? '· Caso ' + caseId : ''}`)
     if (scene) {
       L.push(`Local: ${sceneLabel || '—'}`)
-      L.push(`Coords: ${fmtCoords(scene)} | ${fmtCoordsDMS(scene)}`)
+      L.push(`Coords (DDM): ${fmtCoordsDDM(scene)}  |  dec ${fmtCoords(scene)}`)
       L.push(`Maps: ${gmapsLink(scene)}`)
     }
     L.push(`Score: ${score.total} pts — ${score.band.label}`)
@@ -368,8 +377,8 @@ export default function App({ user, onLogout }) {
     if (!gates.ok) L.push(`IMPEDITIVOS: ${gates.fails.map((f) => f.label).join('; ')}`)
     if (mission?.airTotal != null) L.push(`Tempo aéreo estimado: ${fmtMin(mission.airTotal)}${mission.ground.total != null ? ` × terrestre ${fmtMin(mission.ground.total)} (Δ ${fmtMin(Math.abs(mission.delta))})` : ''}`)
     if (hospital) L.push(`Destino: ${destinoLabel()}`)
-    if (landingHelipad) L.push(`Heliponto de desembarque: ${landingHelipad.name} ${fmtCoords(landingHelipad)}`)
-    if (lzPoint) L.push(`LZ: ${manualLz ? 'manual' : `${lzPoint.letter} — ${lzPoint.name}`} ${fmtCoords(lzPoint)}${lzPoint.obstFlag ? ' ⚠ obstáculo próximo' : ''}`)
+    if (landingHelipad) L.push(`Heliponto de desembarque: ${landingHelipad.name} — ${fmtCoordsDDM(landingHelipad)} (dec ${fmtCoords(landingHelipad)})`)
+    if (lzPoint) L.push(`LZ: ${manualLz ? 'manual' : `${lzPoint.letter} — ${lzPoint.name}`} — ${fmtCoordsDDM(lzPoint)} (dec ${fmtCoords(lzPoint)})${lzPoint.obstFlag ? ' ⚠ obstáculo próximo' : ''}`)
     if (wxScene) {
       const c = classifyWeather(wxScene)
       L.push(`Meteo cena: ${c.level === 'ok' ? 'favorável' : c.level === 'warn' ? 'MARGINAL' : 'DESFAVORÁVEL'} — vento ${Math.round(wxScene.windKmh || 0)} km/h, vis ${wxScene.visM != null ? (wxScene.visM / 1000).toFixed(1) + ' km' : 's/ dado'}`)
@@ -404,6 +413,7 @@ export default function App({ user, onLogout }) {
   const saveCase = async () => {
     if (saving) return
     setSaving(true)
+    setSaveErr('')
     const snap = snapshot()
     if (!caseId) setCaseId(snap.id)
     try {
@@ -414,9 +424,10 @@ export default function App({ user, onLogout }) {
         setDbId(id)
       }
       await refreshCases()
-      alert('Caso salvo no servidor.')
+      setSaveFlash(true)
+      setTimeout(() => setSaveFlash(false), 4000)
     } catch (e) {
-      alert('Falha ao salvar o caso no servidor: ' + (e.message || e))
+      setSaveErr(e.message || String(e))
     } finally {
       setSaving(false)
     }
@@ -437,6 +448,7 @@ export default function App({ user, onLogout }) {
       setManualChecked(c.manualChecked || {}); setAutoOverrides(c.autoOverrides || {})
       setGateManual(c.gateManual || {}); setGateOverrides(c.gateOverrides || {})
       setLzSelId(c.lzSelId || null); setManualLz(c.manualLz || null); setEvents(c.events || {})
+      setSaveFlash(false); setSaveErr('')
       setShowCases(false)
     } catch (e) {
       alert('Falha ao abrir o caso: ' + (e.message || e))
@@ -469,7 +481,7 @@ export default function App({ user, onLogout }) {
 
   const newCase = () => {
     revGeoRef.current++
-    setDbId(null)
+    setDbId(null); setSaveFlash(false); setSaveErr('')
     setScene(null); setSceneLabel(''); setQ(''); setCaseId(''); setNotes(''); setGeoResults(null)
     setManualChecked({}); setAutoOverrides({}); setGateManual({}); setGateOverrides({})
     setAmbEta(''); setLzSelId(null); setManualLz(null); setEvents({}); setLandingSel('auto')
@@ -535,7 +547,8 @@ export default function App({ user, onLogout }) {
                 <div style={{ fontWeight: 700, fontSize: 13.5, display: 'flex', alignItems: 'center', gap: 6 }}>
                   <IconPin size={14} style={{ color: 'var(--fail)' }} /> {sceneLabel || 'Ponto marcado'}
                 </div>
-                <div className="mono" style={{ color: 'var(--muted)', marginTop: 2 }}>{fmtCoords(scene)} · {fmtCoordsDMS(scene)}</div>
+                <CoordReadout point={scene} label="Coordenadas" />
+                <div className="mono small" style={{ marginTop: 3 }}>{fmtCoordsDMS(scene)}</div>
               </div>
             )}
             <div className="field" style={{ marginTop: 10, marginBottom: 0 }}>
@@ -573,11 +586,12 @@ export default function App({ user, onLogout }) {
               <button className={mapMode === 'scene' ? 'on' : ''} onClick={() => setMapMode('scene')}><IconPin size={13} /> Ocorrência</button>
               <button className={mapMode === 'lz' ? 'on' : ''} onClick={() => setMapMode(mapMode === 'lz' ? 'scene' : 'lz')}><IconTarget size={13} /> Marcar LZ</button>
               <button className={showObs ? 'on' : ''} onClick={() => setShowObs(!showObs)}><IconZap size={13} /> Obstáculos</button>
+              <button className={showPads ? 'on' : ''} onClick={() => setShowPads(!showPads)} title="Helipontos registrados ANAC/CIAD"><IconHelipadH size={13} /> Helipontos</button>
             </div>
             <MapView
               cfg={cfg} scene={scene} hospitalId={hospitalId} landingHelipad={landingHelipad}
               lz={lzList} lzSelId={lzSelId} manualLz={manualLz}
-              obstacles={obstacles} route={route} mode={mapMode} showObs={showObs}
+              obstacles={obstacles} route={route} mode={mapMode} showObs={showObs} showPads={showPads}
               focus={focus}
               baseLayer={baseLayer} googleKey={cfg.map?.googleKey || ''}
               onMapClick={onMapClick}
@@ -622,6 +636,7 @@ export default function App({ user, onLogout }) {
                   <option value="lz">Pousar em LZ próxima + transbordo</option>
                 </select>
                 {landingHelipad?.note && <div className="small">{landingHelipad.note}</div>}
+                {landingHelipad && <CoordReadout point={landingHelipad} label={landingHelipad.name} />}
               </div>
             )}
 
@@ -681,13 +696,36 @@ export default function App({ user, onLogout }) {
 
           {scene && (
             <div className="card">
-              <h2><IconSave size={14} /> Registro</h2>
+              <h2>
+                <IconSave size={14} /> Registro
+                <span className={'badge ' + (dbId != null ? 'ok' : '')} style={{ marginLeft: 'auto' }}>
+                  {dbId != null ? `Salvo · caso #${dbId}` : 'Não salvo'}
+                </span>
+              </h2>
               <div className="row">
                 <button className="btn" onClick={saveCase} disabled={saving}>{saving ? <span className="spin" /> : <IconSave size={14} />} {dbId != null ? 'Atualizar caso' : 'Salvar caso'}</button>
+                <button className="btn sec" onClick={() => setShowCases(true)}><IconFolder size={14} /> Casos ({cases.length})</button>
                 <button className="btn sec" onClick={copyResumo}><IconCopy size={14} /> Copiar resumo</button>
                 <button className="btn sec" onClick={() => window.print()}><IconPrint size={14} /> Imprimir</button>
                 <button className="btn sec" onClick={exportJSON}><IconDownload size={14} /> Exportar JSON</button>
               </div>
+              {saveFlash && (
+                <div className="alert ok" style={{ marginTop: 10, marginBottom: 0 }}>
+                  <IconSave size={15} style={{ flex: 'none', marginTop: 1 }} />
+                  Caso gravado no servidor. Aparece na lista <b>Casos ({cases.length})</b> — abra para revê-lo depois.{' '}
+                  <button className="btn xs sec" style={{ marginLeft: 4 }} onClick={newCase}><IconPlus size={12} /> Iniciar novo caso</button>
+                </div>
+              )}
+              {saveErr && (
+                <div className="alert fail" style={{ marginTop: 10, marginBottom: 0 }}>
+                  <IconAlert size={15} style={{ flex: 'none', marginTop: 1 }} /> Falha ao salvar no servidor: {saveErr}
+                </div>
+              )}
+              {dbId != null && !saveFlash && (
+                <div className="small" style={{ marginTop: 8 }}>
+                  Editando um caso já registrado. Alterações usam <b>Atualizar caso</b>; para registrar uma ocorrência diferente, clique em <b>Novo caso</b>.
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -741,7 +779,8 @@ function PrintSheet({ caseId, scene, sceneLabel, score, gates, rec, mission, hos
       <h2>Ocorrência</h2>
       <table><tbody>
         <tr><th>Local</th><td>{sceneLabel || '—'}</td></tr>
-        <tr><th>Coordenadas</th><td>{scene ? `${fmtCoords(scene)} · ${fmtCoordsDMS(scene)}` : '—'}</td></tr>
+        <tr><th>Coordenadas (DDM)</th><td>{scene ? fmtCoordsDDM(scene) : '—'}</td></tr>
+        <tr><th>Coordenadas (dec)</th><td>{scene ? `${fmtCoords(scene)} · ${fmtCoordsDMS(scene)}` : '—'}</td></tr>
       </tbody></table>
 
       <h2>Pontuação SkyRescue</h2>
@@ -757,8 +796,8 @@ function PrintSheet({ caseId, scene, sceneLabel, score, gates, rec, mission, hos
         <tr><th>Terrestre (total)</th><td>{fmtMin(mission?.ground?.total)}</td></tr>
         <tr><th>Diferença</th><td>{mission?.delta != null ? (mission.delta > 0 ? `aéreo ${fmtMin(mission.delta)} mais rápido` : `terrestre ${fmtMin(-mission.delta)} mais rápido`) : '—'}</td></tr>
         <tr><th>Destino</th><td>{destinoLabel}</td></tr>
-        {landingHelipad && <tr><th>Heliponto desemb.</th><td>{landingHelipad.name} · {fmtCoords(landingHelipad)}</td></tr>}
-        <tr><th>LZ</th><td>{lzPoint ? `${manualLz ? 'Manual' : lzPoint.name} · ${fmtCoords(lzPoint)}` : 'não definida'}</td></tr>
+        {landingHelipad && <tr><th>Heliponto desemb.</th><td>{landingHelipad.name} · {fmtCoordsDDM(landingHelipad)} <span style={{ color: '#666' }}>(dec {fmtCoords(landingHelipad)})</span></td></tr>}
+        <tr><th>LZ</th><td>{lzPoint ? <>{manualLz ? 'Manual' : lzPoint.name} · {fmtCoordsDDM(lzPoint)} <span style={{ color: '#666' }}>(dec {fmtCoords(lzPoint)})</span></> : 'não definida'}</td></tr>
       </tbody></table>
 
       <h2>Condições</h2>

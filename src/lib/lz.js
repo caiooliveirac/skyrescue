@@ -6,7 +6,7 @@ const TYPE_INFO = [
   { match: (t) => t.leisure === 'stadium', type: 'Estádio', prio: 1, emoji: '🏟', typeKey: 'campo' },
   { match: (t) => t.leisure === 'pitch', type: 'Campo/quadra', prio: 1, emoji: '⚽', typeKey: 'campo' },
   { match: (t) => t.leisure === 'sports_centre' || t.leisure === 'track', type: 'Área esportiva', prio: 1, emoji: '🏃', typeKey: 'campo' },
-  { match: (t) => t.natural === 'beach', type: 'Praia', prio: 2, emoji: '🏖', typeKey: 'praia' },
+  { match: (t) => t.natural === 'beach' || t.natural === 'sand', type: 'Praia', prio: 2, emoji: '🏖', typeKey: 'praia' },
   { match: (t) => t.leisure === 'park' || t.leisure === 'recreation_ground' || t.leisure === 'golf_course', type: 'Parque/área verde', prio: 2, emoji: '🌳', typeKey: 'verde' },
   { match: (t) => !!t.landuse, type: 'Área gramada', prio: 2, emoji: '🌿', typeKey: 'verde' },
   { match: (t) => t.amenity === 'parking', type: 'Estacionamento', prio: 3, emoji: '🅿', typeKey: 'estac' },
@@ -34,9 +34,48 @@ export function parseObstacles(elements) {
   return { lines, points }
 }
 
+// proximidade de obstáculos (rede elétrica / torres / mastros)
+function nearestObstacle(lat, lon, obstacles) {
+  let obstM = Infinity
+  let obstWhat = null
+  if (obstacles) {
+    for (const ln of obstacles.lines) {
+      const d = minDistToLineM({ lat, lon }, ln.coords)
+      if (d < obstM) { obstM = d; obstWhat = 'rede elétrica' }
+    }
+    for (const p of obstacles.points) {
+      const d = haversineKm({ lat, lon }, p) * 1000
+      if (d < obstM) { obstM = d; obstWhat = p.tags.man_made ? 'torre/mastro' : 'torre de energia' }
+    }
+  }
+  return { obstM, obstWhat }
+}
+
 export function rankLZ(elements, scene, obstacles, opts = {}) {
   const seen = new Set()
   const out = []
+
+  // catálogo estático de helipontos ANAC/CIAD (não mapeados no OSM);
+  // entram primeiro e "vencem" o eventual duplicado vindo do Overpass
+  const catalogPads = []
+  for (const h of opts.catalog || []) {
+    const distM = Math.round(haversineKm(scene, h) * 1000)
+    const { obstM, obstWhat } = nearestObstacle(h.lat, h.lon, obstacles)
+    const obstFlag = obstM < 150
+    out.push({
+      id: `cat/${h.icao}`, name: h.name, type: 'Heliponto', typeKey: 'heli', emoji: '🅗',
+      lat: h.lat, lon: h.lon, icao: h.icao, ciad: h.ciad, bairro: h.bairro || null,
+      dims: null, minDim: null, distM, obstFlag,
+      obstNear: isFinite(obstM) ? Math.round(obstM) : null, obstWhat,
+      suit: 'Ideal (heliponto)', suitKey: 'ideal',
+      sortKey: distM / 800 + (obstFlag ? 1.5 : 0),
+      bounds: null, lit: false, surface: null,
+      catalog: true,
+    })
+    catalogPads.push(h)
+    seen.add(`${h.lat.toFixed(5)}|${h.lon.toFixed(5)}`)
+  }
+
   for (const el of elements || []) {
     const tags = el.tags || {}
     const info = TYPE_INFO.find((ti) => ti.match(tags))
@@ -51,6 +90,10 @@ export function rankLZ(elements, scene, obstacles, opts = {}) {
     if (seen.has(key)) continue
     seen.add(key)
 
+    // heliponto do OSM a <120 m de um do catálogo = mesmo heliponto;
+    // fica a entrada do catálogo (tem nome oficial e código ICAO)
+    if (info.typeKey === 'heli' && catalogPads.some((h) => haversineKm({ lat, lon }, h) * 1000 < 120)) continue
+
     const dims = bboxDimsM(el.bounds)
     // largura mínima real do polígono quando o OSM traz a geometria;
     // bounding box superestima áreas alongadas/diagonais
@@ -58,19 +101,7 @@ export function rankLZ(elements, scene, obstacles, opts = {}) {
     const minDim = geomW ?? (dims ? Math.min(dims.w, dims.h) : null)
     const distM = Math.round(haversineKm(scene, { lat, lon }) * 1000)
 
-    // proximidade de obstáculos (rede elétrica / torres)
-    let obstM = Infinity
-    let obstWhat = null
-    if (obstacles) {
-      for (const ln of obstacles.lines) {
-        const d = minDistToLineM({ lat, lon }, ln.coords)
-        if (d < obstM) { obstM = d; obstWhat = 'rede elétrica' }
-      }
-      for (const p of obstacles.points) {
-        const d = haversineKm({ lat, lon }, p) * 1000
-        if (d < obstM) { obstM = d; obstWhat = p.tags.man_made ? 'torre/mastro' : 'torre de energia' }
-      }
-    }
+    const { obstM, obstWhat } = nearestObstacle(lat, lon, obstacles)
     const obstFlag = obstM < 150
     const obstNear = isFinite(obstM) ? Math.round(obstM) : null
 

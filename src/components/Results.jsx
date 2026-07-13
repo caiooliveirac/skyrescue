@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { fmtMin, fmtKm } from '../lib/geo.js'
+import { fmtMin, fmtKm, fmtCoords, fmtCoordsDDM } from '../lib/geo.js'
 import { classifyWeather, WMO_LABEL } from '../lib/mission.js'
 import { walkMin, LZ_FILTERS } from '../lib/lz.js'
 import { IconHeli, IconAmbulance, IconCopy, IconPin, IconAlert, IconTarget, LZ_TYPE_ICON, IconHelipadH } from './Icons.jsx'
@@ -147,6 +147,33 @@ export function WeatherPanel({ wxScene, wxBase, wxErr, metar, daylight }) {
   )
 }
 
+// Leitura de coordenadas para o piloto: DDM (aeronáutico) em destaque,
+// decimal como apoio, com cópia rápida de cada formato.
+export function CoordReadout({ point, label }) {
+  const [done, setDone] = useState('')
+  if (!point) return null
+  const ddm = fmtCoordsDDM(point)
+  const dec = fmtCoords(point)
+  const copy = (txt, tag) => {
+    const mark = () => { setDone(tag); setTimeout(() => setDone(''), 1400) }
+    if (navigator.clipboard?.writeText) navigator.clipboard.writeText(txt).then(mark).catch(mark)
+    else mark()
+  }
+  return (
+    <div className="coordbox">
+      {label && <span className="coordlab">{label}</span>}
+      <button className="coordval" title="Copiar em formato aeronáutico (graus + minutos decimais)" onClick={() => copy(ddm, 'ddm')}>
+        <IconTarget size={12} /> <span className="mono">{ddm}</span>
+        <span className="coordtag">{done === 'ddm' ? 'copiado ✓' : 'DDM'}</span>
+      </button>
+      <button className="coorddec" title="Copiar em graus decimais" onClick={() => copy(dec, 'dec')}>
+        <span className="mono">{dec}</span>
+        <span className="coordtag">{done === 'dec' ? 'copiado ✓' : 'dec'}</span>
+      </button>
+    </div>
+  )
+}
+
 const SUIT_BADGE = {
   ideal: ['ok', 'Ideal'],
   boa: ['ok', 'Boa — ampla'],
@@ -169,6 +196,15 @@ export function LZPanel({ lz, lzErr, lzLoading, lzSelId, manualLz, onSelect, onF
         </button>
         {manualLz && <button className="btn xs sec" onClick={onClearManual}>Remover LZ manual</button>}
       </div>
+      {manualLz && (
+        <div className="lzrow sel" style={{ cursor: 'default' }}>
+          <div className="lztile suit-ideal"><IconTarget size={20} /><span className="letter">LZ</span></div>
+          <div className="lzmain">
+            <div className="n">LZ manual <span className="type">marcada no mapa</span></div>
+            <CoordReadout point={manualLz} />
+          </div>
+        </div>
+      )}
       {lzLoading && <div className="small"><span className="spin" /> buscando áreas de pouso no OpenStreetMap…</div>}
       {lzErr && (
         <div className="alert warn">
@@ -206,12 +242,17 @@ export function LZPanel({ lz, lzErr, lzLoading, lzSelId, manualLz, onSelect, onF
             </div>
             <div className="lzmain">
               <div className="n">
-                {c.name} <span className="type">{c.type}</span>
+                {c.name} <span className="type">{c.type}{c.icao ? ` · ${c.icao}` : ''}</span>
                 <span className={'badge ' + bcls}>{blabel}{c.dims ? ` · ~${c.dims.w}×${c.dims.h} m` : ''}</span>
               </div>
               <div className="m">
                 {c.distM} m da ocorrência (~{walkMin(c.distM)} min a pé)
+                {c.bairro ? ` · ${c.bairro}` : ''}
                 {c.surface ? ` · piso: ${c.surface}` : ''}{c.lit ? ' · iluminada' : ''}
+                {c.catalog ? ' · registro ANAC — coordenar uso com o operador' : ''}
+              </div>
+              <div onClick={(e) => e.stopPropagation()}>
+                <CoordReadout point={c} />
               </div>
               {(c.obstFlag || (c.obstNear != null && c.obstNear < 400)) && (
                 <div className="ob"><IconAlert size={12} /> {c.obstWhat} a ~{c.obstNear} m{c.obstFlag ? ' — reconhecimento obrigatório' : ''}</div>
@@ -224,7 +265,7 @@ export function LZPanel({ lz, lzErr, lzLoading, lzSelId, manualLz, onSelect, onF
         )
       })}
       <div className="small" style={{ marginTop: 8 }}>
-        Sugestões do OpenStreetMap — <b>reconhecimento visual pelo piloto é obrigatório</b> (fios, postes, pessoas, inclinação, obstáculos não mapeados).
+        Sugestões do OpenStreetMap + catálogo ANAC/CIAD — <b>reconhecimento visual pelo piloto é obrigatório</b> (fios, postes, pessoas, inclinação, obstáculos não mapeados). Em praias, avaliar maré, banhistas e consistência da areia.
       </div>
     </div>
   )

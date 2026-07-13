@@ -184,13 +184,21 @@ export async function overpass(query) {
   throw err || new Error('Overpass indisponível')
 }
 
+// Helipontos valem a pena mesmo mais longe que as LZs improvisadas
+// (o deslocamento extra de voo é irrelevante; o transbordo não).
+export function heliRadius(r) {
+  return Math.max(r, 4000)
+}
+
 export function lzQuery(lat, lon, r) {
+  // praias: nwr — muitas estão no OSM como nó ou relação (multipolígono),
+  // e a cláusula "way" sozinha as deixava de fora
   return `[out:json][timeout:25];(
-nwr(around:${r},${lat},${lon})[aeroway~"^(helipad|heliport)$"];
+nwr(around:${heliRadius(r)},${lat},${lon})[aeroway~"^(helipad|heliport)$"];
 way(around:${r},${lat},${lon})[leisure~"^(pitch|stadium|sports_centre|track)$"];
 way(around:${r},${lat},${lon})[leisure~"^(park|recreation_ground|golf_course)$"];
 way(around:${r},${lat},${lon})[landuse~"^(grass|meadow|recreation_ground|village_green)$"];
-way(around:${r},${lat},${lon})[natural="beach"];
+nwr(around:${r},${lat},${lon})[natural~"^(beach|sand)$"];
 way(around:${r},${lat},${lon})[amenity="parking"][parking!~"underground|multi-storey|rooftop"];
 );out body geom;`
 }
