@@ -33,6 +33,7 @@ export const api = {
   createCase: (snapshot) => req('POST', '/cases', { snapshot }),
   updateCase: (id, snapshot) => req('PUT', `/cases/${id}`, { snapshot }),
   deleteCase: (id) => req('DELETE', `/cases/${id}`),
+  notifyCase: (id) => req('POST', `/cases/${id}/notify`),
   // pontos de pouso da comunidade
   listCommunityLz: () => req('GET', '/community-lz'),
   createCommunityLz: (p) => req('POST', '/community-lz', p),

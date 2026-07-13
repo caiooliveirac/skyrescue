@@ -91,6 +91,31 @@ CREATE TABLE IF NOT EXISTS aircraft_position (
   reported_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- ---------- bot despachante da missão (Telegram) ----------
+-- Um grupo vinculado por instalação (linha única); uma missão ativa por
+-- caso acionado no grupo, com controle das confirmações e da cadência
+-- dos avisos de posição.
+CREATE TABLE IF NOT EXISTS bot_chat (
+  id        SMALLINT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  chat_id   BIGINT NOT NULL,
+  title     TEXT,
+  linked_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS mission_chat (
+  case_id          BIGINT PRIMARY KEY REFERENCES cases(id) ON DELETE CASCADE,
+  chat_id          BIGINT NOT NULL,
+  status           TEXT NOT NULL DEFAULT 'ativa' CHECK (status IN ('ativa', 'encerrada')),
+  created_by       BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  handover_at      TIMESTAMPTZ,  -- passagem do caso confirmada no grupo
+  handover_by      TEXT,
+  lz_ready_at      TIMESTAMPTZ,  -- "LZ segura" confirmada no grupo
+  lz_ready_by      TEXT,
+  last_pos_post_at TIMESTAMPTZ,  -- cadência dos avisos de deslocamento
+  near_alerted     BOOLEAN NOT NULL DEFAULT FALSE
+);
+
 -- ---------- trilha de auditoria dos casos ----------
 CREATE TABLE IF NOT EXISTS case_audit (
   id       BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

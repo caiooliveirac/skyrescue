@@ -77,6 +77,8 @@ export default function App({ user, onLogout }) {
   const [casesErr, setCasesErr] = useState('')
   const [dbId, setDbId] = useState(null) // id do caso no banco (null = ainda não salvo)
   const [saving, setSaving] = useState(false)
+  const [notifying, setNotifying] = useState(false)
+  const [notifyMsg, setNotifyMsg] = useState(null) // {ok, text} do acionamento do grupo
   const [saveFlash, setSaveFlash] = useState(false) // confirmação transitória de gravação
   const [saveErr, setSaveErr] = useState('')
 
@@ -458,6 +460,10 @@ export default function App({ user, onLogout }) {
     scene, sceneLabel, hospitalId, hospitalName: hospital?.name || null, landingSel, ambEta, notes,
     manualChecked, autoOverrides, gateManual, gateOverrides,
     lzSelId, manualLz, events,
+    // ponto de encontro nomeado p/ o bot da missão (lzSelId sozinho não
+    // resolve fora do app: o candidato vem do Overpass e não fica no snapshot)
+    lzPoint: lzPoint ? { name: manualLz ? 'LZ manual' : lzPoint.name || 'LZ', lat: lzPoint.lat, lon: lzPoint.lon } : null,
+    landingName: landingHelipad?.name || null,
     scoreTotal: score.total, band: score.band.key,
     recommendation: rec?.title || null, gatesOk: gates.ok,
     mission: mission ? { airTotal: mission.airTotal, groundTotal: mission.ground.total, delta: mission.delta } : null,
@@ -484,6 +490,33 @@ export default function App({ user, onLogout }) {
       setSaveErr(e.message || String(e))
     } finally {
       setSaving(false)
+    }
+  }
+
+  // aciona o grupo da missão no Telegram (briefing + orientações do bot).
+  // Salva/atualiza antes: o bot lê o snapshot do servidor.
+  const notifyGroup = async () => {
+    if (notifying || saving) return
+    setNotifying(true)
+    setNotifyMsg(null)
+    try {
+      const snap = snapshot()
+      if (!caseId) setCaseId(snap.id)
+      let id = dbId
+      if (id != null) {
+        await api.updateCase(id, snap)
+      } else {
+        const r = await api.createCase(snap)
+        id = r.id
+        setDbId(id)
+        await refreshCases()
+      }
+      await api.notifyCase(id)
+      setNotifyMsg({ ok: true, text: 'Briefing enviado ao grupo da missão.' })
+    } catch (e) {
+      setNotifyMsg({ ok: false, text: e.message || String(e) })
+    } finally {
+      setNotifying(false)
     }
   }
 
@@ -765,6 +798,9 @@ export default function App({ user, onLogout }) {
               </h2>
               <div className="row">
                 <button className="btn" onClick={saveCase} disabled={saving}>{saving ? <span className="spin" /> : <IconSave size={14} />} {dbId != null ? 'Atualizar caso' : 'Salvar caso'}</button>
+                <button className="btn sec" onClick={notifyGroup} disabled={notifying} title="Envia o briefing da missão ao grupo do Telegram (salva o caso antes)">
+                  {notifying ? <span className="spin" /> : <IconUsers size={14} />} Grupo da missão
+                </button>
                 <button className="btn sec" onClick={() => setShowCases(true)}><IconFolder size={14} /> Casos ({cases.length})</button>
                 <button className="btn sec" onClick={copyResumo}><IconCopy size={14} /> Copiar resumo</button>
                 <button className="btn sec" onClick={() => window.print()}><IconPrint size={14} /> Imprimir</button>
@@ -780,6 +816,12 @@ export default function App({ user, onLogout }) {
               {saveErr && (
                 <div className="alert fail" style={{ marginTop: 10, marginBottom: 0 }}>
                   <IconAlert size={15} style={{ flex: 'none', marginTop: 1 }} /> Falha ao salvar no servidor: {saveErr}
+                </div>
+              )}
+              {notifyMsg && (
+                <div className={'alert ' + (notifyMsg.ok ? 'ok' : 'fail')} style={{ marginTop: 10, marginBottom: 0 }}>
+                  {notifyMsg.ok ? <IconUsers size={15} style={{ flex: 'none', marginTop: 1 }} /> : <IconAlert size={15} style={{ flex: 'none', marginTop: 1 }} />}
+                  {notifyMsg.text}
                 </div>
               )}
               {dbId != null && !saveFlash && (

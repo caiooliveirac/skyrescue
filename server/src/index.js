@@ -6,6 +6,7 @@ import {
   cookieOptions, authMiddleware, requireAuth, requireAdmin,
   COOKIE_NAME, startSessionGC,
 } from './auth.js'
+import { startBot, notifyMission, postMilestones } from './telegram.js'
 
 const app = express()
 app.set('trust proxy', 1) // atrás do nginx/Cloudflare
@@ -147,6 +148,8 @@ app.put('/api/cases/:id', requireAuth, async (req, res) => {
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
+    // eventos anteriores: o bot ecoa no grupo só os horários novos/ajustados
+    const prev = await client.query(`SELECT snapshot->'events' AS events FROM cases WHERE id = $1`, [req.params.id])
     const { rows } = await client.query(
       `UPDATE cases SET
          case_ref=$2, updated_by=$3, updated_at=now(), scene_label=$4, scene_lat=$5, scene_lon=$6,
@@ -164,6 +167,17 @@ app.put('/api/cases/:id', requireAuth, async (req, res) => {
     )
     await client.query('COMMIT')
     res.json({ id: rows[0].id, updated_at: rows[0].updated_at })
+
+    // fora da transação e sem bloquear a resposta
+    const before = prev.rows[0]?.events || {}
+    const after = snapshot.events || {}
+    const changed = Object.entries(after)
+      .filter(([id, ts]) => ts && before[id] !== ts)
+      .map(([id, ts]) => ({ id, ts, edited: before[id] != null }))
+    if (changed.length) {
+      postMilestones(req.params.id, changed, req.user.full_name || req.user.username)
+        .catch((e) => console.error('bot milestones:', e.message))
+    }
   } catch (e) {
     await client.query('ROLLBACK')
     console.error('update case:', e)
@@ -182,6 +196,20 @@ app.delete('/api/cases/:id', requireAuth, async (req, res) => {
     [req.params.id, req.user.id, 'delete', rows[0].case_ref]
   )
   res.json({ ok: true })
+})
+
+// ---------- bot da missão ----------
+// aciona o grupo: briefing + preparação do encontro + cobrança da passagem
+app.post('/api/cases/:id/notify', requireAuth, async (req, res) => {
+  const { rows } = await query('SELECT id, snapshot FROM cases WHERE id = $1', [req.params.id])
+  if (!rows[0]) return res.status(404).json({ error: 'caso não encontrado' })
+  try {
+    await notifyMission(rows[0], rows[0].snapshot || {}, req.user)
+    res.json({ ok: true })
+  } catch (e) {
+    console.error('notify mission:', e.message)
+    res.status(409).json({ error: e.message })
+  }
 })
 
 // ---------- pontos de pouso da comunidade ----------
@@ -356,4 +384,5 @@ app.patch('/api/users/:id', requireAdmin, async (req, res) => {
 
 const PORT = Number(process.env.PORT || 3012)
 startSessionGC()
+startBot()
 app.listen(PORT, '127.0.0.1', () => console.log(`skyrescue-api ouvindo em 127.0.0.1:${PORT}`))

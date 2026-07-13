@@ -42,6 +42,19 @@ O botão **Navegar** no mapa abre uma tela cheia estilo "Waze aéreo" para uso n
 
 **Rastreamento ao vivo pela regulação**: enquanto o modo navegação está aberto, o tablet reporta a posição ao servidor (~5 s, rota `/api/aircraft/position`, upsert de uma linha por aeronave). O mapa da regulação consulta a cada 10 s e mostra o GOA como uma seta ciano apontando o rumo, com rastro do trajeto e tooltip (velocidade, horário, quem reporta). Se o dado parar de chegar (pouso, tablet fechado, sem sinal de celular), o marcador some sozinho após 90 s.
 
+## Bot da missão (Telegram)
+
+Botão **Grupo da missão** no card Registro: salva o caso e o bot posta no grupo do Telegram (solicitante + médico da ambulância + médico do heli + pilotos) — tudo **determinístico**, sem IA:
+
+- **Briefing** enxuto: caso, score/recomendação, cena e **ponto de encontro com link do Maps + coordenadas DDM**, destino (com transbordo se houver) e tempos estimados;
+- **Preparação do ponto de encontro** (4 itens) com botão "✅ LZ SEGURA";
+- **Cobrança da passagem do caso** entre médicos (peso, IOT, acessos, medicações) com botão "✅ Passagem feita";
+- **Eco de cada horário** marcado no acompanhamento da missão (com autor; correções saem como "(corrigido)");
+- **Avisos de deslocamento** alimentados pelo rastreamento: a cada 5 min em voo ("X km do encontro, ETE ~Y min") e um único alerta de **~2 min** ("LZ pronta e isolada?");
+- **Encerramento** com a cronologia completa quando o comandante marca "Aeronave liberada".
+
+Setup: criar o bot no @BotFather, definir `TELEGRAM_BOT_TOKEN` e `BOT_LINK_CODE` no `.env.production` do servidor (PM2), adicionar o bot ao grupo e enviar `/vincular <código>`. Sem token, o servidor roda em **dry-run** (mensagens só no log). Comando `/caso` no grupo repete o briefing da missão ativa.
+
 ## Pontos de pouso da comunidade
 
 Usuários logados podem sugerir locais onde a equipe já pousou (campo de futebol, praça, pátio de prefeitura…) pelo botão **Comunidade** no mapa: clica-se no local (coordenadas ajustáveis à mão no formulário) e a sugestão aparece para todos como um **H âmbar tracejado** — deixando claro que foi adicionada por usuário e ainda não validada. Quando um **admin valida**, o ponto assume a cor padrão da base, passa a integrar o ranking de **áreas de pouso** perto da ocorrência (badge "Validada — pouso de rotina") e leva junto a observação operacional de quem sugeriu. Pontos rejeitados saem do mapa (o autor e o admin ainda os veem na lista). Não são helipontos homologados: reconhecimento visual pelo piloto continua obrigatório.
