@@ -6,7 +6,7 @@ import {
   cookieOptions, authMiddleware, requireAuth, requireAdmin,
   COOKIE_NAME, startSessionGC,
 } from './auth.js'
-import { startBot, notifyMission, postMilestones } from './telegram.js'
+import { startBot, notifyMission, postMilestones, MILESTONES } from './telegram.js'
 
 const app = express()
 app.set('trust proxy', 1) // atrás do nginx/Cloudflare
@@ -199,6 +199,44 @@ app.delete('/api/cases/:id', requireAuth, async (req, res) => {
 })
 
 // ---------- bot da missão ----------
+// marco do acompanhamento marcado/ajustado no app: grava direto no snapshot
+// do servidor e ecoa no grupo NA HORA — sem depender do "Atualizar caso"
+const MILESTONE_IDS = new Set(MILESTONES.map((m) => m.id))
+app.post('/api/cases/:id/events', requireAuth, async (req, res) => {
+  const { event, ts } = req.body || {}
+  const t = Number(ts)
+  if (!MILESTONE_IDS.has(event)) return res.status(400).json({ error: 'marco inválido' })
+  if (!Number.isFinite(t) || t <= 0) return res.status(400).json({ error: 'horário inválido' })
+  try {
+    const prev = await query(
+      `SELECT case_ref, snapshot->'events'->>$2 AS old_ts FROM cases WHERE id = $1`,
+      [req.params.id, event]
+    )
+    if (!prev.rows[0]) return res.status(404).json({ error: 'caso não encontrado' })
+    const old = prev.rows[0].old_ts != null ? Number(prev.rows[0].old_ts) : null
+    if (old === t) return res.json({ ok: true, unchanged: true })
+    await query(
+      `UPDATE cases SET
+         snapshot = jsonb_set(
+           jsonb_set(snapshot, '{events}', coalesce(snapshot->'events', '{}'::jsonb), true),
+           ARRAY['events', $2::text], to_jsonb($3::bigint), true),
+         updated_at = now(), updated_by = $4
+       WHERE id = $1`,
+      [req.params.id, event, t, req.user.id]
+    )
+    await query(
+      'INSERT INTO case_audit (case_id, user_id, action, case_ref) VALUES ($1,$2,$3,$4)',
+      [req.params.id, req.user.id, 'update', prev.rows[0].case_ref]
+    )
+    res.json({ ok: true })
+    postMilestones(req.params.id, [{ id: event, ts: t, edited: old != null }], req.user.full_name || req.user.username)
+      .catch((e) => console.error('bot milestone:', e.message))
+  } catch (e) {
+    console.error('save event:', e)
+    res.status(500).json({ error: 'erro ao registrar horário' })
+  }
+})
+
 // aciona o grupo: briefing + preparação do encontro + cobrança da passagem
 app.post('/api/cases/:id/notify', requireAuth, async (req, res) => {
   const { rows } = await query('SELECT id, snapshot FROM cases WHERE id = $1', [req.params.id])

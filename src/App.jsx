@@ -402,13 +402,29 @@ export default function App({ user, onLogout }) {
     }
   }
 
-  const markEvent = (id) => setEvents((p) => ({ ...p, [id]: Date.now() }))
+  // horário marcado/ajustado vai direto ao servidor (e ao grupo, se a missão
+  // foi acionada) — sem esperar o "Atualizar caso". Debounce: o input de hora
+  // dispara onChange a cada tecla e mandaria "(corrigido)" repetido ao grupo.
+  const evtTimersRef = useRef({})
+  const pushEvent = (id, ts) => {
+    if (dbId == null) return // caso ainda não salvo: fica só local, como antes
+    clearTimeout(evtTimersRef.current[id])
+    evtTimersRef.current[id] = setTimeout(() => {
+      api.saveEvent(dbId, id, ts).catch(() => {}) // melhor esforço; snapshot completo vai no próximo salvar
+    }, 1200)
+  }
+  const markEvent = (id) => {
+    const ts = Date.now()
+    setEvents((p) => ({ ...p, [id]: ts }))
+    pushEvent(id, ts)
+  }
   const editEvent = (id, hhmm) => {
     if (!hhmm) return // campo limpo durante a edição — mantém o horário anterior
     const [h, m] = hhmm.split(':').map(Number)
     if (!Number.isFinite(h) || !Number.isFinite(m)) return
     const d = new Date(); d.setHours(h, m, 0, 0)
     setEvents((p) => ({ ...p, [id]: d.getTime() }))
+    pushEvent(id, d.getTime())
   }
 
   const destinoLabel = () => {
@@ -785,6 +801,15 @@ export default function App({ user, onLogout }) {
             <div className="card">
               <h2><IconRoute size={14} /> Acompanhamento da missão</h2>
               <Tracking events={events} onMark={markEvent} onEdit={editEvent} mission={mission} />
+              {dbId == null ? (
+                <div className="small" style={{ marginTop: 8 }}>
+                  Para o bot avisar os horários no grupo: <b>salve o caso</b> e clique <b>Grupo da missão</b> no Registro.
+                </div>
+              ) : (
+                <div className="small" style={{ marginTop: 8 }}>
+                  Horários marcados aqui são gravados no servidor na hora — e avisados no grupo se a missão foi acionada.
+                </div>
+              )}
             </div>
           )}
 
