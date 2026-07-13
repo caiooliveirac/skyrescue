@@ -8,6 +8,7 @@ import { computeMission, autoChecks, daylightCheck, rangeCheck, combinedWeatherS
 import { computeScore, recommendation, evaluateGates, ITEM_BY_ID } from './lib/score.js'
 import { rankLZ, parseObstacles } from './lib/lz.js'
 import MapView from './components/MapView.jsx'
+import CommunityModal from './components/Community.jsx'
 import Checklist from './components/Checklist.jsx'
 import Tracking, { MILESTONES } from './components/Tracking.jsx'
 import ConfigModal from './components/ConfigModal.jsx'
@@ -15,7 +16,7 @@ import { DecisionStrip, TimePanel, WeatherPanel, LZPanel, AlertsPanel, GatesPane
 import {
   IconHeli, IconPlus, IconFolder, IconPrint, IconSettings, IconSearch, IconPin,
   IconTarget, IconZap, IconCopy, IconSave, IconDownload, IconHelipadH,
-  IconClock, IconCloud, IconAlert, IconRoute, IconX,
+  IconClock, IconCloud, IconAlert, IconRoute, IconX, IconUsers,
 } from './components/Icons.jsx'
 
 export default function App({ user, onLogout }) {
@@ -82,7 +83,18 @@ export default function App({ user, onLogout }) {
     try { const { cases } = await api.listCases(); setCases(cases); setCasesErr('') }
     catch (e) { setCasesErr(e.message || 'falha ao carregar casos') }
   }
-  useEffect(() => { refreshCases() }, [])
+
+  // pontos de pouso sugeridos pela comunidade (pendentes + validados)
+  const [communityLz, setCommunityLz] = useState([])
+  const [showComm, setShowComm] = useState(false)
+  const [commDraft, setCommDraft] = useState(null) // {lat, lon} clicado no mapa
+  const communityRef = useRef([]) // leitura na busca de LZ sem refazer o Overpass a cada refresh
+  communityRef.current = communityLz
+  const refreshCommunity = async () => {
+    try { const { points } = await api.listCommunityLz(); setCommunityLz(points) }
+    catch (e) { /* camada opcional — segue sem ela */ }
+  }
+  useEffect(() => { refreshCases(); refreshCommunity() }, [])
 
   const seqRef = useRef(0)
   const routeSeqRef = useRef(0)
@@ -132,6 +144,12 @@ export default function App({ user, onLogout }) {
       .catch((e) => seq === seqRef.current && setWxErr(e.message || String(e)))
     fetchMetar().then((m) => seq === seqRef.current && setMetar(m))
 
+    // pontos validados da comunidade perto da cena entram no ranking de LZ
+    // (mesmo raio ampliado dos helipontos: são pousos de rotina da equipe)
+    const commNear = communityRef.current.filter(
+      (p) => p.status === 'aprovado' && haversineKm(scene, p) * 1000 <= heliRadius(cfg.ops.lzRadiusM)
+    )
+
     ;(async () => {
       try {
         const [lzEls, obEls] = await Promise.all([
@@ -141,13 +159,13 @@ export default function App({ user, onLogout }) {
         if (seq !== seqRef.current) return
         const obs = parseObstacles(obEls)
         setObstacles(obs)
-        setLzList(rankLZ(lzEls, scene, obs, { catalog: catalogNear(scene, heliRadius(cfg.ops.lzRadiusM)) }))
+        setLzList(rankLZ(lzEls, scene, obs, { catalog: catalogNear(scene, heliRadius(cfg.ops.lzRadiusM)), community: commNear }))
       } catch (e) {
         if (seq === seqRef.current) {
           setLzErr(e.message || String(e))
-          // OSM fora do ar não apaga os helipontos conhecidos do catálogo
+          // OSM fora do ar não apaga os pontos conhecidos (catálogo + comunidade)
           const cat = catalogNear(scene, heliRadius(cfg.ops.lzRadiusM))
-          if (cat.length) setLzList(rankLZ([], scene, null, { catalog: cat }))
+          if (cat.length || commNear.length) setLzList(rankLZ([], scene, null, { catalog: cat, community: commNear }))
         }
       } finally {
         if (seq === seqRef.current) setLzLoading(false)
@@ -331,7 +349,12 @@ export default function App({ user, onLogout }) {
   }
 
   const onMapClick = async (lat, lon, mode) => {
-    if (mode === 'lz') {
+    if (mode === 'suggest') {
+      // clique só dá o ponto de partida — as coordenadas seguem editáveis no formulário
+      setCommDraft({ lat, lon })
+      setShowComm(true)
+      setMapMode('scene')
+    } else if (mode === 'lz') {
       setManualLz({ lat, lon })
       setLzSelId(null)
       setMapMode('scene')
@@ -586,12 +609,16 @@ export default function App({ user, onLogout }) {
               <button className={mapMode === 'scene' ? 'on' : ''} onClick={() => setMapMode('scene')}><IconPin size={13} /> Ocorrência</button>
               <button className={mapMode === 'lz' ? 'on' : ''} onClick={() => setMapMode(mapMode === 'lz' ? 'scene' : 'lz')}><IconTarget size={13} /> Marcar LZ</button>
               <button className={showObs ? 'on' : ''} onClick={() => setShowObs(!showObs)}><IconZap size={13} /> Obstáculos</button>
-              <button className={showPads ? 'on' : ''} onClick={() => setShowPads(!showPads)} title="Helipontos registrados ANAC/CIAD"><IconHelipadH size={13} /> Helipontos</button>
+              <button className={showPads ? 'on' : ''} onClick={() => setShowPads(!showPads)} title="Helipontos registrados ANAC/CIAD e pontos da comunidade"><IconHelipadH size={13} /> Helipontos</button>
+              <button className={mapMode === 'suggest' ? 'on' : ''} onClick={() => setShowComm(true)} title="Pontos de pouso sugeridos pela comunidade">
+                <IconUsers size={13} /> {mapMode === 'suggest' ? 'Clique no local do pouso…' : 'Comunidade'}
+              </button>
             </div>
             <MapView
               cfg={cfg} scene={scene} hospitalId={hospitalId} landingHelipad={landingHelipad}
               lz={lzList} lzSelId={lzSelId} manualLz={manualLz}
               obstacles={obstacles} route={route} mode={mapMode} showObs={showObs} showPads={showPads}
+              communityLz={communityLz}
               focus={focus}
               baseLayer={baseLayer} googleKey={cfg.map?.googleKey || ''}
               onMapClick={onMapClick}
@@ -736,6 +763,19 @@ export default function App({ user, onLogout }) {
       </div>
 
       {showCfg && <ConfigModal cfg={cfg} onClose={() => setShowCfg(false)} onSave={(c) => { setCfg(c); saveCfg(c); setShowCfg(false) }} />}
+
+      {showComm && (
+        <CommunityModal
+          user={user}
+          points={communityLz}
+          draft={commDraft}
+          onDraftDone={() => setCommDraft(null)}
+          onClose={() => { setShowComm(false); setCommDraft(null) }}
+          onPickOnMap={() => { setShowComm(false); setMapMode('suggest') }}
+          refresh={refreshCommunity}
+          onFocus={(p) => { setShowComm(false); setFocus({ lat: p.lat, lon: p.lon, ts: Date.now() }) }}
+        />
+      )}
 
       {showCases && (
         <div className="modal-bg" onClick={() => setShowCases(false)}>

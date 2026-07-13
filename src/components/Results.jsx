@@ -179,6 +179,7 @@ const SUIT_BADGE = {
   boa: ['ok', 'Boa — ampla'],
   avaliar: ['warn', 'Avaliar dimensões'],
   restrita: ['fail', 'Restrita'],
+  valid: ['ok', 'Validada — pouso de rotina'],
 }
 
 export function LZPanel({ lz, lzErr, lzLoading, lzSelId, manualLz, onSelect, onFocus, onClearManual, onRetry, mode, setMode }) {
@@ -250,6 +251,8 @@ export function LZPanel({ lz, lzErr, lzLoading, lzSelId, manualLz, onSelect, onF
                 {c.bairro ? ` · ${c.bairro}` : ''}
                 {c.surface ? ` · piso: ${c.surface}` : ''}{c.lit ? ' · iluminada' : ''}
                 {c.catalog ? ' · registro ANAC — coordenar uso com o operador' : ''}
+                {c.community ? ' · ponto validado pela comunidade' : ''}
+                {c.commNote ? ` · “${c.commNote}”` : ''}
               </div>
               <div onClick={(e) => e.stopPropagation()}>
                 <CoordReadout point={c} />
@@ -265,7 +268,7 @@ export function LZPanel({ lz, lzErr, lzLoading, lzSelId, manualLz, onSelect, onF
         )
       })}
       <div className="small" style={{ marginTop: 8 }}>
-        Sugestões do OpenStreetMap + catálogo ANAC/CIAD — <b>reconhecimento visual pelo piloto é obrigatório</b> (fios, postes, pessoas, inclinação, obstáculos não mapeados). Em praias, avaliar maré, banhistas e consistência da areia.
+        Sugestões do OpenStreetMap + catálogo ANAC/CIAD + pontos validados da comunidade — <b>reconhecimento visual pelo piloto é obrigatório</b> (fios, postes, pessoas, inclinação, obstáculos não mapeados). Em praias, avaliar maré, banhistas e consistência da areia.
       </div>
     </div>
   )

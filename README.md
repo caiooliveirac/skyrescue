@@ -36,6 +36,10 @@ npm run build    # gera dist/index.html (arquivo único, servido pelo nginx)
 - **Rede privada que empresta heliponto** (mediante coordenação prévia): Hospital Aliança e Hospital Cardio Pulmonar — disponíveis no seletor "Heliponto de desembarque".
 - Hospitais sem heliponto e sem apoio associado: pouso em LZ próxima + transbordo (tempo configurável).
 
+## Pontos de pouso da comunidade
+
+Usuários logados podem sugerir locais onde a equipe já pousou (campo de futebol, praça, pátio de prefeitura…) pelo botão **Comunidade** no mapa: clica-se no local (coordenadas ajustáveis à mão no formulário) e a sugestão aparece para todos como um **H âmbar tracejado** — deixando claro que foi adicionada por usuário e ainda não validada. Quando um **admin valida**, o ponto assume a cor padrão da base, passa a integrar o ranking de **áreas de pouso** perto da ocorrência (badge "Validada — pouso de rotina") e leva junto a observação operacional de quem sugeriu. Pontos rejeitados saem do mapa (o autor e o admin ainda os veem na lista). Não são helipontos homologados: reconhecimento visual pelo piloto continua obrigatório.
+
 ## Primeiro uso — calibrar (5 min)
 
 1. Arraste o marcador do helicóptero no mapa até a posição exata da base do GOA.

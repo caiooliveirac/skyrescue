@@ -56,6 +56,27 @@ CREATE INDEX IF NOT EXISTS cases_created_by_idx ON cases (created_by);
 CREATE INDEX IF NOT EXISTS cases_created_at_idx ON cases (created_at DESC);
 CREATE INDEX IF NOT EXISTS cases_ref_idx        ON cases (case_ref);
 
+-- ---------- pontos de pouso sugeridos pela comunidade ----------
+-- Usuário logado sugere um local onde a equipe já pousou (campo de futebol,
+-- frente de prefeitura…). Nasce 'pendente' (marcador âmbar no mapa) e só
+-- entra na base com a cor padrão quando um admin valida ('aprovado').
+CREATE TABLE IF NOT EXISTS community_lz (
+  id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  name        TEXT NOT NULL,
+  description TEXT,                        -- observação operacional (acesso, obstáculos, histórico de pousos)
+  municipio   TEXT,
+  lat         DOUBLE PRECISION NOT NULL,
+  lon         DOUBLE PRECISION NOT NULL,
+  status      TEXT NOT NULL DEFAULT 'pendente'
+              CHECK (status IN ('pendente', 'aprovado', 'rejeitado')),
+  created_by  BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  reviewed_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  reviewed_at TIMESTAMPTZ,
+  review_note TEXT
+);
+CREATE INDEX IF NOT EXISTS community_lz_status_idx ON community_lz (status);
+
 -- ---------- trilha de auditoria dos casos ----------
 CREATE TABLE IF NOT EXISTS case_audit (
   id       BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

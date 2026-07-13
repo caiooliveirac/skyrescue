@@ -184,6 +184,91 @@ app.delete('/api/cases/:id', requireAuth, async (req, res) => {
   res.json({ ok: true })
 })
 
+// ---------- pontos de pouso da comunidade ----------
+// qualquer usuário logado sugere; admin valida ('aprovado') ou rejeita.
+// rejeitados só aparecem para o admin e para o próprio autor.
+app.get('/api/community-lz', requireAuth, async (req, res) => {
+  const { rows } = await query(
+    `SELECT z.id, z.name, z.description, z.municipio, z.lat, z.lon, z.status,
+            z.created_at, z.created_by, z.reviewed_at, z.review_note,
+            cu.username AS created_by_username, cu.full_name AS created_by_name,
+            ru.username AS reviewed_by_username, ru.full_name AS reviewed_by_name
+       FROM community_lz z
+       LEFT JOIN users cu ON cu.id = z.created_by
+       LEFT JOIN users ru ON ru.id = z.reviewed_by
+      WHERE z.status <> 'rejeitado' OR z.created_by = $1 OR $2
+      ORDER BY (z.status = 'pendente') DESC, z.created_at DESC`,
+    [req.user.id, req.user.role === 'admin']
+  )
+  res.json({ points: rows })
+})
+
+app.post('/api/community-lz', requireAuth, async (req, res) => {
+  const { name, lat, lon, municipio, description } = req.body || {}
+  const la = Number(lat), lo = Number(lon)
+  if (!name || !String(name).trim()) return res.status(400).json({ error: 'nome do local é obrigatório' })
+  if (!Number.isFinite(la) || !Number.isFinite(lo) || Math.abs(la) > 90 || Math.abs(lo) > 180)
+    return res.status(400).json({ error: 'coordenadas inválidas' })
+  try {
+    const { rows } = await query(
+      `INSERT INTO community_lz (name, description, municipio, lat, lon, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING id, created_at`,
+      [String(name).trim().slice(0, 120), description ? String(description).slice(0, 500) : null,
+       municipio ? String(municipio).trim().slice(0, 80) : null, la, lo, req.user.id]
+    )
+    res.status(201).json({ id: rows[0].id, created_at: rows[0].created_at })
+  } catch (e) {
+    console.error('create community-lz:', e)
+    res.status(500).json({ error: 'erro ao registrar sugestão' })
+  }
+})
+
+// validação/rejeição e ajuste fino (nome/coordenadas) — só admin
+app.patch('/api/community-lz/:id', requireAdmin, async (req, res) => {
+  const { status, review_note, name, description, municipio, lat, lon } = req.body || {}
+  const sets = [], vals = []
+  const add = (col, v) => { vals.push(v); sets.push(`${col} = $${vals.length}`) }
+  if (status !== undefined) {
+    if (!['pendente', 'aprovado', 'rejeitado'].includes(status))
+      return res.status(400).json({ error: 'status inválido' })
+    add('status', status)
+    add('reviewed_by', req.user.id)
+    sets.push('reviewed_at = now()')
+  }
+  if (review_note !== undefined) add('review_note', review_note ? String(review_note).slice(0, 500) : null)
+  if (name !== undefined) {
+    if (!String(name).trim()) return res.status(400).json({ error: 'nome do local é obrigatório' })
+    add('name', String(name).trim().slice(0, 120))
+  }
+  if (description !== undefined) add('description', description ? String(description).slice(0, 500) : null)
+  if (municipio !== undefined) add('municipio', municipio ? String(municipio).trim().slice(0, 80) : null)
+  if (lat !== undefined || lon !== undefined) {
+    const la = Number(lat), lo = Number(lon)
+    if (!Number.isFinite(la) || !Number.isFinite(lo) || Math.abs(la) > 90 || Math.abs(lo) > 180)
+      return res.status(400).json({ error: 'coordenadas inválidas' })
+    add('lat', la); add('lon', lo)
+  }
+  if (!sets.length) return res.status(400).json({ error: 'nada para atualizar' })
+  vals.push(req.params.id)
+  const { rows } = await query(
+    `UPDATE community_lz SET ${sets.join(', ')} WHERE id = $${vals.length}
+     RETURNING id, status`, vals
+  )
+  if (!rows[0]) return res.status(404).json({ error: 'ponto não encontrado' })
+  res.json({ point: rows[0] })
+})
+
+// autor exclui a própria sugestão enquanto pendente; admin exclui qualquer uma
+app.delete('/api/community-lz/:id', requireAuth, async (req, res) => {
+  const { rows } = await query('SELECT created_by, status FROM community_lz WHERE id = $1', [req.params.id])
+  if (!rows[0]) return res.status(404).json({ error: 'ponto não encontrado' })
+  const own = rows[0].created_by === req.user.id
+  if (req.user.role !== 'admin' && !(own && rows[0].status === 'pendente'))
+    return res.status(403).json({ error: 'apenas o admin (ou o autor, enquanto pendente) pode excluir' })
+  await query('DELETE FROM community_lz WHERE id = $1', [req.params.id])
+  res.json({ ok: true })
+})
+
 // ---------- admin de usuários ----------
 app.get('/api/users', requireAdmin, async (_req, res) => {
   const { rows } = await query(

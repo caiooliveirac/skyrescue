@@ -174,6 +174,14 @@ export const IconX = (p) => (
   </S>
 )
 
+export const IconUsers = (p) => (
+  <S {...p}>
+    <circle cx="9" cy="8" r="3.2" />
+    <path d="M3.5 19.5c.5-3.5 2.8-5.5 5.5-5.5s5 2 5.5 5.5" />
+    <path d="M15.5 5.6a3.2 3.2 0 0 1 0 4.8M17.5 14.3c1.6.8 2.7 2.6 3 5.2" />
+  </S>
+)
+
 // ---- tipos de área de pouso ----
 export const IconFieldSoccer = (p) => (
   <S {...p}>
@@ -230,6 +238,7 @@ export const IconSport = (p) => (
 
 export const LZ_TYPE_ICON = {
   'Heliponto': IconHelipadH,
+  'Ponto da comunidade': IconUsers,
   'Estádio': IconStadium,
   'Campo/quadra': IconFieldSoccer,
   'Área esportiva': IconSport,

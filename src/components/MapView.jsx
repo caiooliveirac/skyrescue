@@ -34,6 +34,10 @@ const helipadIcon = (landing) =>
 // infraestrutura registrada, não um ponto já coordenado da missão
 const anacIcon = () =>
   L.divIcon({ className: 'mk', html: '<div class="mk-anac">H</div>', iconSize: [20, 20], iconAnchor: [10, 10] })
+// ponto de pouso da comunidade: pendente = círculo-H âmbar tracejado
+// (sugestão de usuário, aguarda admin); aprovado = cor padrão da base
+const commIcon = (approved) =>
+  L.divIcon({ className: 'mk', html: `<div class="mk-comm${approved ? ' ok' : ''}">H</div>`, iconSize: [20, 20], iconAnchor: [10, 10] })
 const sceneIcon = () =>
   L.divIcon({ className: 'mk', html: '<div class="mk-scene"><span class="ring"></span><span class="core"></span></div>', iconSize: [34, 34], iconAnchor: [17, 17] })
 const lzIcon = (letter, suitKey, sel, isHeli) =>
@@ -48,7 +52,7 @@ const lzIcon = (letter, suitKey, sel, isHeli) =>
 
 export default function MapView({
   cfg, scene, hospitalId, landingHelipad, lz, lzSelId, manualLz, obstacles, route,
-  mode, showObs, showPads = true, focus, baseLayer = 'dark', googleKey = '',
+  mode, showObs, showPads = true, communityLz, focus, baseLayer = 'dark', googleKey = '',
   onMapClick,
 }) {
   const divRef = useRef(null)
@@ -196,6 +200,25 @@ export default function MapView({
       }
     }
 
+    // pontos de pouso da comunidade: pendentes em âmbar (sugestão de
+    // usuário); aprovados na cor padrão — integram a base de pontos.
+    // Omite os aprovados que já viraram candidato com letra na cena atual.
+    if (showPads) {
+      for (const p of communityLz || []) {
+        if (p.status === 'rejeitado') continue
+        if (scene && (lz || []).some((c) => c.id === `com/${p.id}`)) continue
+        const pend = p.status === 'pendente'
+        const author = p.created_by_name || p.created_by_username
+        L.marker([p.lat, p.lon], { icon: commIcon(!pend), zIndexOffset: pend ? 45 : 42 })
+          .bindTooltip(
+            `${p.name}${p.municipio ? ' · ' + p.municipio : ''} — ` +
+            (pend ? 'sugestão da comunidade, aguardando validação' : 'ponto validado pela comunidade') +
+            (author ? ` · por ${author}` : '')
+          )
+          .addTo(lay)
+      }
+    }
+
     // cena
     if (scene) {
       L.marker([scene.lat, scene.lon], { icon: sceneIcon(), zIndexOffset: 600 }).bindTooltip('Ocorrência').addTo(lay)
@@ -277,7 +300,7 @@ export default function MapView({
         m.fitBounds(b.pad(0.18))
       }
     }
-  }, [cfg, scene, hospitalId, landingHelipad, lz, lzSelId, manualLz, obstacles, route, showObs, showPads])
+  }, [cfg, scene, hospitalId, landingHelipad, lz, lzSelId, manualLz, obstacles, route, showObs, showPads, communityLz])
 
   return (
     <>
@@ -290,6 +313,7 @@ export default function MapView({
         <span><b className="lg-hosp noheli" /> hospital s/ heliponto</span>
         <span><b className="lg-pad apoio">H</b> heliponto de apoio</span>
         <span><b className="lg-pad anac">H</b> heliponto ANAC</span>
+        <span><b className="lg-pad comm">H</b> sugestão da comunidade (a validar)</span>
       </div>
     </>
   )

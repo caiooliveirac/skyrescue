@@ -15,6 +15,7 @@ const TYPE_INFO = [
 export const LZ_FILTERS = [
   { key: 'all', label: 'Todas' },
   { key: 'heli', label: 'Helipontos' },
+  { key: 'comu', label: 'Comunidade' },
   { key: 'campo', label: 'Campos e estádios' },
   { key: 'verde', label: 'Gramados' },
   { key: 'praia', label: 'Praias' },
@@ -76,6 +77,29 @@ export function rankLZ(elements, scene, obstacles, opts = {}) {
     seen.add(`${h.lat.toFixed(5)}|${h.lon.toFixed(5)}`)
   }
 
+  // pontos validados da comunidade (campos/praças de uso rotineiro da equipe);
+  // sugestões pendentes NÃO entram no ranking — só aparecem no mapa
+  const commPts = []
+  for (const p of opts.community || []) {
+    const key = `${p.lat.toFixed(5)}|${p.lon.toFixed(5)}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    const distM = Math.round(haversineKm(scene, p) * 1000)
+    const { obstM, obstWhat } = nearestObstacle(p.lat, p.lon, obstacles)
+    const obstFlag = obstM < 150
+    out.push({
+      id: `com/${p.id}`, name: p.name, type: 'Ponto da comunidade', typeKey: 'comu', emoji: '📍',
+      lat: p.lat, lon: p.lon, bairro: p.municipio || null,
+      dims: null, minDim: null, distM, obstFlag,
+      obstNear: isFinite(obstM) ? Math.round(obstM) : null, obstWhat,
+      suit: 'Validada — pouso de rotina', suitKey: 'valid',
+      sortKey: 0.6 + distM / 800 + (obstFlag ? 1.5 : 0),
+      bounds: null, lit: false, surface: null,
+      community: true, commNote: p.description || null,
+    })
+    commPts.push(p)
+  }
+
   for (const el of elements || []) {
     const tags = el.tags || {}
     const info = TYPE_INFO.find((ti) => ti.match(tags))
@@ -93,6 +117,9 @@ export function rankLZ(elements, scene, obstacles, opts = {}) {
     // heliponto do OSM a <120 m de um do catálogo = mesmo heliponto;
     // fica a entrada do catálogo (tem nome oficial e código ICAO)
     if (info.typeKey === 'heli' && catalogPads.some((h) => haversineKm({ lat, lon }, h) * 1000 < 120)) continue
+    // área do OSM a <60 m de um ponto validado da comunidade = mesmo local;
+    // fica a entrada da comunidade (tem a observação operacional da equipe)
+    if (commPts.some((p) => haversineKm({ lat, lon }, p) * 1000 < 60)) continue
 
     const dims = bboxDimsM(el.bounds)
     // largura mínima real do polígono quando o OSM traz a geometria;
