@@ -5,6 +5,7 @@ import L from 'leaflet'
 import 'leaflet-rotate'
 import { haversineKm } from '../lib/geo.js'
 import { bearingDeg, destPoint, kmhToKt, kmToNm, fmtDeg, fmtDistKm, fmtEte, fmtClock } from '../lib/nav.js'
+import { api } from '../lib/backend.js'
 import { IconX, IconTarget, IconAlert } from './Icons.jsx'
 
 const CARTO_DARK = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
@@ -37,6 +38,8 @@ export default function NavMode({ cfg, scene, lzPoint, hospital, landingHelipad,
   const [layer, setLayer] = useState('dark')   // 'dark' | 'sat'
   const [sim, setSim] = useState(false)
   const simRef = useRef(null)
+  const lastTxRef = useRef(0)
+  const [txTs, setTxTs] = useState(0) // último envio de posição aceito pelo servidor
 
   // pouso no destino: heliponto do hospital, apoio associado, ou o próprio hospital (LZ)
   const landPt = hospital ? (hospital.heliponto ? hospital : landingHelipad || hospital) : null
@@ -187,6 +190,17 @@ export default function NavMode({ cfg, scene, lzPoint, hospital, landingHelipad,
     }
   }, [fix, orient, targetId]) // eslint-disable-line
 
+  // transmite a posição ao servidor (~5 s) — a regulação vê o heli no mapa
+  useEffect(() => {
+    if (!fix) return
+    const now = Date.now()
+    if (now - lastTxRef.current < 5000) return
+    lastTxRef.current = now
+    api.reportAircraft({ lat: fix.lat, lon: fix.lon, gsKmh: fix.gsKmh, track: fix.track, accM: fix.accM })
+      .then(() => setTxTs(Date.now()))
+      .catch(() => {}) // sem dados de celular em voo: tenta de novo no próximo fix
+  }, [fix])
+
   // trava o scroll da página atrás do overlay (tablet no colo balança)
   useEffect(() => {
     const prev = document.body.style.overflow
@@ -281,6 +295,7 @@ export default function NavMode({ cfg, scene, lzPoint, hospital, landingHelipad,
 
       <div className="navdisc">
         Apoio à consciência situacional — <b>não substitui</b> instrumentos, cartas aeronáuticas nem o julgamento do comandante. Rumo/dist. verdadeiros (GPS).
+        {txTs > 0 && Date.now() - txTs < 20000 && <span className="tx"> · ● transmitindo posição à regulação</span>}
       </div>
     </div>
   )

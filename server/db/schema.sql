@@ -77,6 +77,20 @@ CREATE TABLE IF NOT EXISTS community_lz (
 );
 CREATE INDEX IF NOT EXISTS community_lz_status_idx ON community_lz (status);
 
+-- ---------- posição da aeronave (rastreamento ao vivo) ----------
+-- O modo navegação do piloto reporta a posição a cada ~5 s; a regulação
+-- consulta e mostra o helicóptero no mapa. Uma linha por aeronave (upsert).
+CREATE TABLE IF NOT EXISTS aircraft_position (
+  aircraft_id TEXT PRIMARY KEY DEFAULT 'goa',
+  lat         DOUBLE PRECISION NOT NULL,
+  lon         DOUBLE PRECISION NOT NULL,
+  gs_kmh      REAL,                       -- groundspeed
+  track       REAL,                       -- rumo verdadeiro (graus)
+  acc_m       REAL,                       -- precisão do fix
+  reported_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  reported_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- ---------- trilha de auditoria dos casos ----------
 CREATE TABLE IF NOT EXISTS case_audit (
   id       BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

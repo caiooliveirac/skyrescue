@@ -269,6 +269,42 @@ app.delete('/api/community-lz/:id', requireAuth, async (req, res) => {
   res.json({ ok: true })
 })
 
+// ---------- rastreamento da aeronave ----------
+// o modo navegação do piloto reporta; qualquer autenticado consulta.
+app.post('/api/aircraft/position', requireAuth, async (req, res) => {
+  const { lat, lon, gsKmh, track, accM } = req.body || {}
+  const la = Number(lat), lo = Number(lon)
+  if (!Number.isFinite(la) || !Number.isFinite(lo) || Math.abs(la) > 90 || Math.abs(lo) > 180)
+    return res.status(400).json({ error: 'coordenadas inválidas' })
+  const num = (v) => (v == null || !Number.isFinite(Number(v)) ? null : Number(v))
+  try {
+    await query(
+      `INSERT INTO aircraft_position (aircraft_id, lat, lon, gs_kmh, track, acc_m, reported_by, reported_at)
+       VALUES ('goa', $1, $2, $3, $4, $5, $6, now())
+       ON CONFLICT (aircraft_id) DO UPDATE SET
+         lat = EXCLUDED.lat, lon = EXCLUDED.lon, gs_kmh = EXCLUDED.gs_kmh,
+         track = EXCLUDED.track, acc_m = EXCLUDED.acc_m,
+         reported_by = EXCLUDED.reported_by, reported_at = now()`,
+      [la, lo, num(gsKmh), num(track), num(accM), req.user.id]
+    )
+    res.json({ ok: true })
+  } catch (e) {
+    console.error('report aircraft:', e)
+    res.status(500).json({ error: 'erro ao registrar posição' })
+  }
+})
+
+app.get('/api/aircraft/position', requireAuth, async (_req, res) => {
+  const { rows } = await query(
+    `SELECT a.lat, a.lon, a.gs_kmh, a.track, a.acc_m, a.reported_at,
+            u.username AS reported_by_username, u.full_name AS reported_by_name
+       FROM aircraft_position a
+       LEFT JOIN users u ON u.id = a.reported_by
+      WHERE a.aircraft_id = 'goa'`
+  )
+  res.json({ position: rows[0] || null })
+})
+
 // ---------- admin de usuários ----------
 app.get('/api/users', requireAdmin, async (_req, res) => {
   const { rows } = await query(

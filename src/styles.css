@@ -712,6 +712,10 @@ input[type="checkbox"] { accent-color: #22d3ee; width: 16px; height: 16px; }
 }
 
 .nav-own { width: 30px; height: 30px; filter: drop-shadow(0 1px 6px rgba(34, 211, 238, 0.6)); transition: transform .4s linear; }
+.navdisc .tx { color: var(--accent); }
+/* aeronave ao vivo no mapa da regulação */
+.mk-acft { width: 26px; height: 26px; filter: drop-shadow(0 1px 6px rgba(34, 211, 238, 0.6)); transition: transform .5s linear; }
+.maplegend .lg-acft { color: var(--accent); font-size: 11px; font-style: normal; }
 .nav-wpt {
   padding: 2px 7px; border-radius: 7px;
   font-size: 10px; font-weight: 800; letter-spacing: 0.04em; text-align: center;

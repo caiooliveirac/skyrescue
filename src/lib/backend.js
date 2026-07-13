@@ -38,6 +38,9 @@ export const api = {
   createCommunityLz: (p) => req('POST', '/community-lz', p),
   updateCommunityLz: (id, patch) => req('PATCH', `/community-lz/${id}`, patch),
   deleteCommunityLz: (id) => req('DELETE', `/community-lz/${id}`),
+  // rastreamento da aeronave
+  reportAircraft: (p) => req('POST', '/aircraft/position', p),
+  getAircraft: () => req('GET', '/aircraft/position'),
   // admin
   listUsers: () => req('GET', '/users'),
   createUser: (u) => req('POST', '/users', u),

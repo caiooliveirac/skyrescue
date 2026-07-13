@@ -98,6 +98,35 @@ export default function App({ user, onLogout }) {
   }
   useEffect(() => { refreshCases(); refreshCommunity() }, [])
 
+  // rastreamento da aeronave: o modo navegação do piloto reporta a posição;
+  // aqui a regulação consulta a cada 10 s e mostra o heli no mapa enquanto
+  // o dado estiver fresco (<90 s). O rastro é acumulado no cliente.
+  const [acft, setAcft] = useState(null)
+  const acftTrailRef = useRef([])
+  useEffect(() => {
+    let alive = true
+    const tick = async () => {
+      try {
+        const { position } = await api.getAircraft()
+        if (!alive) return
+        const fresh = position && Date.now() - new Date(position.reported_at).getTime() < 90_000
+        if (fresh) {
+          const t = acftTrailRef.current
+          const last = t[t.length - 1]
+          if (!last || last[0] !== position.lat || last[1] !== position.lon) t.push([position.lat, position.lon])
+          if (t.length > 300) t.shift()
+          setAcft({ ...position, trail: [...t] })
+        } else {
+          acftTrailRef.current = []
+          setAcft(null)
+        }
+      } catch (e) { /* camada opcional */ }
+    }
+    tick()
+    const id = setInterval(tick, 10_000)
+    return () => { alive = false; clearInterval(id) }
+  }, [])
+
   const seqRef = useRef(0)
   const routeSeqRef = useRef(0)
   const revGeoRef = useRef(0)      // invalida reverse-geocode de cliques antigos
@@ -620,7 +649,7 @@ export default function App({ user, onLogout }) {
               cfg={cfg} scene={scene} hospitalId={hospitalId} landingHelipad={landingHelipad}
               lz={lzList} lzSelId={lzSelId} manualLz={manualLz}
               obstacles={obstacles} route={route} mode={mapMode} showObs={showObs} showPads={showPads}
-              communityLz={communityLz}
+              communityLz={communityLz} aircraft={acft}
               focus={focus}
               baseLayer={baseLayer} googleKey={cfg.map?.googleKey || ''}
               onMapClick={onMapClick}

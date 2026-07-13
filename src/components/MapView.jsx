@@ -38,6 +38,12 @@ const anacIcon = () =>
 // (sugestão de usuário, aguarda admin); aprovado = cor padrão da base
 const commIcon = (approved) =>
   L.divIcon({ className: 'mk', html: `<div class="mk-comm${approved ? ' ok' : ''}">H</div>`, iconSize: [20, 20], iconAnchor: [10, 10] })
+// aeronave em voo (posição reportada pelo modo navegação do piloto):
+// seta apontando o rumo, mesma linguagem visual da tela do piloto
+const acftSvg =
+  '<svg viewBox="0 0 24 24" width="26" height="26"><path d="M12 2 L19.5 21 L12 16.6 L4.5 21 Z" fill="#22d3ee" stroke="#fff" stroke-width="1.4" stroke-linejoin="round"/></svg>'
+const acftIcon = (track) =>
+  L.divIcon({ className: 'mk', html: `<div class="mk-acft" style="transform:rotate(${track ?? 0}deg)">${acftSvg}</div>`, iconSize: [26, 26], iconAnchor: [13, 13] })
 const sceneIcon = () =>
   L.divIcon({ className: 'mk', html: '<div class="mk-scene"><span class="ring"></span><span class="core"></span></div>', iconSize: [34, 34], iconAnchor: [17, 17] })
 const lzIcon = (letter, suitKey, sel, isHeli) =>
@@ -52,7 +58,7 @@ const lzIcon = (letter, suitKey, sel, isHeli) =>
 
 export default function MapView({
   cfg, scene, hospitalId, landingHelipad, lz, lzSelId, manualLz, obstacles, route,
-  mode, showObs, showPads = true, communityLz, focus, baseLayer = 'dark', googleKey = '',
+  mode, showObs, showPads = true, communityLz, aircraft, focus, baseLayer = 'dark', googleKey = '',
   onMapClick,
 }) {
   const divRef = useRef(null)
@@ -221,6 +227,17 @@ export default function MapView({
       }
     }
 
+    // aeronave em voo (rastreamento ao vivo do modo navegação)
+    if (aircraft) {
+      if (aircraft.trail?.length > 1) {
+        L.polyline(aircraft.trail, { color: '#22d3ee', weight: 2, opacity: 0.4 }).addTo(lay)
+      }
+      const gs = aircraft.gs_kmh != null ? `${Math.round(aircraft.gs_kmh)} km/h · ` : ''
+      L.marker([aircraft.lat, aircraft.lon], { icon: acftIcon(aircraft.track), zIndexOffset: 700 })
+        .bindTooltip(`GOA em voo — ${gs}atualizado ${new Date(aircraft.reported_at).toLocaleTimeString('pt-BR')}${aircraft.reported_by_name || aircraft.reported_by_username ? ' · por ' + (aircraft.reported_by_name || aircraft.reported_by_username) : ''}`)
+        .addTo(lay)
+    }
+
     // cena
     if (scene) {
       L.marker([scene.lat, scene.lon], { icon: sceneIcon(), zIndexOffset: 600 }).bindTooltip('Ocorrência').addTo(lay)
@@ -302,7 +319,7 @@ export default function MapView({
         m.fitBounds(b.pad(0.18))
       }
     }
-  }, [cfg, scene, hospitalId, landingHelipad, lz, lzSelId, manualLz, obstacles, route, showObs, showPads, communityLz])
+  }, [cfg, scene, hospitalId, landingHelipad, lz, lzSelId, manualLz, obstacles, route, showObs, showPads, communityLz, aircraft])
 
   return (
     <>
@@ -316,6 +333,7 @@ export default function MapView({
         <span><b className="lg-pad apoio">H</b> heliponto de apoio</span>
         <span><b className="lg-pad anac">H</b> heliponto ANAC</span>
         <span><b className="lg-pad comm">H</b> sugestão da comunidade (a validar)</span>
+        <span><b className="lg-acft">➤</b> GOA em voo (ao vivo)</span>
       </div>
     </>
   )
