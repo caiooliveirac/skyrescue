@@ -1,4 +1,6 @@
+import { useEffect, useRef, useState } from 'react'
 import { fmtClock } from '../lib/geo.js'
+import { IconCheck } from './Icons.jsx'
 
 export const MILESTONES = [
   { id: 'decisao', label: 'Acionamento do GOA autorizado' },
@@ -15,6 +17,44 @@ function toTimeStr(ts) {
   if (!ts) return ''
   const d = new Date(ts)
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+// Marcação rápida em um toque: um único botão mostra sempre o PRÓXIMO marco
+// da missão (a sequência é fixa) e registra com a hora do toque — pensado para
+// o piloto no modo navegação e o médico no celular, sem procurar menu nenhum.
+// Depois do toque vira uma confirmação com "desfazer" por alguns segundos.
+export function MilestoneQuick({ events, onMark, onUndo, className = '' }) {
+  const [undoInfo, setUndoInfo] = useState(null) // {id, label, ts}
+  const timerRef = useRef(null)
+  useEffect(() => () => clearTimeout(timerRef.current), [])
+
+  const next = MILESTONES.find((m) => !events[m.id])
+  if (undoInfo) {
+    return (
+      <div className={'qmark qdone ' + className}>
+        <span className="qm-ok"><IconCheck size={15} /> {undoInfo.label} · <b>{toTimeStr(undoInfo.ts)}</b></span>
+        <button onClick={() => {
+          clearTimeout(timerRef.current)
+          onUndo(undoInfo.id)
+          setUndoInfo(null)
+        }}>desfazer</button>
+      </div>
+    )
+  }
+  if (!next) return null
+  const mark = () => {
+    const ts = Date.now()
+    onMark(next.id, ts)
+    setUndoInfo({ id: next.id, label: next.label, ts })
+    clearTimeout(timerRef.current)
+    timerRef.current = setTimeout(() => setUndoInfo(null), 6000)
+  }
+  return (
+    <button className={'qmark ' + className} onClick={mark}>
+      <span className="qm-act">marcar</span>
+      <span className="qm-label">{next.label}</span>
+    </button>
+  )
 }
 
 export default function Tracking({ events, onMark, onEdit, mission }) {

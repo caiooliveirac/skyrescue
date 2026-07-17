@@ -27,7 +27,7 @@ npm run build    # gera dist/index.html (arquivo único, servido pelo nginx)
 
 ## Deploy (produção)
 
-`git push` na `main` dispara o GitHub Actions ([`.github/workflows/deploy.yml`](.github/workflows/deploy.yml)): publica o backend (`skyrescue-api` no PM2, porta 3012) e o frontend estático em `/var/www/skyrescue`, com healthcheck e auto-rollback. Detalhes de infra e criação de usuários em [`server/README.md`](server/README.md).
+`git push` na `main` dispara o GitHub Actions ([`.github/workflows/deploy.yml`](.github/workflows/deploy.yml)): publica no servidor **magalu** o backend (`skyrescue-api` via systemd, porta 3012, código em `/home/ubuntu/skyrescue/server`) e o frontend estático em `/var/www/goa`, com healthcheck e auto-rollback. Detalhes de infra e criação de usuários em [`server/README.md`](server/README.md).
 
 ## Modelo de helipontos (Salvador/RMS)
 

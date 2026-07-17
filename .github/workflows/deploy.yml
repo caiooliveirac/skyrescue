@@ -11,8 +11,10 @@ concurrency:
 
 env:
   REMOTE: ${{ secrets.PROD_SSH_USER }}@${{ secrets.PROD_SSH_HOST }}
-  WEBROOT: /var/www/skyrescue
-  API_DIR: /home/ubuntu/skyrescue-api
+  # servidor magalu: frontend em /var/www/goa (nginx), API via systemd
+  # (skyrescue-api.service) rodando de /home/ubuntu/skyrescue/server
+  WEBROOT: /var/www/goa
+  API_DIR: /home/ubuntu/skyrescue/server
 
 jobs:
   test:
@@ -84,12 +86,11 @@ jobs:
             server/ ${{ env.REMOTE }}:${{ env.API_DIR }}/
           ssh -i ~/.ssh/id_ed25519 ${{ env.REMOTE }} bash -s << 'EOF'
             set -euo pipefail
-            cd /home/ubuntu/skyrescue-api
+            cd /home/ubuntu/skyrescue/server
             npm ci --omit=dev
-            set -a; . ./.env.production; set +a
+            set -a; . ./.env; set +a
             node scripts/migrate.js          # idempotente (schema IF NOT EXISTS)
-            pm2 reload skyrescue-api --update-env
-            pm2 save
+            sudo -n systemctl restart skyrescue-api
           EOF
 
       - name: Healthcheck da API
@@ -107,15 +108,17 @@ jobs:
       - name: Backup da versão atual (rollback rápido)
         run: |
           ssh -i ~/.ssh/id_ed25519 ${{ env.REMOTE }} \
-            "cp -f ${{ env.WEBROOT }}/index.html ${{ env.WEBROOT }}/index.html.prev 2>/dev/null || true"
+            "sudo -n cp -f ${{ env.WEBROOT }}/index.html ${{ env.WEBROOT }}/index.html.prev 2>/dev/null || true"
 
       - name: Publicar
         run: |
-          # --chmod=F644: artifact pode vir com permissão restritiva e o
-          # www-data (nginx) precisa conseguir ler o arquivo
+          # WEBROOT pertence ao root: sobe para o home e instala com sudo
+          # (--chmod/install -m 644: o www-data do nginx precisa ler o arquivo)
           rsync -az --chmod=F644 \
             -e "ssh -o StrictHostKeyChecking=accept-new -i ~/.ssh/id_ed25519" \
-            dist/index.html ${{ env.REMOTE }}:${{ env.WEBROOT }}/index.html
+            dist/index.html ${{ env.REMOTE }}:/tmp/skyrescue-index.html
+          ssh -i ~/.ssh/id_ed25519 ${{ env.REMOTE }} \
+            "sudo -n install -m 644 -o root -g root /tmp/skyrescue-index.html ${{ env.WEBROOT }}/index.html && rm -f /tmp/skyrescue-index.html"
 
       - name: Healthcheck (com auto-rollback)
         run: |
@@ -129,13 +132,13 @@ jobs:
             curl -sk --resolve goa.mnrs.com.br:443:127.0.0.1 -o "$tmp" https://goa.mnrs.com.br/ || true
             grep -q "SkyRescue" "$tmp" && body_ok=1
             rm -f "$tmp"
-            perms=$(stat -c '%a %U:%G' /var/www/skyrescue/index.html)
+            perms=$(stat -c '%a %U:%G' /var/www/goa/index.html)
             echo "diagnóstico: http=$code conteúdo=$body_ok perms=$perms"
             if [ "$code" = "200" ] && [ "$body_ok" = "1" ]; then
               echo "healthcheck OK (200 + conteúdo)"
             else
               echo "ERRO: healthcheck falhou — restaurando versão anterior"
-              cp -f /var/www/skyrescue/index.html.prev /var/www/skyrescue/index.html 2>/dev/null || true
+              sudo -n cp -f /var/www/goa/index.html.prev /var/www/goa/index.html 2>/dev/null || true
               exit 1
             fi
           EOF

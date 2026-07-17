@@ -726,6 +726,42 @@ input[type="checkbox"] { accent-color: #22d3ee; width: 16px; height: 16px; }
 .nav-wpt.dest { background: #1d4ed8; }
 .nav-wpt.base { background: #0e7490; }
 
+/* ---------- marcação rápida de horários (um toque no próximo marco) ---------- */
+.qmark {
+  display: inline-flex; align-items: center; gap: 10px;
+  background: var(--grad-primary); color: #fff; border: none; cursor: pointer;
+  border-radius: 13px; padding: 13px 18px;
+  font-weight: 700; text-align: left;
+  box-shadow: 0 4px 18px rgba(34, 211, 238, 0.35);
+}
+.qmark .qm-act {
+  font-size: 10px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase;
+  opacity: 0.85; flex: none;
+}
+.qmark .qm-label { font-size: 14.5px; line-height: 1.2; }
+.qmark.qdone {
+  background: rgba(5, 9, 18, 0.92); border: 1px solid rgba(34, 211, 238, 0.55);
+  cursor: default;
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+}
+.qmark.qdone .qm-ok {
+  display: inline-flex; align-items: center; gap: 7px;
+  color: var(--accent); font-size: 13.5px;
+}
+.qmark.qdone .qm-ok b { font-family: var(--mono); }
+.qmark.qdone button {
+  background: transparent; border: 1px solid var(--line-strong); color: var(--muted);
+  border-radius: 9px; padding: 7px 12px; font-size: 12.5px; font-weight: 700; cursor: pointer;
+}
+/* no modo navegação: acima da barra de controles, canto direito (polegar) */
+.qmark.navqmark { position: absolute; z-index: 1600; bottom: 100px; right: 12px; max-width: 72vw; }
+/* na tela principal (médico no celular): fixo no rodapé, centralizado */
+.qmark.qmark-fab {
+  position: fixed; z-index: 1150; bottom: 14px; left: 50%; transform: translateX(-50%);
+  max-width: min(92vw, 440px); white-space: nowrap;
+}
+.qmark.qmark-fab .qm-label, .qmark.qmark-fab .qm-ok { overflow: hidden; text-overflow: ellipsis; }
+
 /* botão que abre o modo navegação, flutuando no mapa principal */
 .navlaunch {
   position: absolute; z-index: 900; bottom: 20px; right: 20px;

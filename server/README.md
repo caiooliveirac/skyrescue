@@ -1,6 +1,6 @@
 # skyrescue-api
 
-API de **autenticação** e **registro de casos** do SkyRescue. Node + Express + PostgreSQL, sem framework pesado. Roda no mesmo EC2 dos apps irmãos, sob PM2, atrás do nginx (`goa.mnrs.com.br` faz proxy de `/api` → `127.0.0.1:3012`).
+API de **autenticação** e **registro de casos** do SkyRescue. Node + Express + PostgreSQL, sem framework pesado. Roda no servidor **magalu** dos apps irmãos, como serviço systemd (`skyrescue-api.service`, código em `/home/ubuntu/skyrescue/server`, env em `server/.env`), atrás do nginx (`goa.mnrs.com.br` faz proxy de `/api` → `127.0.0.1:3012`).
 
 ## Arquitetura
 
@@ -8,7 +8,7 @@ API de **autenticação** e **registro de casos** do SkyRescue. Node + Express +
 - **Casos:** registro compartilhado — todo usuário autenticado vê todos os casos, cada um com autoria (`created_by`) e trilha em `case_audit`. O snapshot completo do app vai em `cases.snapshot` (jsonb); colunas promovidas (score, local, tempos…) servem à listagem/relatório.
 - **Perfis:** `admin` (gerencia usuários), `regulador`, `operador`.
 
-## Variáveis de ambiente (`.env.production`, só no servidor)
+## Variáveis de ambiente (`server/.env`, só no servidor)
 
 ```
 DATABASE_URL=postgres://skyrescue:SENHA@127.0.0.1:5432/skyrescue
@@ -17,7 +17,7 @@ SEED_ADMIN_USER=goa.samu     # usado só na 1ª migration (quando não há usuá
 SEED_ADMIN_PASS=samu@192
 ```
 
-## Banco (criado uma vez no EC2)
+## Banco (criado uma vez no servidor)
 
 ```sql
 CREATE ROLE skyrescue LOGIN PASSWORD '...';
@@ -28,10 +28,10 @@ CREATE DATABASE skyrescue OWNER skyrescue;
 
 ## Criar / gerenciar usuários
 
-Pelo CLI no servidor (`cd /home/ubuntu/skyrescue-api`):
+Pelo CLI no servidor (`cd /home/ubuntu/skyrescue/server`):
 
 ```bash
-set -a; . ./.env.production; set +a
+set -a; . ./.env; set +a
 node scripts/create-user.js joao.silva 'senhaForte' regulador "Dr. João Silva"
 ```
 
@@ -53,12 +53,12 @@ Ou pela API (autenticado como `admin`): `POST /api/users`, `GET /api/users`, `PA
 | GET/POST/PATCH | `/api/users…` | admin de usuários (perfil admin) |
 | GET | `/api/health` | status + conexão ao banco |
 
-## Operação (PM2)
+## Operação (systemd)
 
 ```bash
-pm2 status skyrescue-api
-pm2 logs skyrescue-api
-pm2 reload skyrescue-api --update-env
+sudo systemctl status skyrescue-api
+sudo journalctl -u skyrescue-api -f
+sudo systemctl restart skyrescue-api
 ```
 
-O deploy é automático via GitHub Actions (`.github/workflows/deploy.yml`): rsync do `server/`, `npm ci`, `migrate`, `pm2 reload` e healthcheck de `/api/health`. O `.env.production` e o `node_modules/` ficam apenas no servidor (não são versionados nem sobrescritos).
+O deploy é automático via GitHub Actions (`.github/workflows/deploy.yml`): rsync do `server/`, `npm ci`, `migrate`, `systemctl restart` e healthcheck de `/api/health`. O `server/.env` e o `node_modules/` ficam apenas no servidor (não são versionados nem sobrescritos).

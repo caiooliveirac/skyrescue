@@ -7,6 +7,7 @@ import { haversineKm } from '../lib/geo.js'
 import { bearingDeg, destPoint, kmhToKt, kmToNm, fmtDeg, fmtDistKm, fmtEte, fmtClock } from '../lib/nav.js'
 import { api } from '../lib/backend.js'
 import { IconX, IconTarget, IconAlert } from './Icons.jsx'
+import { MilestoneQuick } from './Tracking.jsx'
 
 const CARTO_DARK = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
 const ESRI_IMAGERY = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
@@ -17,7 +18,7 @@ const ownshipSvg =
 
 const wptHtml = (cls, label) => `<div class="nav-wpt ${cls}">${label}</div>`
 
-export default function NavMode({ cfg, scene, lzPoint, hospital, landingHelipad, onClose }) {
+export default function NavMode({ cfg, scene, lzPoint, hospital, landingHelipad, events, onQuickMark, onUndoMark, onClose }) {
   const divRef = useRef(null)
   const mapRef = useRef(null)
   const tileRef = useRef(null)
@@ -268,6 +269,11 @@ export default function NavMode({ cfg, scene, lzPoint, hospital, landingHelipad,
       )}
       {fix && !gpsErr && fix.accM > 80 && !stale && (
         <div className="navgps warn"><IconAlert size={14} /> precisão baixa: ±{fix.accM} m</div>
+      )}
+
+      {/* marcação rápida dos horários da missão: um toque no próximo marco */}
+      {events && scene && (
+        <MilestoneQuick events={events} onMark={onQuickMark} onUndo={onUndoMark} className="navqmark" />
       )}
 
       {/* controles */}

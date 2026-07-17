@@ -11,7 +11,8 @@ import MapView from './components/MapView.jsx'
 import NavMode from './components/NavMode.jsx'
 import CommunityModal from './components/Community.jsx'
 import Checklist from './components/Checklist.jsx'
-import Tracking, { MILESTONES } from './components/Tracking.jsx'
+import Tracking, { MILESTONES, MilestoneQuick } from './components/Tracking.jsx'
+import { sendEvent } from './lib/eventQueue.js'
 import ConfigModal from './components/ConfigModal.jsx'
 import { DecisionStrip, TimePanel, WeatherPanel, LZPanel, AlertsPanel, GatesPanel, CoordReadout } from './components/Results.jsx'
 import {
@@ -405,18 +406,28 @@ export default function App({ user, onLogout }) {
   // horário marcado/ajustado vai direto ao servidor (e ao grupo, se a missão
   // foi acionada) — sem esperar o "Atualizar caso". Debounce: o input de hora
   // dispara onChange a cada tecla e mandaria "(corrigido)" repetido ao grupo.
+  // Se estiver sem sinal (comum em voo), o horário entra numa fila local e é
+  // reenviado quando a conexão voltar — ver lib/eventQueue.js.
   const evtTimersRef = useRef({})
-  const pushEvent = (id, ts) => {
+  const pushEvent = (id, ts, delay = 1200) => {
     if (dbId == null) return // caso ainda não salvo: fica só local, como antes
     clearTimeout(evtTimersRef.current[id])
-    evtTimersRef.current[id] = setTimeout(() => {
-      api.saveEvent(dbId, id, ts).catch(() => {}) // melhor esforço; snapshot completo vai no próximo salvar
-    }, 1200)
+    evtTimersRef.current[id] = setTimeout(() => sendEvent(dbId, id, ts), delay)
   }
   const markEvent = (id) => {
     const ts = Date.now()
     setEvents((p) => ({ ...p, [id]: ts }))
     pushEvent(id, ts)
+  }
+  // marcação rápida (um toque): segura o envio até a janela de "desfazer"
+  // fechar, para um toque acidental não ecoar no grupo do Telegram
+  const quickMarkEvent = (id, ts) => {
+    setEvents((p) => ({ ...p, [id]: ts }))
+    pushEvent(id, ts, 6500)
+  }
+  const undoEvent = (id) => {
+    clearTimeout(evtTimersRef.current[id])
+    setEvents((p) => { const n = { ...p }; delete n[id]; return n })
   }
   const editEvent = (id, hhmm) => {
     if (!hhmm) return // campo limpo durante a edição — mantém o horário anterior
@@ -869,8 +880,15 @@ export default function App({ user, onLogout }) {
         <NavMode
           cfg={cfg} scene={scene} lzPoint={lzPoint}
           hospital={hospital} landingHelipad={landingHelipad}
+          events={events} onQuickMark={quickMarkEvent} onUndoMark={undoEvent}
           onClose={() => setShowNav(false)}
         />
+      )}
+
+      {/* chip flutuante de marcação rápida: aparece após o primeiro horário
+          registrado e some quando a missão termina (todos os marcos feitos) */}
+      {scene && !showNav && Object.keys(events).length > 0 && (
+        <MilestoneQuick events={events} onMark={quickMarkEvent} onUndo={undoEvent} className="qmark-fab" />
       )}
 
       {showComm && (
