@@ -85,6 +85,54 @@ const MILESTONE_BY_ID = Object.fromEntries(MILESTONES.map((m) => [m.id, m.label]
 // ponto de encontro da missão: LZ escolhida, senão a própria cena
 const meetPoint = (snap) => snap?.lzPoint || (snap?.scene ? { name: 'Cena', ...snap.scene } : null)
 
+// ---------- missão ativa: nunca uma missão fantasma ----------
+// mission_chat.status só sai de 'ativa' quando alguém marca "Aeronave
+// liberada". No plantão real isso falha o tempo todo (fim de turno, aba
+// fechada, missão abortada) e a missão fica ativa para sempre — dias depois o
+// bot volta a falar dela. Aconteceu: em 21/07/2026 a missão de 14/07 ainda
+// estava 'ativa' e era o alvo do próximo /caso e dos avisos de deslocamento.
+//
+// Três defesas independentes, porque uma só sempre falha:
+//   1. TTL na consulta — fora da janela o bot se cala, mesmo que a varredura
+//      não tenha rodado (defesa que não depende de nada estar de pé);
+//   2. varredura periódica que encerra as órfãs (impede de persistir);
+//   3. abrir missão nova encerra as anteriores (só existe uma aeronave).
+// Um voo aeromédico não passa de ~1 h; 12 h é folga para o caso de o marco
+// final vir atrasado.
+const MISSION_TTL_H = Number(process.env.MISSION_TTL_HOURS) || 12
+// alvo a mais de 250 km não é desta missão (RMS de Salvador cabe em ~150 km):
+// evita ETE absurdo se um caso antigo escapar das defesas acima
+const MAX_ENROUTE_KM = 250
+
+// a missão corrente do grupo — a mais recente ainda dentro do TTL
+export async function currentMission() {
+  const { rows } = await query(
+    `SELECT c.id, c.snapshot, m.case_id, m.chat_id, m.last_pos_post_at, m.near_alerted
+       FROM mission_chat m JOIN cases c ON c.id = m.case_id
+      WHERE m.status = 'ativa' AND m.created_at > now() - make_interval(hours => $1)
+      ORDER BY m.created_at DESC LIMIT 1`,
+    [MISSION_TTL_H]
+  )
+  return rows[0] || null
+}
+
+// encerra em silêncio as missões que ninguém fechou (log, sem ruído no grupo)
+export async function sweepStaleMissions() {
+  try {
+    const { rows } = await query(
+      `UPDATE mission_chat SET status = 'encerrada'
+        WHERE status = 'ativa' AND created_at < now() - make_interval(hours => $1)
+        RETURNING case_id`,
+      [MISSION_TTL_H]
+    )
+    if (rows.length) {
+      console.log(`[bot] ${rows.length} missão(ões) encerrada(s) por inatividade (>${MISSION_TTL_H}h): caso(s) ${rows.map((r) => r.case_id).join(', ')}`)
+    }
+  } catch (e) {
+    console.error('[bot] sweepStaleMissions:', e.message)
+  }
+}
+
 // ---------- mensagens compostas ----------
 function briefingHtml(caseRow, snap) {
   const L = []
@@ -131,9 +179,14 @@ const HANDOVER_HTML = [
 export async function notifyMission(caseRow, snap, user) {
   const chatId = await boundChat()
   if (!chatId) throw new Error('grupo não vinculado — adicione o bot ao grupo e envie /vincular <código>')
+  // o GOA é uma aeronave só: abrir uma missão fecha qualquer outra ainda
+  // aberta, para o rastreamento nunca mirar o ponto de encontro errado
+  await query(`UPDATE mission_chat SET status = 'encerrada' WHERE status = 'ativa' AND case_id <> $1`, [caseRow.id])
   await query(
     `INSERT INTO mission_chat (case_id, chat_id, created_by) VALUES ($1,$2,$3)
-     ON CONFLICT (case_id) DO UPDATE SET status = 'ativa', chat_id = EXCLUDED.chat_id`,
+     ON CONFLICT (case_id) DO UPDATE SET
+       status = 'ativa', chat_id = EXCLUDED.chat_id, created_at = now(),
+       last_pos_post_at = NULL, near_alerted = FALSE`,
     [caseRow.id, chatId, user?.id || null]
   )
   await send(chatId, briefingHtml(caseRow, snap))
@@ -183,7 +236,7 @@ async function closeMission(caseId) {
 const POS_FRESH_MS = 90_000
 const POS_CADENCE_MS = 5 * 60_000
 
-async function enrouteTick() {
+export async function enrouteTick() {
   try {
     const { rows: pos } = await query(
       `SELECT lat, lon, gs_kmh, reported_at FROM aircraft_position WHERE aircraft_id = 'goa'`
@@ -192,18 +245,13 @@ async function enrouteTick() {
     if (!p || Date.now() - new Date(p.reported_at).getTime() > POS_FRESH_MS) return
     if (!(p.gs_kmh > 40)) return
 
-    const { rows: missions } = await query(
-      `SELECT m.case_id, m.chat_id, m.last_pos_post_at, m.near_alerted, c.snapshot
-         FROM mission_chat m JOIN cases c ON c.id = m.case_id
-        WHERE m.status = 'ativa'
-        ORDER BY m.created_at DESC LIMIT 1`
-    )
-    const m = missions[0]
+    const m = await currentMission()
     if (!m) return
     const mp = meetPoint(m.snapshot)
     if (!mp) return
 
     const distKm = haversineKm(p, mp)
+    if (distKm > MAX_ENROUTE_KM) return
     const eteMin = (distKm / p.gs_kmh) * 60
     const near = eteMin <= 2 || distKm <= 4
 
@@ -237,12 +285,9 @@ async function onUpdate(u) {
       )
       await send(msg.chat.id, '✅ Grupo vinculado ao SkyRescue. Os briefings de missão chegam aqui.')
     } else if (bare === '/caso') {
-      const { rows } = await query(
-        `SELECT c.id, c.snapshot FROM mission_chat m JOIN cases c ON c.id = m.case_id
-          WHERE m.status = 'ativa' ORDER BY m.created_at DESC LIMIT 1`
-      )
-      if (!rows[0]) await send(msg.chat.id, 'Nenhuma missão ativa no momento.')
-      else await send(msg.chat.id, briefingHtml(rows[0], rows[0].snapshot || {}))
+      const m = await currentMission()
+      if (!m) await send(msg.chat.id, 'Nenhuma missão ativa no momento.')
+      else await send(msg.chat.id, briefingHtml(m, m.snapshot || {}))
     }
     return
   }
@@ -283,5 +328,7 @@ export function startBot() {
     pollLoop()
     console.log('[bot] Telegram ativo (long polling)')
   }
+  sweepStaleMissions() // limpa o que ficou aberto enquanto o serviço esteve fora
   setInterval(enrouteTick, 60_000).unref()
+  setInterval(sweepStaleMissions, 15 * 60_000).unref()
 }

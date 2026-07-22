@@ -53,7 +53,17 @@ Botão **Grupo da missão** no card Registro: salva o caso e o bot posta no grup
 - **Avisos de deslocamento** alimentados pelo rastreamento: a cada 5 min em voo ("X km do encontro, ETE ~Y min") e um único alerta de **~2 min** ("LZ pronta e isolada?");
 - **Encerramento** com a cronologia completa quando o comandante marca "Aeronave liberada".
 
-Setup: criar o bot no @BotFather, definir `TELEGRAM_BOT_TOKEN` e `BOT_LINK_CODE` no `.env.production` do servidor (PM2), adicionar o bot ao grupo e enviar `/vincular <código>`. Sem token, o servidor roda em **dry-run** (mensagens só no log). Comando `/caso` no grupo repete o briefing da missão ativa.
+Setup: criar o bot no @BotFather, definir `TELEGRAM_BOT_TOKEN` e `BOT_LINK_CODE` no `.env.production` do servidor, adicionar o bot ao grupo e enviar `/vincular <código>`. Sem token, o servidor roda em **dry-run** (mensagens só no log). Comando `/caso` no grupo repete o briefing da missão ativa.
+
+**Uma instância por token.** Dois servidores rodando a API com o mesmo `TELEGRAM_BOT_TOKEN` derrubam o long polling um do outro (`409 Conflict`) e o bot fica mudo. Ao migrar de servidor, desative o serviço antigo e remova o token do `.env` dele antes de subir o novo.
+
+**Missão fantasma — o bot nunca fala de um caso velho.** A missão só sairia de "ativa" quando alguém marca *Aeronave liberada*, e no plantão isso falha (fim de turno, aba fechada, missão abortada): a missão ficava ativa para sempre e dias depois o bot voltava a falar dela. Três defesas independentes, em `server/src/telegram.js`:
+
+1. **TTL na consulta** — fora da janela (`MISSION_TTL_HOURS`, padrão 12 h) o bot se cala, mesmo que nenhuma varredura tenha rodado;
+2. **varredura** a cada 15 min (e no boot, e no `migrate.js`) encerra em silêncio as missões órfãs, para não persistirem;
+3. **acionar uma missão nova encerra as anteriores** — o GOA é uma aeronave só.
+
+Ainda há um teto de **250 km** entre a aeronave e o ponto de encontro: mais que isso não é esta missão e o ETE não sai. Regressão coberta por `node server/scripts/test-missao.js` (roda contra o banco de dev, em dry-run).
 
 ## Pontos de pouso da comunidade
 
@@ -68,6 +78,12 @@ Usuários logados podem sugerir locais onde a equipe já pousou (campo de futebo
 5. (Opcional) Cadastre bases SAMU para sugestão automática do ETA da ambulância.
 
 A calibração (base, hospitais, tempos) fica no navegador do computador (localStorage). Já os **casos** são registrados no servidor, com o usuário que os criou.
+
+## Rascunho: fechou, reabriu, está tudo lá
+
+No plantão ninguém clica em "Salvar" antes de sair — o tablet dorme, a bateria acaba, a aba é fechada com o caso pela metade. Todo o estado do caso em edição (local, pontuação, gates, destino, marcos, observações) é espelhado no navegador a cada mudança e regravado **na hora** em que a aba some (`visibilitychange`/`pagehide` — no iOS o `beforeunload` não dispara). Ao reabrir, o caso volta sozinho, com uma faixa dizendo de quando é o rascunho e um botão para descartá-lo.
+
+Cobre recarregar a página, fechar a aba, fechar o navegador, crash/queda de energia e aba descartada pelo sistema em segundo plano. O rascunho é **por usuário** (o computador da regulação é compartilhado: o rascunho de um plantonista não aparece para o próximo que logar) e expira em 36 h, para trabalho antigo não ressuscitar. Ele não substitui a gravação no servidor — continua sendo o "Salvar/Atualizar caso" que registra o caso para a equipe e para o bot; é rede de segurança contra perder o que foi digitado. Implementação em `src/lib/draft.js`.
 
 ## Fluxo de uso na regulação
 

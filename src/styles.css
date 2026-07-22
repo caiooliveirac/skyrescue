@@ -100,6 +100,12 @@ a { color: var(--accent); }
   border-bottom: 1px solid rgba(251, 191, 36, 0.18);
 }
 .notice b { font-weight: 700; }
+/* rascunho recuperado não é alerta: informa e sai do caminho */
+.notice-draft {
+  background: var(--info-soft); color: var(--info);
+  border-bottom-color: rgba(125, 211, 252, 0.22);
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+}
 
 /* ---------- faixa de decisão (sticky) ---------- */
 .decision {

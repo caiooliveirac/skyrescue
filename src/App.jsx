@@ -13,6 +13,7 @@ import CommunityModal from './components/Community.jsx'
 import Checklist from './components/Checklist.jsx'
 import Tracking, { MILESTONES, MilestoneQuick } from './components/Tracking.jsx'
 import { sendEvent } from './lib/eventQueue.js'
+import { makeDraftSaver, readDraft, draftWorthKeeping } from './lib/draft.js'
 import ConfigModal from './components/ConfigModal.jsx'
 import { DecisionStrip, TimePanel, WeatherPanel, LZPanel, AlertsPanel, GatesPanel, CoordReadout } from './components/Results.jsx'
 import {
@@ -280,16 +281,38 @@ export default function App({ user, onLogout }) {
 
   const score = useMemo(() => computeScore(isChecked), [manualChecked, autoOverrides, autos]) // eslint-disable-line
 
+  // Hora de referência da avaliação. Enquanto o caso está sendo avaliado ao
+  // vivo acompanha o relógio (tick de 30 s); quando o acionamento é autorizado,
+  // ou quando um caso salvo é reaberto, congela na hora do acionamento. É essa
+  // hora — não a da impressão — que ancora a janela diurna.
+  const [caseRefAt, setCaseRefAt] = useState(null) // hora gravada no caso reaberto
+  const refAt = events.decisao ?? caseRefAt // null = avaliação ao vivo
+  const [nowTick, setNowTick] = useState(() => Date.now())
+  useEffect(() => {
+    if (refAt) return
+    const id = setInterval(() => setNowTick(Date.now()), 30_000)
+    return () => clearInterval(id)
+  }, [refAt])
+  const refMs = refAt ?? nowTick
+  // pôr do sol do dia da avaliação (casos reabertos em outro dia não podem usar
+  // o pôr do sol de hoje, que é o que a previsão devolve)
+  const [refSunset, setRefSunset] = useState(null)
+  const sameDay = (a, b) => new Date(a).toDateString() === new Date(b).toDateString()
+  const sunsetISO =
+    (refSunset && !sameDay(refMs, Date.now()) ? refSunset : null) ||
+    wxScene?.sunset || wxBase?.sunset || refSunset
+
   const daylight = useMemo(
     () =>
       daylightCheck({
-        sunsetISO: wxScene?.sunset || wxBase?.sunset,
+        sunsetISO,
         // janela VFR precisa cobrir também o voo de retorno à base
         airTotalMin: mission?.missionEndMin ?? mission?.airTotal,
         nightAllowed: cfg.ops.nightAllowed,
         marginMin: cfg.ops.sunsetMarginMin,
+        refMs,
       }),
-    [wxScene, wxBase, mission, cfg.ops.nightAllowed, cfg.ops.sunsetMarginMin]
+    [sunsetISO, mission, cfg.ops.nightAllowed, cfg.ops.sunsetMarginMin, refMs]
   )
 
   const lzStatus = useMemo(() => {
@@ -484,6 +507,11 @@ export default function App({ user, onLogout }) {
     v: 2,
     id: caseId || 'caso-' + new Date().toISOString().slice(0, 19).replace('T', '-').replace(/:/g, ''),
     ts: Date.now(),
+    // hora de referência da avaliação + pôr do sol daquele dia: sem isso, ao
+    // reabrir/reimprimir o caso a janela diurna seria recalculada com a hora
+    // atual e um caso viável apareceria como inviável
+    refAt: refMs,
+    sunsetISO: sunsetISO || null,
     scene, sceneLabel, hospitalId, hospitalName: hospital?.name || null, landingSel, ambEta, notes,
     manualChecked, autoOverrides, gateManual, gateOverrides,
     lzSelId, manualLz, events,
@@ -495,6 +523,49 @@ export default function App({ user, onLogout }) {
     recommendation: rec?.title || null, gatesOk: gates.ok,
     mission: mission ? { airTotal: mission.airTotal, groundTotal: mission.ground.total, delta: mission.delta } : null,
   })
+
+  // ---------- rascunho local ----------
+  // No plantão o caso é abandonado no meio o tempo todo (tablet dorme, aba
+  // fechada, bateria acaba) e ninguém clica em "Salvar" antes. Todo o estado
+  // do caso é espelhado no localStorage a cada mudança e regravado na hora em
+  // que a aba some, então reabrir devolve o que estava escrito sem depender
+  // de botão nenhum. Ver src/lib/draft.js.
+  const draft = useMemo(() => makeDraftSaver(user?.id), [user?.id])
+  useEffect(() => () => draft.dispose(), [draft])
+
+  // A RECUPERAÇÃO VEM PRIMEIRO, e não é só questão de gosto: os efeitos rodam
+  // na ordem em que são declarados, então um autosave declarado antes rodaria
+  // no boot com o estado ainda vazio e apagaria o rascunho que ele deveria
+  // restaurar. `booted` também segura o autosave até a tentativa terminar.
+  // applySnapshot/newCase são recriados a cada render e ficam definidos mais
+  // abaixo; o ref os mantém fora das dependências, para o efeito rodar UMA vez
+  // e nunca sobrescrever o que o usuário já digitou depois.
+  const lateRef = useRef({})
+  const booted = useRef(false)
+  const [restored, setRestored] = useState(null) // {at} do rascunho recuperado
+  useEffect(() => {
+    const d = readDraft(user?.id)
+    if (d) {
+      lateRef.current.applySnapshot?.(d.snapshot, d.dbId)
+      setRestored({ at: d.at })
+    }
+    booted.current = true
+  }, [user?.id])
+
+  // assinatura do que compõe o caso: muda => reagenda a gravação do rascunho
+  const draftSig = JSON.stringify([
+    caseId, scene, sceneLabel, notes, hospitalId, landingSel, ambEta,
+    manualChecked, autoOverrides, gateManual, gateOverrides,
+    lzSelId, manualLz, events, dbId,
+  ])
+  useEffect(() => {
+    if (!booted.current) return
+    const snap = snapshot()
+    if (draftWorthKeeping(snap)) draft.schedule({ snapshot: snap, dbId })
+    else draft.clear() // caso vazio (recém-aberto ou "Novo caso") não vira rascunho
+  }, [draftSig, draft])
+
+  const discardDraft = () => { draft.clear(); setRestored(null); lateRef.current.newCase?.() }
 
   // grava no servidor (Postgres). dbId != null => atualiza o mesmo caso.
   const saveCase = async () => {
@@ -547,22 +618,30 @@ export default function App({ user, onLogout }) {
     }
   }
 
+  // restaura o estado do app a partir de um snapshot (banco ou rascunho local)
+  const applySnapshot = (c, id) => {
+    revGeoRef.current++
+    pendingLzSelRef.current = c.scene ? c.lzSelId || null : null
+    setDbId(id ?? null)
+    setCaseId(c.id || ''); setSceneLabel(c.sceneLabel || ''); setScene(c.scene)
+    const hospOk = cfg.hospitals.some((h) => h.id === c.hospitalId)
+    setHospitalId(hospOk ? c.hospitalId : cfg.hospitals[0]?.id || '')
+    setLandingSel(c.landingSel || 'auto'); setAmbEta(c.ambEta || ''); setNotes(c.notes || '')
+    setManualChecked(c.manualChecked || {}); setAutoOverrides(c.autoOverrides || {})
+    setGateManual(c.gateManual || {}); setGateOverrides(c.gateOverrides || {})
+    setLzSelId(c.lzSelId || null); setManualLz(c.manualLz || null); setEvents(c.events || {})
+    // congela a avaliação na hora original do caso (casos antigos, sem refAt,
+    // caem no ts da gravação)
+    setCaseRefAt(c.refAt || c.ts || null); setRefSunset(c.sunsetISO || null)
+    setSaveFlash(false); setSaveErr('')
+  }
+
   // carrega o snapshot completo do banco e restaura o estado do app
   const loadCase = async (row) => {
     try {
       const { case: full } = await api.getCase(row.id)
-      const c = full.snapshot || {}
-      revGeoRef.current++
-      pendingLzSelRef.current = c.scene ? c.lzSelId || null : null
-      setDbId(row.id)
-      setCaseId(c.id || ''); setSceneLabel(c.sceneLabel); setScene(c.scene)
-      const hospOk = cfg.hospitals.some((h) => h.id === c.hospitalId)
-      setHospitalId(hospOk ? c.hospitalId : cfg.hospitals[0]?.id || '')
-      setLandingSel(c.landingSel || 'auto'); setAmbEta(c.ambEta); setNotes(c.notes || '')
-      setManualChecked(c.manualChecked || {}); setAutoOverrides(c.autoOverrides || {})
-      setGateManual(c.gateManual || {}); setGateOverrides(c.gateOverrides || {})
-      setLzSelId(c.lzSelId || null); setManualLz(c.manualLz || null); setEvents(c.events || {})
-      setSaveFlash(false); setSaveErr('')
+      applySnapshot(full.snapshot || {}, row.id)
+      setRestored(null)
       setShowCases(false)
     } catch (e) {
       alert('Falha ao abrir o caso: ' + (e.message || e))
@@ -595,13 +674,19 @@ export default function App({ user, onLogout }) {
 
   const newCase = () => {
     revGeoRef.current++
+    draft.clear(); setRestored(null)
     setDbId(null); setSaveFlash(false); setSaveErr('')
     setScene(null); setSceneLabel(''); setQ(''); setCaseId(''); setNotes(''); setGeoResults(null)
     setManualChecked({}); setAutoOverrides({}); setGateManual({}); setGateOverrides({})
     setAmbEta(''); setLzSelId(null); setManualLz(null); setEvents({}); setLandingSel('auto')
+    setCaseRefAt(null); setRefSunset(null); setNowTick(Date.now())
     setHospitalId(cfg.hospitals[0]?.id || '')
     setWxScene(null); setWxBase(null); setMetar(null); setLzList(null); setObstacles(null); setRoute(null)
   }
+
+  // publica para o efeito de recuperação (declarado antes destas funções)
+  lateRef.current.applySnapshot = applySnapshot
+  lateRef.current.newCase = newCase
 
   // ---------- render ----------
   return (
@@ -624,6 +709,15 @@ export default function App({ user, onLogout }) {
       </div>
 
       <DecisionStrip scene={scene} score={score} gates={gates} rec={rec} onCopy={copyResumo} />
+
+      {restored && (
+        <div className="notice notice-draft">
+          <b>Rascunho recuperado</b> — o caso voltou como estava às{' '}
+          {new Date(restored.at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}.
+          {dbId != null ? ' Já existe no servidor; use "Atualizar caso" para gravar as mudanças.' : ' Ainda não foi gravado no servidor.'}
+          <button className="tbtn" onClick={discardDraft} style={{ marginLeft: 10 }}>Descartar e começar novo</button>
+        </div>
+      )}
 
       {!cfg.base.verified && (
         <div className="notice">
@@ -931,17 +1025,25 @@ export default function App({ user, onLogout }) {
         caseId={caseId} scene={scene} sceneLabel={sceneLabel} score={score} gates={gates} rec={rec}
         mission={mission} hospital={hospital} landingHelipad={landingHelipad} lzPoint={lzPoint} manualLz={manualLz} wxScene={wxScene}
         metar={metar} events={events} notes={notes} daylight={daylight} destinoLabel={destinoLabel()}
+        refMs={refMs} refFrozen={refAt != null}
       />
     </>
   )
 }
 
-function PrintSheet({ caseId, scene, sceneLabel, score, gates, rec, mission, hospital, landingHelipad, lzPoint, manualLz, wxScene, metar, events, notes, daylight, destinoLabel }) {
+function PrintSheet({ caseId, scene, sceneLabel, score, gates, rec, mission, hospital, landingHelipad, lzPoint, manualLz, wxScene, metar, events, notes, daylight, destinoLabel, refMs, refFrozen }) {
   const hits = Object.values(score.perSection).flatMap((s) => s.hits)
+  const printedAt = new Date()
+  const assessedAt = new Date(refMs)
   return (
     <div className="print-sheet">
       <h1>SkyRescue — Registro de avaliação para acionamento aeromédico</h1>
-      <div>SAMU 192 Salvador × GOA/CBMBA · {new Date().toLocaleString('pt-BR')} {caseId ? `· Caso ${caseId}` : ''}</div>
+      {/* a avaliação vale para a hora do acionamento; a hora da impressão vai
+          separada para o documento não se contradizer quando reimpresso */}
+      <div>SAMU 192 Salvador × GOA/CBMBA · Avaliação: {assessedAt.toLocaleString('pt-BR')} {caseId ? `· Caso ${caseId}` : ''}</div>
+      <div style={{ fontSize: 10, color: '#666' }}>
+        Impresso em {printedAt.toLocaleString('pt-BR')}. Todos os critérios abaixo — inclusive a janela diurna — referem-se à hora da avaliação{refFrozen ? '' : ' (avaliação em curso)'}.
+      </div>
 
       <h2>Ocorrência</h2>
       <table><tbody>

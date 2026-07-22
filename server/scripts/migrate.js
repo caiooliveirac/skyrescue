@@ -12,6 +12,21 @@ async function main() {
   await query(sql)
   console.log('schema aplicado.')
 
+  // missões que ninguém encerrou (o marco "Aeronave liberada" não foi marcado)
+  // continuariam sendo a "missão ativa" do bot para sempre — o /caso e os
+  // avisos de deslocamento passariam a falar de um caso de dias atrás. Mesmo
+  // teto usado em runtime pela varredura do bot (telegram.js).
+  const ttlH = Number(process.env.MISSION_TTL_HOURS) || 12
+  const stale = await query(
+    `UPDATE mission_chat SET status = 'encerrada'
+      WHERE status = 'ativa' AND created_at < now() - make_interval(hours => $1)
+      RETURNING case_id`,
+    [ttlH]
+  )
+  if (stale.rows.length) {
+    console.log(`missões órfãs encerradas (>${ttlH}h sem 'Aeronave liberada'): caso(s) ${stale.rows.map((r) => r.case_id).join(', ')}`)
+  }
+
   const { rows } = await query('SELECT count(*)::int AS n FROM users')
   if (rows[0].n === 0) {
     const username = process.env.SEED_ADMIN_USER || 'goa.samu'
