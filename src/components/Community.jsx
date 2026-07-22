@@ -138,7 +138,7 @@ export default function CommunityModal({ user, points, draft, onDraftDone, onClo
             <div className="small" style={{ marginBottom: 6 }}>
               Fotografe o local agora: quem for pousar depois vê como ele é antes de chegar.
             </div>
-            <LzPhotoStrip point={justCreated} user={user} onChanged={refresh} />
+            <LzPhotoStrip point={{ ref: `com/${justCreated.id}`, name: justCreated.name }} user={user} onChanged={refresh} />
             <div className="row" style={{ marginTop: 10 }}>
               <button className="btn xs sec" onClick={() => setJustCreated(null)}>pronto</button>
             </div>
@@ -191,7 +191,7 @@ export default function CommunityModal({ user, points, draft, onDraftDone, onClo
               )}
               {shown && (
                 <div style={{ flexBasis: '100%', marginTop: 4 }}>
-                  <LzPhotoStrip point={p} user={user} onChanged={refresh} />
+                  <LzPhotoStrip point={{ ref: `com/${p.id}`, name: p.name }} user={user} onChanged={refresh} />
                 </div>
               )}
             </div>

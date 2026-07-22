@@ -84,11 +84,15 @@ Usuários logados podem sugerir locais onde a equipe já pousou (campo de futebo
 
 ## Fotos do ponto de pouso — "como o local é"
 
-Todo ponto da comunidade aceita **fotos do local**: quem já pousou fotografa e quem for pousar depois vê o terreno antes de chegar. **Tocar no marcador** no mapa abre o ponto com as fotos (marcadores com foto ganham um selo de câmera); dá para anexar também pela lista em **Comunidade**, e logo após cadastrar um ponto o app já oferece a câmera — é o momento em que a equipe ainda está no local. No celular o botão abre a câmera traseira direto (`capture="environment"`).
+**Qualquer ponto de pouso do mapa aceita foto**: heliponto ANAC do catálogo, heliponto de hospital, heliponto de apoio, ponto da comunidade e as áreas candidatas a LZ da ocorrência. Quem já pousou fotografa; quem for pousar depois vê o terreno antes de chegar.
 
-Qualquer usuário logado anexa (até **12 fotos por ponto**, com legenda opcional do tipo "aproximação pelo norte, fios na cerca"); excluir, só quem enviou ou o admin. Apagar o ponto apaga as fotos junto.
+**Um toque no marcador** abre o local com as fotos e o botão de anexar — em qualquer modo do mapa, sem precisar sair do "Marcar LZ" ou do "Comunidade" (o clique no marcador nunca chegaria ao mapa mesmo). Marcadores que já têm foto ganham um **selo de câmera**, então dá para saber olhando o mapa onde existe registro visual. No celular o botão abre a câmera traseira direto (`capture="environment"`). Também dá para anexar pela lista em **Comunidade**, e logo após cadastrar um ponto novo o app já oferece a câmera — é o momento em que a equipe ainda está no local.
 
-A imagem é **reduzida no próprio navegador** antes de subir (lado maior 1280 px, JPEG recomprimido até <500 kB — ver [`src/lib/photo.js`](src/lib/photo.js)): cabe no limite padrão de corpo do nginx sem mudar a configuração do servidor e economiza dado do 4G a bordo. Os bytes ficam no Postgres (`lz_photo`), então entram no backup do banco e sobrevivem ao deploy, que faz `rsync --delete` em `server/`. A API aceita só JPEG/WebP/PNG (SVG é recusado — vetor de XSS) e serve as imagens autenticadas, em `/api/community-lz/:id/photos/:pid`.
+Qualquer usuário logado anexa (até **12 fotos por ponto**, com legenda opcional do tipo "aproximação pelo norte, fios na cerca"); excluir, só quem enviou ou o admin.
+
+A imagem é **reduzida no próprio navegador** antes de subir (lado maior 1280 px, JPEG recomprimido até <500 kB — ver [`src/lib/photo.js`](src/lib/photo.js)): cabe no limite padrão de corpo do nginx sem mudar a configuração do servidor e economiza dado do 4G a bordo. Os bytes ficam no Postgres (`lz_photo`), então entram no backup do banco e sobrevivem ao deploy, que faz `rsync --delete` em `server/`.
+
+Cada foto é presa ao ponto pelo mesmo identificador que o app já usa nos candidatos a LZ — `cat/SBSV` (ANAC), `hosp/hge`, `pad/iml`, `com/12` (comunidade), `way/123` (OSM) — o que permite fotografar pontos que não moram no banco, como os do catálogo ANAC. A API aceita só JPEG/WebP/PNG (SVG é recusado — vetor de XSS) e serve as imagens autenticadas em `/api/lz-photos/:id`. `GET /api/lz-photos/counts` traz a contagem de todos os pontos numa chamada só, que é o que alimenta os selos do mapa sem uma requisição por marcador.
 
 > As fotos são referência da equipe e envelhecem (obra, cerca nova, mato alto) — reconhecimento visual pelo piloto continua obrigatório. Não fotografe pacientes nem nada que identifique a vítima (LGPD).
 

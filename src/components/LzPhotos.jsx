@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../lib/backend.js'
 import { preparePhoto } from '../lib/photo.js'
-import { IconCamera, IconCheck, IconX, IconAlert, IconUsers } from './Icons.jsx'
+import { IconCamera, IconCheck, IconX, IconAlert } from './Icons.jsx'
 
 // Fotos do ponto de pouso — "como o local é". Quem já pousou fotografa (a
 // câmera do celular abre direto pelo capture) e a foto fica no ponto, para
@@ -21,10 +21,10 @@ export function LzPhotoStrip({ point, user, onChanged, autoLoad = true }) {
   const fileRef = useRef(null)
 
   const load = async () => {
-    try { const { photos } = await api.listLzPhotos(point.id); setPhotos(photos) }
+    try { const { photos } = await api.listLzPhotos(point.ref); setPhotos(photos) }
     catch (e) { setPhotos([]); setErr(e.message || 'falha ao carregar as fotos') }
   }
-  useEffect(() => { if (autoLoad) load() }, [point.id])
+  useEffect(() => { if (autoLoad) load() }, [point.ref])
 
   const pick = async (e) => {
     const file = e.target.files?.[0]
@@ -43,7 +43,8 @@ export function LzPhotoStrip({ point, user, onChanged, autoLoad = true }) {
     if (!pending) return
     setErr(''); setBusy(true)
     try {
-      await api.addLzPhoto(point.id, {
+      await api.addLzPhoto({
+        ref: point.ref, name: point.name,
         dataUrl: pending.dataUrl, caption, width: pending.width,
         height: pending.height, takenAt: pending.takenAt,
       })
@@ -58,7 +59,7 @@ export function LzPhotoStrip({ point, user, onChanged, autoLoad = true }) {
   const remove = async (p) => {
     if (!confirm('Excluir esta foto?')) return
     setErr('')
-    try { await api.deleteLzPhoto(point.id, p.id); await load(); onChanged?.() }
+    try { await api.deleteLzPhoto(p.id); await load(); onChanged?.() }
     catch (e) { setErr(e.message || 'falha ao excluir') }
   }
 
@@ -73,7 +74,7 @@ export function LzPhotoStrip({ point, user, onChanged, autoLoad = true }) {
           {photos.map((p) => (
             <button key={p.id} className="lzphoto-thumb" onClick={() => setZoom(p)}
               title={p.caption || `foto de ${when(p)}`}>
-              <img src={api.lzPhotoUrl(point.id, p.id)} alt={p.caption || 'foto do ponto de pouso'} loading="lazy" />
+              <img src={api.lzPhotoUrl(p.id)} alt={p.caption || 'foto do ponto de pouso'} loading="lazy" />
               {p.caption && <span className="cap">{p.caption}</span>}
             </button>
           ))}
@@ -116,7 +117,7 @@ export function LzPhotoStrip({ point, user, onChanged, autoLoad = true }) {
 
       {zoom && (
         <div className="lzphoto-full" onClick={() => setZoom(null)}>
-          <img src={api.lzPhotoUrl(point.id, zoom.id)} alt={zoom.caption || 'foto do ponto de pouso'}
+          <img src={api.lzPhotoUrl(zoom.id)} alt={zoom.caption || 'foto do ponto de pouso'}
             onClick={(e) => e.stopPropagation()} />
           <div className="lzphoto-full-bar" onClick={(e) => e.stopPropagation()}>
             <div>
@@ -138,18 +139,15 @@ export function LzPhotoStrip({ point, user, onChanged, autoLoad = true }) {
   )
 }
 
-// Aberto ao tocar no ponto da comunidade no mapa: mostra o que se sabe do
-// local (nome, observação operacional, coordenadas) e as fotos.
+// Aberto ao tocar em QUALQUER ponto de pouso no mapa (heliponto ANAC,
+// hospital, heliponto de apoio, ponto da comunidade, área do OSM): mostra o
+// que se sabe do local e as fotos. `point` = {ref, name, sub}.
 export function LzPhotoModal({ point, user, onClose, onChanged }) {
   return (
     <div className="modal-bg" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h3><IconUsers size={17} /> {point.name}</h3>
-        <div className="small" style={{ marginBottom: 10 }}>
-          {point.municipio ? point.municipio + ' · ' : ''}
-          {point.status === 'aprovado' ? 'ponto validado pela comunidade' : 'sugestão aguardando validação'}
-          {point.description ? ` — “${point.description}”` : ''}
-        </div>
+        <h3><IconCamera size={17} /> {point.name}</h3>
+        {point.sub && <div className="small" style={{ marginBottom: 10 }}>{point.sub}</div>}
         <LzPhotoStrip point={point} user={user} onChanged={onChanged} />
         <div className="row" style={{ marginTop: 12 }}>
           <button className="btn sec" onClick={onClose}>Fechar</button>

@@ -82,6 +82,11 @@ CREATE INDEX IF NOT EXISTS community_lz_status_idx ON community_lz (status);
 -- já reduzida pelo navegador (JPEG ~1280 px, <500 kB — abaixo do limite padrão
 -- de corpo do nginx) e fica no próprio banco: entra no backup junto com o
 -- resto e sobrevive ao deploy, que faz rsync --delete em server/.
+-- Vale para QUALQUER ponto onde a aeronave pousa, não só os da comunidade:
+-- point_ref usa o mesmo identificador que o app já dá aos candidatos a LZ —
+-- 'cat/SBSV' (heliponto ANAC), 'com/12' (comunidade), 'hosp/hge', 'pad/iml',
+-- 'way/123' (área do OpenStreetMap). Só 'com/*' existe como linha no banco;
+-- por isso lz_id (com CASCADE) é preenchido nesse caso e nulo nos demais.
 CREATE TABLE IF NOT EXISTS lz_photo (
   id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   lz_id      BIGINT NOT NULL REFERENCES community_lz(id) ON DELETE CASCADE,
@@ -96,6 +101,13 @@ CREATE TABLE IF NOT EXISTS lz_photo (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS lz_photo_lz_idx ON lz_photo (lz_id, created_at);
+
+-- generalização de lz_photo (as primeiras fotos nasceram só da comunidade)
+ALTER TABLE lz_photo ADD COLUMN IF NOT EXISTS point_ref  TEXT;
+ALTER TABLE lz_photo ADD COLUMN IF NOT EXISTS point_name TEXT;  -- nome no momento da foto (catálogo não está no banco)
+UPDATE lz_photo SET point_ref = 'com/' || lz_id WHERE point_ref IS NULL AND lz_id IS NOT NULL;
+ALTER TABLE lz_photo ALTER COLUMN lz_id DROP NOT NULL;
+CREATE INDEX IF NOT EXISTS lz_photo_ref_idx ON lz_photo (point_ref, created_at);
 
 -- ---------- posição da aeronave (rastreamento ao vivo) ----------
 -- O modo navegação do piloto reporta a posição a cada ~5 s; a regulação

@@ -95,14 +95,21 @@ export default function App({ user, onLogout }) {
   const [showComm, setShowComm] = useState(false)
   const [showNav, setShowNav] = useState(false) // modo navegação do piloto (GPS)
   const [commDraft, setCommDraft] = useState(null) // {lat, lon} clicado no mapa
-  const [photoLz, setPhotoLz] = useState(null) // ponto da comunidade tocado no mapa: "como o local é"
+  // fotos dos pontos de pouso: o ponto tocado no mapa e a contagem por ponto
+  // (uma chamada só alimenta o selo de câmera de todos os marcadores)
+  const [photoLz, setPhotoLz] = useState(null)
+  const [photoCounts, setPhotoCounts] = useState({})
+  const refreshPhotoCounts = async () => {
+    try { const { counts } = await api.lzPhotoCounts(); setPhotoCounts(counts) }
+    catch (e) { /* camada opcional — segue sem os selos */ }
+  }
   const communityRef = useRef([]) // leitura na busca de LZ sem refazer o Overpass a cada refresh
   communityRef.current = communityLz
   const refreshCommunity = async () => {
     try { const { points } = await api.listCommunityLz(); setCommunityLz(points) }
     catch (e) { /* camada opcional — segue sem ela */ }
   }
-  useEffect(() => { refreshCases(); refreshCommunity() }, [])
+  useEffect(() => { refreshCases(); refreshCommunity(); refreshPhotoCounts() }, [])
 
   // rastreamento da aeronave: o modo navegação do piloto reporta a posição;
   // aqui a regulação consulta a cada 10 s e mostra o heli no mapa enquanto
@@ -809,7 +816,7 @@ export default function App({ user, onLogout }) {
               focus={focus}
               baseLayer={baseLayer} googleKey={cfg.map?.googleKey || ''}
               onMapClick={onMapClick}
-              onCommunityClick={setPhotoLz}
+              onPointClick={setPhotoLz} photoCounts={photoCounts}
             />
             <div className="maplayers">
               <button className={baseLayer === 'dark' ? 'on' : ''} onClick={() => pickBaseLayer('dark')}>Mapa</button>
@@ -993,7 +1000,7 @@ export default function App({ user, onLogout }) {
           point={photoLz}
           user={user}
           onClose={() => setPhotoLz(null)}
-          onChanged={refreshCommunity}
+          onChanged={() => { refreshPhotoCounts(); refreshCommunity() }}
         />
       )}
 

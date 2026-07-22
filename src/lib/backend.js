@@ -40,12 +40,14 @@ export const api = {
   createCommunityLz: (p) => req('POST', '/community-lz', p),
   updateCommunityLz: (id, patch) => req('PATCH', `/community-lz/${id}`, patch),
   deleteCommunityLz: (id) => req('DELETE', `/community-lz/${id}`),
-  // fotos do ponto de pouso ("como o local é")
-  listLzPhotos: (id) => req('GET', `/community-lz/${id}/photos`),
-  addLzPhoto: (id, photo) => req('POST', `/community-lz/${id}/photos`, photo),
-  deleteLzPhoto: (id, pid) => req('DELETE', `/community-lz/${id}/photos/${pid}`),
+  // fotos de qualquer ponto de pouso ("como o local é"). `ref` é o mesmo
+  // identificador dos candidatos a LZ: cat/SBSV, hosp/hge, pad/iml, com/12…
+  listLzPhotos: (ref) => req('GET', `/lz-photos?ref=${encodeURIComponent(ref)}`),
+  addLzPhoto: (photo) => req('POST', '/lz-photos', photo),
+  deleteLzPhoto: (pid) => req('DELETE', `/lz-photos/${pid}`),
+  lzPhotoCounts: () => req('GET', '/lz-photos/counts'),
   // URL da imagem para usar direto no <img> (o cookie de sessão vai junto)
-  lzPhotoUrl: (id, pid) => `${BASE}/community-lz/${id}/photos/${pid}`,
+  lzPhotoUrl: (pid) => `${BASE}/lz-photos/${pid}`,
   // rastreamento da aeronave
   reportAircraft: (p) => req('POST', '/aircraft/position', p),
   getAircraft: () => req('GET', '/aircraft/position'),

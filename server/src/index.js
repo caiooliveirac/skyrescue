@@ -13,7 +13,7 @@ app.set('trust proxy', 1) // atrás do nginx/Cloudflare
 // upload de foto de ponto de pouso: corpo maior que o resto da API. Precisa vir
 // ANTES do parser global — o body-parser marca req._body e o seguinte não reprocessa.
 // O teto de 3 MB é folga: o cliente já manda <500 kB (ver src/lib/photo.js).
-app.use('/api/community-lz/:id/photos', express.json({ limit: '3mb' }))
+app.use('/api/lz-photos', express.json({ limit: '3mb' }))
 app.use(express.json({ limit: '1mb' }))
 app.use(cookieParser())
 app.use(authMiddleware)
@@ -265,9 +265,7 @@ app.get('/api/community-lz', requireAuth, async (req, res) => {
             ru.username AS reviewed_by_username, ru.full_name AS reviewed_by_name,
             -- contagem + capa numa passada só: o mapa mostra o selo de "tem foto"
             -- sem uma requisição por ponto
-            (SELECT count(*)::int FROM lz_photo p WHERE p.lz_id = z.id) AS photo_count,
-            (SELECT p.id FROM lz_photo p WHERE p.lz_id = z.id
-              ORDER BY p.created_at LIMIT 1) AS cover_photo_id
+            (SELECT count(*)::int FROM lz_photo p WHERE p.point_ref = 'com/' || z.id) AS photo_count
        FROM community_lz z
        LEFT JOIN users cu ON cu.id = z.created_by
        LEFT JOIN users ru ON ru.id = z.reviewed_by
@@ -345,12 +343,17 @@ app.delete('/api/community-lz/:id', requireAuth, async (req, res) => {
 })
 
 // ---------- fotos dos pontos de pouso ----------
-// "como o local é": quem já pousou fotografa o ponto e anexa. Qualquer usuário
-// logado pode anexar (é o conhecimento da equipe que interessa); apagar, só quem
-// enviou ou o admin. A imagem já chega reduzida do navegador — aqui só validamos.
+// "como o local é": quem já pousou fotografa o ponto e anexa; quem for pousar
+// depois vê o terreno antes de chegar. Vale para QUALQUER ponto de pouso do
+// mapa — heliponto ANAC, hospital, heliponto de apoio, ponto da comunidade ou
+// área do OSM — identificado pelo mesmo `ref` que o app usa nos candidatos a
+// LZ ('cat/SBSV', 'hosp/hge', 'pad/iml', 'com/12', 'way/123').
+// Qualquer usuário logado anexa (é o conhecimento da equipe que interessa);
+// apagar, só quem enviou ou o admin. A imagem já chega reduzida do navegador.
 const PHOTO_MIMES = new Set(['image/jpeg', 'image/webp', 'image/png'])
 const MAX_PHOTO_BYTES = 2 * 1024 * 1024
 const MAX_PHOTOS_PER_LZ = 12
+const REF_RE = /^[a-z]+\/[A-Za-z0-9_.-]{1,64}$/
 
 // data URL -> {mime, buf}; rejeita qualquer coisa fora do formato esperado
 const decodeDataUrl = (s) => {
@@ -360,51 +363,72 @@ const decodeDataUrl = (s) => {
   return buf.length ? { mime: m[1], buf } : null
 }
 
-app.get('/api/community-lz/:id/photos', requireAuth, async (req, res) => {
+// 'com/12' -> 12 (as únicas fotos com linha no banco, para o CASCADE valer)
+const communityIdOf = (ref) => {
+  const m = /^com\/(\d{1,18})$/.exec(ref)
+  return m ? Number(m[1]) : null
+}
+
+// quantas fotos cada ponto tem — uma chamada só alimenta o selo de câmera de
+// todos os marcadores do mapa (senão seria uma requisição por heliponto)
+app.get('/api/lz-photos/counts', requireAuth, async (_req, res) => {
+  const { rows } = await query(
+    `SELECT point_ref AS ref, count(*)::int AS n FROM lz_photo
+      WHERE point_ref IS NOT NULL GROUP BY point_ref`
+  )
+  res.json({ counts: Object.fromEntries(rows.map((r) => [r.ref, r.n])) })
+})
+
+app.get('/api/lz-photos', requireAuth, async (req, res) => {
+  const ref = String(req.query.ref || '')
+  if (!REF_RE.test(ref)) return res.status(400).json({ error: 'ponto inválido' })
   const { rows } = await query(
     `SELECT p.id, p.mime, p.size_bytes, p.width, p.height, p.caption,
             p.taken_at, p.created_at, p.created_by,
             u.username AS created_by_username, u.full_name AS created_by_name
        FROM lz_photo p
        LEFT JOIN users u ON u.id = p.created_by
-      WHERE p.lz_id = $1
+      WHERE p.point_ref = $1
       ORDER BY p.created_at`,
-    [req.params.id]
+    [ref]
   )
   res.json({ photos: rows })
 })
 
 // bytes da imagem. O <img> manda o cookie de sessão sozinho (mesma origem);
 // o conteúdo nunca muda, então pode ficar em cache privado por bastante tempo.
-app.get('/api/community-lz/:id/photos/:pid', requireAuth, async (req, res) => {
-  const { rows } = await query(
-    'SELECT mime, bytes FROM lz_photo WHERE id = $1 AND lz_id = $2',
-    [req.params.pid, req.params.id]
-  )
+app.get('/api/lz-photos/:pid', requireAuth, async (req, res) => {
+  const { rows } = await query('SELECT mime, bytes FROM lz_photo WHERE id = $1', [req.params.pid])
   if (!rows[0]) return res.status(404).json({ error: 'foto não encontrada' })
   res.set('Content-Type', rows[0].mime)
   res.set('Cache-Control', 'private, max-age=604800, immutable')
   res.send(rows[0].bytes)
 })
 
-app.post('/api/community-lz/:id/photos', requireAuth, async (req, res) => {
-  const { dataUrl, caption, width, height, takenAt } = req.body || {}
+app.post('/api/lz-photos', requireAuth, async (req, res) => {
+  const { ref, name, dataUrl, caption, width, height, takenAt } = req.body || {}
+  if (!REF_RE.test(String(ref || ''))) return res.status(400).json({ error: 'ponto inválido' })
   const img = decodeDataUrl(dataUrl)
   if (!img) return res.status(400).json({ error: 'imagem inválida — envie JPEG, WebP ou PNG' })
   if (img.buf.length > MAX_PHOTO_BYTES) return res.status(413).json({ error: 'imagem muito grande' })
   try {
-    const lz = await query('SELECT id FROM community_lz WHERE id = $1', [req.params.id])
-    if (!lz.rows[0]) return res.status(404).json({ error: 'ponto não encontrado' })
-    const n = await query('SELECT count(*)::int AS n FROM lz_photo WHERE lz_id = $1', [req.params.id])
+    // ponto da comunidade precisa existir; catálogo/OSM não moram no banco
+    const lzId = communityIdOf(ref)
+    if (lzId != null) {
+      const lz = await query('SELECT id FROM community_lz WHERE id = $1', [lzId])
+      if (!lz.rows[0]) return res.status(404).json({ error: 'ponto não encontrado' })
+    }
+    const n = await query('SELECT count(*)::int AS n FROM lz_photo WHERE point_ref = $1', [ref])
     if (n.rows[0].n >= MAX_PHOTOS_PER_LZ)
       return res.status(409).json({ error: `limite de ${MAX_PHOTOS_PER_LZ} fotos por ponto` })
     const int = (v) => (Number.isFinite(Number(v)) ? Math.trunc(Number(v)) : null)
     const when = takenAt && Number.isFinite(Number(takenAt)) ? new Date(Number(takenAt)) : null
     const { rows } = await query(
-      `INSERT INTO lz_photo (lz_id, mime, bytes, size_bytes, width, height, caption, taken_at, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id, created_at`,
-      [req.params.id, img.mime, img.buf, img.buf.length, int(width), int(height),
-       caption ? String(caption).slice(0, 200) : null, when, req.user.id]
+      `INSERT INTO lz_photo (point_ref, point_name, lz_id, mime, bytes, size_bytes,
+                             width, height, caption, taken_at, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id, created_at`,
+      [ref, name ? String(name).slice(0, 120) : null, lzId, img.mime, img.buf, img.buf.length,
+       int(width), int(height), caption ? String(caption).slice(0, 200) : null, when, req.user.id]
     )
     res.status(201).json({ id: rows[0].id, created_at: rows[0].created_at })
   } catch (e) {
@@ -413,11 +437,8 @@ app.post('/api/community-lz/:id/photos', requireAuth, async (req, res) => {
   }
 })
 
-app.delete('/api/community-lz/:id/photos/:pid', requireAuth, async (req, res) => {
-  const { rows } = await query(
-    'SELECT created_by FROM lz_photo WHERE id = $1 AND lz_id = $2',
-    [req.params.pid, req.params.id]
-  )
+app.delete('/api/lz-photos/:pid', requireAuth, async (req, res) => {
+  const { rows } = await query('SELECT created_by FROM lz_photo WHERE id = $1', [req.params.pid])
   if (!rows[0]) return res.status(404).json({ error: 'foto não encontrada' })
   if (req.user.role !== 'admin' && rows[0].created_by !== req.user.id)
     return res.status(403).json({ error: 'apenas quem enviou (ou o admin) pode excluir a foto' })

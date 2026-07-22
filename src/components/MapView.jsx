@@ -67,7 +67,7 @@ const lzIcon = (letter, suitKey, sel, isHeli) =>
 export default function MapView({
   cfg, scene, hospitalId, landingHelipad, lz, lzSelId, manualLz, obstacles, route,
   mode, showObs, showPads = true, communityLz, aircraft, focus, baseLayer = 'dark', googleKey = '',
-  onCommunityClick,
+  onPointClick, photoCounts,
   onMapClick,
 }) {
   const divRef = useRef(null)
@@ -78,12 +78,12 @@ export default function MapView({
   const errPollRef = useRef(null) // vigia do aviso de erro do Google
   const modeRef = useRef(mode)
   const clickRef = useRef(onMapClick)
-  const commClickRef = useRef(onCommunityClick)
+  const photoClickRef = useRef(onPointClick)
   const fitKeyRef = useRef('')
 
   modeRef.current = mode
   clickRef.current = onMapClick
-  commClickRef.current = onCommunityClick
+  photoClickRef.current = onPointClick
 
   useEffect(() => {
     // rotateControl: o leaflet-rotate (carregado pelo modo navegação) injeta
@@ -182,24 +182,50 @@ export default function MapView({
       .bindTooltip(cfg.base.name)
       .addTo(lay)
 
+
+    // Foto em QUALQUER ponto de pouso: um toque no marcador abre "como o local
+    // é". O selo de câmera é colado no elemento já renderizado, para não
+    // duplicar a lógica em cada fábrica de ícone. Sem trava de modo — o clique
+    // no marcador nunca chegaria ao mapa de qualquer forma (o Leaflet não o
+    // propaga), então travar só criava clique morto.
+    const withPhotos = (marker, ref, name, sub) => {
+      const n = photoCounts?.[ref] || 0
+      marker.on('click', (ev) => {
+        L.DomEvent.stop(ev)
+        photoClickRef.current?.({ ref, name, sub, count: n })
+      })
+      marker.on('add', () => {
+        if (!n) return
+        const el = marker.getElement()?.firstElementChild
+        if (el && !el.querySelector('.commphoto-badge'))
+          el.insertAdjacentHTML('beforeend', `<i class="commphoto-badge">${camSvg}</i>`)
+      })
+      return marker
+    }
+
     // hospitais
     for (const h of cfg.hospitals) {
       const sel = h.id === hospitalId
-      L.marker([h.lat, h.lon], {
-        icon: hospIcon(sel, h.heliponto),
-        zIndexOffset: sel ? 400 : 100,
-      }).bindTooltip(`${h.name}${h.heliponto ? ' · heliponto próprio' : ' · sem heliponto (transbordo terrestre)'}`)
-        .addTo(lay)
+      withPhotos(
+        L.marker([h.lat, h.lon], {
+          icon: hospIcon(sel, h.heliponto),
+          zIndexOffset: sel ? 400 : 100,
+        }).bindTooltip(`${h.name}${h.heliponto ? ' · heliponto próprio' : ' · sem heliponto (transbordo terrestre)'} — toque para ver/pôr foto`),
+        `hosp/${h.id}`, h.name,
+        h.heliponto ? 'Hospital com heliponto próprio' : 'Hospital sem heliponto — transbordo terrestre'
+      ).addTo(lay)
     }
 
     // helipontos de apoio / rede privada
     for (const p of cfg.helipads || []) {
       const isLanding = landingHelipad && landingHelipad.id === p.id
-      L.marker([p.lat, p.lon], {
-        icon: helipadIcon(isLanding),
-        zIndexOffset: isLanding ? 450 : 150,
-      }).bindTooltip(`${p.name}${p.note ? ' — ' + p.note : ''}`)
-        .addTo(lay)
+      withPhotos(
+        L.marker([p.lat, p.lon], {
+          icon: helipadIcon(isLanding),
+          zIndexOffset: isLanding ? 450 : 150,
+        }).bindTooltip(`${p.name}${p.note ? ' — ' + p.note : ''} — toque para ver/pôr foto`),
+        `pad/${p.id}`, p.name, p.note || 'Heliponto de apoio'
+      ).addTo(lay)
     }
 
     // helipontos registrados ANAC (catálogo) — camada persistente, sempre no
@@ -213,9 +239,12 @@ export default function MapView({
       for (const p of HELIPAD_CATALOG) {
         if (covered.some((c) => haversineKm(c, p) * 1000 < 150)) continue
         if (scene && (lz || []).some((c) => c.id === `cat/${p.icao}`)) continue
-        L.marker([p.lat, p.lon], { icon: anacIcon(), zIndexOffset: 40 })
-          .bindTooltip(`${p.name} [${p.icao}] · ${p.bairro} — registro ANAC, coordenar uso com o operador`)
-          .addTo(lay)
+        withPhotos(
+          L.marker([p.lat, p.lon], { icon: anacIcon(), zIndexOffset: 40 })
+            .bindTooltip(`${p.name} [${p.icao}] · ${p.bairro} — registro ANAC — toque para ver/pôr foto`),
+          `cat/${p.icao}`, `${p.name} [${p.icao}]`,
+          `${p.bairro} · heliponto registrado na ANAC — coordenar uso com o operador`
+        ).addTo(lay)
       }
     }
 
@@ -229,22 +258,18 @@ export default function MapView({
         const pend = p.status === 'pendente'
         const author = p.created_by_name || p.created_by_username
         const nph = p.photo_count || 0
-        L.marker([p.lat, p.lon], { icon: commIcon(!pend, nph > 0), zIndexOffset: pend ? 45 : 42 })
-          .bindTooltip(
-            `${p.name}${p.municipio ? ' · ' + p.municipio : ''} — ` +
-            (pend ? 'sugestão da comunidade, aguardando validação' : 'ponto validado pela comunidade') +
-            (author ? ` · por ${author}` : '') +
-            (nph ? ` · ${nph} foto${nph > 1 ? 's' : ''} — toque para ver o local` : ' · toque para fotografar o local')
-          )
-          // toque abre as fotos: "como esse ponto de pouso é"
-          // no modo "clicar no mapa" (marcar ocorrência/LZ/sugerir) o clique
-          // pertence ao mapa, não ao marcador
-          .on('click', (ev) => {
-            if (modeRef.current !== 'scene') return
-            L.DomEvent.stop(ev)
-            commClickRef.current?.(p)
-          })
-          .addTo(lay)
+        withPhotos(
+          L.marker([p.lat, p.lon], { icon: commIcon(!pend, nph > 0), zIndexOffset: pend ? 45 : 42 })
+            .bindTooltip(
+              `${p.name}${p.municipio ? ' · ' + p.municipio : ''} — ` +
+              (pend ? 'sugestão da comunidade, aguardando validação' : 'ponto validado pela comunidade') +
+              (author ? ` · por ${author}` : '') + ' — toque para ver/pôr foto'
+            ),
+          `com/${p.id}`, p.name,
+          (p.municipio ? p.municipio + ' · ' : '') +
+          (pend ? 'sugestão da comunidade, aguardando validação' : 'ponto validado pela comunidade') +
+          (p.description ? ` — “${p.description}”` : '')
+        ).addTo(lay)
       }
     }
 
@@ -271,9 +296,12 @@ export default function MapView({
     if (scene && lz) {
       for (const c of lz) {
         const sel = c.id === lzSelId
-        L.marker([c.lat, c.lon], { icon: lzIcon(c.letter, c.obstFlag ? 'avaliar' : c.suitKey, sel, c.typeKey === 'heli'), zIndexOffset: sel ? 300 : 50 })
-          .bindTooltip(`${c.letter} · ${c.name}${c.icao ? ' [' + c.icao + ']' : ''} (${c.type}) — ${c.distM} m da ocorrência`)
-          .addTo(lay)
+        withPhotos(
+          L.marker([c.lat, c.lon], { icon: lzIcon(c.letter, c.obstFlag ? 'avaliar' : c.suitKey, sel, c.typeKey === 'heli'), zIndexOffset: sel ? 300 : 50 })
+            .bindTooltip(`${c.letter} · ${c.name}${c.icao ? ' [' + c.icao + ']' : ''} (${c.type}) — ${c.distM} m da ocorrência — toque para ver/pôr foto`),
+          String(c.id), `${c.letter} · ${c.name}`,
+          `${c.type} · ${c.distM} m da ocorrência`
+        ).addTo(lay)
         if (sel && c.bounds) {
           L.rectangle(
             [[c.bounds.minlat, c.bounds.minlon], [c.bounds.maxlat, c.bounds.maxlon]],
@@ -340,7 +368,7 @@ export default function MapView({
         m.fitBounds(b.pad(0.18))
       }
     }
-  }, [cfg, scene, hospitalId, landingHelipad, lz, lzSelId, manualLz, obstacles, route, showObs, showPads, communityLz, aircraft])
+  }, [cfg, scene, hospitalId, landingHelipad, lz, lzSelId, manualLz, obstacles, route, showObs, showPads, communityLz, aircraft, photoCounts])
 
   return (
     <>
