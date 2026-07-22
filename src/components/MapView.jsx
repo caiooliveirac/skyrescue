@@ -36,8 +36,16 @@ const anacIcon = () =>
   L.divIcon({ className: 'mk', html: '<div class="mk-anac">H</div>', iconSize: [20, 20], iconAnchor: [10, 10] })
 // ponto de pouso da comunidade: pendente = círculo-H âmbar tracejado
 // (sugestão de usuário, aguarda admin); aprovado = cor padrão da base
-const commIcon = (approved) =>
-  L.divIcon({ className: 'mk', html: `<div class="mk-comm${approved ? ' ok' : ''}">H</div>`, iconSize: [20, 20], iconAnchor: [10, 10] })
+// ponto da comunidade; o selo de câmera avisa que o local tem foto — quem
+// for pousar sabe, olhando o mapa, que dá para ver o terreno antes de chegar
+const camSvg =
+  '<svg viewBox="0 0 24 24" width="8" height="8" fill="currentColor"><path d="M3 8.5h4l1.2-2h7.6L17 8.5h4V19H3z"/><circle cx="12" cy="13.5" r="3.6" fill="#22d3ee"/></svg>'
+const commIcon = (approved, hasPhoto) =>
+  L.divIcon({
+    className: 'mk',
+    html: `<div class="mk-comm${approved ? ' ok' : ''}">H${hasPhoto ? `<i class="commphoto-badge">${camSvg}</i>` : ''}</div>`,
+    iconSize: [20, 20], iconAnchor: [10, 10],
+  })
 // aeronave em voo (posição reportada pelo modo navegação do piloto):
 // seta apontando o rumo, mesma linguagem visual da tela do piloto
 const acftSvg =
@@ -59,6 +67,7 @@ const lzIcon = (letter, suitKey, sel, isHeli) =>
 export default function MapView({
   cfg, scene, hospitalId, landingHelipad, lz, lzSelId, manualLz, obstacles, route,
   mode, showObs, showPads = true, communityLz, aircraft, focus, baseLayer = 'dark', googleKey = '',
+  onCommunityClick,
   onMapClick,
 }) {
   const divRef = useRef(null)
@@ -69,10 +78,12 @@ export default function MapView({
   const errPollRef = useRef(null) // vigia do aviso de erro do Google
   const modeRef = useRef(mode)
   const clickRef = useRef(onMapClick)
+  const commClickRef = useRef(onCommunityClick)
   const fitKeyRef = useRef('')
 
   modeRef.current = mode
   clickRef.current = onMapClick
+  commClickRef.current = onCommunityClick
 
   useEffect(() => {
     // rotateControl: o leaflet-rotate (carregado pelo modo navegação) injeta
@@ -217,12 +228,22 @@ export default function MapView({
         if (scene && (lz || []).some((c) => c.id === `com/${p.id}`)) continue
         const pend = p.status === 'pendente'
         const author = p.created_by_name || p.created_by_username
-        L.marker([p.lat, p.lon], { icon: commIcon(!pend), zIndexOffset: pend ? 45 : 42 })
+        const nph = p.photo_count || 0
+        L.marker([p.lat, p.lon], { icon: commIcon(!pend, nph > 0), zIndexOffset: pend ? 45 : 42 })
           .bindTooltip(
             `${p.name}${p.municipio ? ' · ' + p.municipio : ''} — ` +
             (pend ? 'sugestão da comunidade, aguardando validação' : 'ponto validado pela comunidade') +
-            (author ? ` · por ${author}` : '')
+            (author ? ` · por ${author}` : '') +
+            (nph ? ` · ${nph} foto${nph > 1 ? 's' : ''} — toque para ver o local` : ' · toque para fotografar o local')
           )
+          // toque abre as fotos: "como esse ponto de pouso é"
+          // no modo "clicar no mapa" (marcar ocorrência/LZ/sugerir) o clique
+          // pertence ao mapa, não ao marcador
+          .on('click', (ev) => {
+            if (modeRef.current !== 'scene') return
+            L.DomEvent.stop(ev)
+            commClickRef.current?.(p)
+          })
           .addTo(lay)
       }
     }

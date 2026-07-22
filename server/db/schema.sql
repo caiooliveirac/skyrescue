@@ -77,6 +77,26 @@ CREATE TABLE IF NOT EXISTS community_lz (
 );
 CREATE INDEX IF NOT EXISTS community_lz_status_idx ON community_lz (status);
 
+-- ---------- fotos dos pontos de pouso ----------
+-- "como o local é": quem já pousou fotografa e anexa ao ponto. A imagem chega
+-- já reduzida pelo navegador (JPEG ~1280 px, <500 kB — abaixo do limite padrão
+-- de corpo do nginx) e fica no próprio banco: entra no backup junto com o
+-- resto e sobrevive ao deploy, que faz rsync --delete em server/.
+CREATE TABLE IF NOT EXISTS lz_photo (
+  id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  lz_id      BIGINT NOT NULL REFERENCES community_lz(id) ON DELETE CASCADE,
+  mime       TEXT   NOT NULL,               -- image/jpeg | image/webp | image/png
+  bytes      BYTEA  NOT NULL,
+  size_bytes INTEGER NOT NULL,
+  width      INTEGER,
+  height     INTEGER,
+  caption    TEXT,                          -- ex.: "aproximação pelo norte, fios na cerca"
+  taken_at   TIMESTAMPTZ,                   -- quando a foto foi tirada (informado pelo cliente)
+  created_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS lz_photo_lz_idx ON lz_photo (lz_id, created_at);
+
 -- ---------- posição da aeronave (rastreamento ao vivo) ----------
 -- O modo navegação do piloto reporta a posição a cada ~5 s; a regulação
 -- consulta e mostra o helicóptero no mapa. Uma linha por aeronave (upsert).

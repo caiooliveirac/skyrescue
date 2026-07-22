@@ -10,6 +10,7 @@ import { rankLZ, parseObstacles } from './lib/lz.js'
 import MapView from './components/MapView.jsx'
 import NavMode from './components/NavMode.jsx'
 import CommunityModal from './components/Community.jsx'
+import { LzPhotoModal } from './components/LzPhotos.jsx'
 import Checklist from './components/Checklist.jsx'
 import Tracking, { MILESTONES, MilestoneQuick } from './components/Tracking.jsx'
 import { sendEvent } from './lib/eventQueue.js'
@@ -93,6 +94,7 @@ export default function App({ user, onLogout }) {
   const [showComm, setShowComm] = useState(false)
   const [showNav, setShowNav] = useState(false) // modo navegação do piloto (GPS)
   const [commDraft, setCommDraft] = useState(null) // {lat, lon} clicado no mapa
+  const [photoLz, setPhotoLz] = useState(null) // ponto da comunidade tocado no mapa: "como o local é"
   const communityRef = useRef([]) // leitura na busca de LZ sem refazer o Overpass a cada refresh
   communityRef.current = communityLz
   const refreshCommunity = async () => {
@@ -713,6 +715,7 @@ export default function App({ user, onLogout }) {
               focus={focus}
               baseLayer={baseLayer} googleKey={cfg.map?.googleKey || ''}
               onMapClick={onMapClick}
+              onCommunityClick={setPhotoLz}
             />
             <div className="maplayers">
               <button className={baseLayer === 'dark' ? 'on' : ''} onClick={() => pickBaseLayer('dark')}>Mapa</button>
@@ -889,6 +892,15 @@ export default function App({ user, onLogout }) {
           registrado e some quando a missão termina (todos os marcos feitos) */}
       {scene && !showNav && Object.keys(events).length > 0 && (
         <MilestoneQuick events={events} onMark={quickMarkEvent} onUndo={undoEvent} className="qmark-fab" />
+      )}
+
+      {photoLz && (
+        <LzPhotoModal
+          point={photoLz}
+          user={user}
+          onClose={() => setPhotoLz(null)}
+          onChanged={refreshCommunity}
+        />
       )}
 
       {showComm && (

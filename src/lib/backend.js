@@ -40,6 +40,12 @@ export const api = {
   createCommunityLz: (p) => req('POST', '/community-lz', p),
   updateCommunityLz: (id, patch) => req('PATCH', `/community-lz/${id}`, patch),
   deleteCommunityLz: (id) => req('DELETE', `/community-lz/${id}`),
+  // fotos do ponto de pouso ("como o local é")
+  listLzPhotos: (id) => req('GET', `/community-lz/${id}/photos`),
+  addLzPhoto: (id, photo) => req('POST', `/community-lz/${id}/photos`, photo),
+  deleteLzPhoto: (id, pid) => req('DELETE', `/community-lz/${id}/photos/${pid}`),
+  // URL da imagem para usar direto no <img> (o cookie de sessão vai junto)
+  lzPhotoUrl: (id, pid) => `${BASE}/community-lz/${id}/photos/${pid}`,
   // rastreamento da aeronave
   reportAircraft: (p) => req('POST', '/aircraft/position', p),
   getAircraft: () => req('GET', '/aircraft/position'),

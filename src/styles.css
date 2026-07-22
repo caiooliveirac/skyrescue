@@ -853,3 +853,57 @@ input[type="checkbox"] { accent-color: #22d3ee; width: 16px; height: 16px; }
   background: var(--fail-soft); border: 1px solid rgba(251, 113, 133, 0.3);
   border-radius: var(--radius-sm); padding: 7px 10px; margin-bottom: 10px;
 }
+
+/* ---------- fotos do ponto de pouso ("como o local é") ---------- */
+.lzphotos { margin-top: 8px; }
+.lzphoto-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 7px;
+}
+.lzphoto-thumb {
+  position: relative; padding: 0; overflow: hidden; cursor: zoom-in;
+  aspect-ratio: 4 / 3;
+  background: var(--surface-2);
+  border: 1px solid var(--line-strong); border-radius: var(--radius-sm);
+}
+.lzphoto-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.lzphoto-thumb:hover { border-color: var(--accent-line); }
+.lzphoto-thumb .cap {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  padding: 3px 6px; font-size: 10.5px; line-height: 1.25; text-align: left;
+  color: var(--ink); background: linear-gradient(transparent, rgba(2, 6, 17, 0.88) 45%);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.lzphoto-pending {
+  display: flex; gap: 10px; margin-top: 8px; padding: 8px;
+  background: var(--surface-2); border: 1px solid var(--accent-line); border-radius: var(--radius-sm);
+}
+.lzphoto-pending img { width: 108px; height: 81px; object-fit: cover; border-radius: 8px; flex: none; }
+.lzphoto-pending-form { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 7px; }
+.lzphoto-pending-form input { width: 100%; }
+
+/* visualização em tela cheia (toque no polegar) */
+.lzphoto-full {
+  position: fixed; inset: 0; z-index: 4000;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+  padding: 18px; background: rgba(2, 6, 17, 0.93); backdrop-filter: blur(3px);
+  cursor: zoom-out;
+}
+.lzphoto-full img {
+  max-width: 100%; max-height: calc(100vh - 110px);
+  object-fit: contain; border-radius: var(--radius-sm); cursor: default;
+}
+.lzphoto-full-bar {
+  display: flex; align-items: center; gap: 12px; cursor: default;
+  max-width: 100%; padding: 9px 13px;
+  background: var(--surface-3); border: 1px solid var(--line); border-radius: var(--radius-sm);
+}
+
+/* selo de "tem foto" no marcador do mapa */
+.commphoto-badge {
+  position: absolute; right: -3px; top: -4px;
+  width: 13px; height: 13px; border-radius: 50%;
+  background: var(--accent); color: #04121a;
+  display: flex; align-items: center; justify-content: center;
+  border: 1.5px solid #060a13;
+}

@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { api } from '../lib/backend.js'
 import { CoordReadout } from './Results.jsx'
-import { IconUsers, IconTarget, IconCheck, IconX, IconAlert, IconPin } from './Icons.jsx'
+import { IconUsers, IconTarget, IconCheck, IconX, IconAlert, IconPin, IconCamera } from './Icons.jsx'
+import { LzPhotoStrip } from './LzPhotos.jsx'
 
 const STATUS_BADGE = {
   pendente: ['warn', 'aguardando validação'],
@@ -23,6 +24,10 @@ export default function CommunityModal({ user, points, draft, onDraftDone, onClo
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [flash, setFlash] = useState('')
+  // ponto recém-criado: abre a câmera logo em seguida, enquanto a equipe ainda
+  // está no local — é o momento em que a foto existe para ser tirada
+  const [justCreated, setJustCreated] = useState(null)
+  const [openPhotos, setOpenPhotos] = useState(null) // id do ponto com as fotos expandidas
 
   const num = (s) => Number(String(s).trim().replace(',', '.'))
 
@@ -35,8 +40,10 @@ export default function CommunityModal({ user, points, draft, onDraftDone, onClo
     }
     setBusy(true)
     try {
-      await api.createCommunityLz({ name, municipio, description, lat: la, lon: lo })
+      const created = await api.createCommunityLz({ name, municipio, description, lat: la, lon: lo })
       await refresh()
+      setJustCreated({ id: created.id, name: name.trim(), municipio, description, status: 'pendente' })
+      setOpenPhotos(created.id)
       setName(''); setMunicipio(''); setDescription(''); setLat(''); setLon('')
       onDraftDone?.()
       setFlash('Sugestão enviada! Ela aparece no mapa em âmbar até o admin validar.')
@@ -124,14 +131,28 @@ export default function CommunityModal({ user, points, draft, onDraftDone, onClo
         )}
 
         {flash && <div className="alert ok" style={{ marginBottom: 10 }}><IconCheck size={15} /> {flash}</div>}
+
+        {justCreated && (
+          <div className="card" style={{ marginBottom: 12 }}>
+            <h2 style={{ fontSize: 14 }}><IconCamera size={14} /> Foto de “{justCreated.name}”</h2>
+            <div className="small" style={{ marginBottom: 6 }}>
+              Fotografe o local agora: quem for pousar depois vê como ele é antes de chegar.
+            </div>
+            <LzPhotoStrip point={justCreated} user={user} onChanged={refresh} />
+            <div className="row" style={{ marginTop: 10 }}>
+              <button className="btn xs sec" onClick={() => setJustCreated(null)}>pronto</button>
+            </div>
+          </div>
+        )}
         {err && <div className="alert fail" style={{ marginBottom: 10 }}><IconAlert size={15} /> {err}</div>}
 
         {!points.length && <div className="small">Nenhum ponto sugerido ainda — seja o primeiro!</div>}
         {points.map((p) => {
           const [bcls, blabel] = STATUS_BADGE[p.status] || ['', p.status]
           const author = p.created_by_name || p.created_by_username
+          const shown = openPhotos === p.id
           return (
-            <div key={p.id} className="lzrow" style={{ cursor: 'default' }}>
+            <div key={p.id} className="lzrow" style={{ cursor: 'default', flexWrap: 'wrap' }}>
               <div className={'lztile ' + (p.status === 'aprovado' ? 'suit-valid' : p.status === 'pendente' ? 'suit-avaliar' : 'suit-restrita')}>
                 <IconUsers size={20} />
               </div>
@@ -150,6 +171,10 @@ export default function CommunityModal({ user, points, draft, onDraftDone, onClo
                 </div>
               </div>
               <button className="btn xs sec" onClick={() => onFocus(p)} title="Centralizar no mapa">mapa</button>
+              <button className={'btn xs ' + (shown ? '' : 'sec')} onClick={() => setOpenPhotos(shown ? null : p.id)}
+                title="Fotos do local">
+                <IconCamera size={12} /> {p.photo_count > 0 ? p.photo_count : ''}
+              </button>
               {isAdmin && p.status === 'pendente' && (
                 <>
                   <button className="btn xs" onClick={() => review(p, 'aprovado')} title="Validar: entra na base com a cor padrão">
@@ -163,6 +188,11 @@ export default function CommunityModal({ user, points, draft, onDraftDone, onClo
               )}
               {canDelete(p) && (
                 <button className="btn xs warn" onClick={() => remove(p)} title="Excluir"><IconX size={12} /></button>
+              )}
+              {shown && (
+                <div style={{ flexBasis: '100%', marginTop: 4 }}>
+                  <LzPhotoStrip point={p} user={user} onChanged={refresh} />
+                </div>
               )}
             </div>
           )

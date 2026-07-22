@@ -57,7 +57,17 @@ Setup: criar o bot no @BotFather, definir `TELEGRAM_BOT_TOKEN` e `BOT_LINK_CODE`
 
 ## Pontos de pouso da comunidade
 
-Usuários logados podem sugerir locais onde a equipe já pousou (campo de futebol, praça, pátio de prefeitura…) pelo botão **Comunidade** no mapa: clica-se no local (coordenadas ajustáveis à mão no formulário) e a sugestão aparece para todos como um **H âmbar tracejado** — deixando claro que foi adicionada por usuário e ainda não validada. Quando um **admin valida**, o ponto assume a cor padrão da base, passa a integrar o ranking de **áreas de pouso** perto da ocorrência (badge "Validada — pouso de rotina") e leva junto a observação operacional de quem sugeriu. Pontos rejeitados saem do mapa (o autor e o admin ainda os veem na lista). Não são helipontos homologados: reconhecimento visual pelo piloto continua obrigatório.
+Usuários logados podem sugerir locais onde a equipe já pousou (campo de futebol, praça, pátio de prefeitura…) pelo botão **Comunidade** no mapa: clica-se no local (coordenadas ajustáveis à mão no formulário) e a sugestão aparece para todos como um **H âmbar tracejado** — deixando claro que foi adicionada por usuário e ainda não validada. Quando um **admin valida**, o ponto assume a cor padrão da base, passa a integrar o ranking de **áreas de pouso** perto da ocorrência (badge "Validada — pouso de rotina") e leva junto a observação operacional de quem sugeriu. Pontos rejeitados saem do mapa (o autor e o admin ainda os veem na lista). Cada ponto aceita **fotos do local** (seção seguinte). Não são helipontos homologados: reconhecimento visual pelo piloto continua obrigatório.
+
+## Fotos do ponto de pouso — "como o local é"
+
+Todo ponto da comunidade aceita **fotos do local**: quem já pousou fotografa e quem for pousar depois vê o terreno antes de chegar. **Tocar no marcador** no mapa abre o ponto com as fotos (marcadores com foto ganham um selo de câmera); dá para anexar também pela lista em **Comunidade**, e logo após cadastrar um ponto o app já oferece a câmera — é o momento em que a equipe ainda está no local. No celular o botão abre a câmera traseira direto (`capture="environment"`).
+
+Qualquer usuário logado anexa (até **12 fotos por ponto**, com legenda opcional do tipo "aproximação pelo norte, fios na cerca"); excluir, só quem enviou ou o admin. Apagar o ponto apaga as fotos junto.
+
+A imagem é **reduzida no próprio navegador** antes de subir (lado maior 1280 px, JPEG recomprimido até <500 kB — ver [`src/lib/photo.js`](src/lib/photo.js)): cabe no limite padrão de corpo do nginx sem mudar a configuração do servidor e economiza dado do 4G a bordo. Os bytes ficam no Postgres (`lz_photo`), então entram no backup do banco e sobrevivem ao deploy, que faz `rsync --delete` em `server/`. A API aceita só JPEG/WebP/PNG (SVG é recusado — vetor de XSS) e serve as imagens autenticadas, em `/api/community-lz/:id/photos/:pid`.
+
+> As fotos são referência da equipe e envelhecem (obra, cerca nova, mato alto) — reconhecimento visual pelo piloto continua obrigatório. Não fotografe pacientes nem nada que identifique a vítima (LGPD).
 
 ## Primeiro uso — calibrar (5 min)
 
