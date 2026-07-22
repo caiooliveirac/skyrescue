@@ -55,6 +55,19 @@ Botão **Grupo da missão** no card Registro: salva o caso e o bot posta no grup
 
 Setup: criar o bot no @BotFather, definir `TELEGRAM_BOT_TOKEN` e `BOT_LINK_CODE` no `.env.production` do servidor, adicionar o bot ao grupo e enviar `/vincular <código>`. Sem token, o servidor roda em **dry-run** (mensagens só no log). Comando `/caso` no grupo repete o briefing da missão ativa.
 
+**Menu de comandos.** Os comandos são registrados no Telegram (`setMyCommands`) quando o serviço sobe, então aparecem sozinhos no menu **/** do campo de digitação — com escopos separados: o grupo da operação vê só o que se usa em missão, e `/vincular` (instalação) fica na conversa privada, para ninguém rebobinar o vínculo do grupo no meio de um acionamento. O briefing e o `/ajuda` trazem um menu de botões com as mesmas ações.
+
+| Comando | O que faz |
+|---|---|
+| `/caso` | briefing da missão ativa |
+| `/tempos` | horários já marcados e qual é o próximo marco |
+| `/goa` | onde a aeronave está agora, distância e ETE do ponto de encontro |
+| `/lz` | checklist do ponto de encontro + coordenadas, com o botão "LZ SEGURA" |
+| `/passagem` | cobra a passagem do caso, com o botão "Passagem feita" |
+| `/ajuda` | menu do bot |
+
+Sem missão ativa todos respondem que não há missão em vez de inventar dados — é o estado do grupo na maior parte do tempo. `/goa` distingue os três estados do rastreamento (nunca reportou · sinal velho · em voo). Coberto por `node server/scripts/test-menu.js`.
+
 **Uma instância por token.** Dois servidores rodando a API com o mesmo `TELEGRAM_BOT_TOKEN` derrubam o long polling um do outro (`409 Conflict`) e o bot fica mudo. Ao migrar de servidor, desative o serviço antigo e remova o token do `.env` dele antes de subir o novo.
 
 **Missão fantasma — o bot nunca fala de um caso velho.** A missão só sairia de "ativa" quando alguém marca *Aeronave liberada*, e no plantão isso falha (fim de turno, aba fechada, missão abortada): a missão ficava ativa para sempre e dias depois o bot voltava a falar dela. Três defesas independentes, em `server/src/telegram.js`:
