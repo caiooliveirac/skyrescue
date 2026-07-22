@@ -85,6 +85,54 @@ const MILESTONE_BY_ID = Object.fromEntries(MILESTONES.map((m) => [m.id, m.label]
 // ponto de encontro da missão: LZ escolhida, senão a própria cena
 const meetPoint = (snap) => snap?.lzPoint || (snap?.scene ? { name: 'Cena', ...snap.scene } : null)
 
+// ---------- missão ativa: nunca uma missão fantasma ----------
+// mission_chat.status só sai de 'ativa' quando alguém marca "Aeronave
+// liberada". No plantão real isso falha o tempo todo (fim de turno, aba
+// fechada, missão abortada) e a missão fica ativa para sempre — dias depois o
+// bot volta a falar dela. Aconteceu: em 21/07/2026 a missão de 14/07 ainda
+// estava 'ativa' e era o alvo do próximo /caso e dos avisos de deslocamento.
+//
+// Três defesas independentes, porque uma só sempre falha:
+//   1. TTL na consulta — fora da janela o bot se cala, mesmo que a varredura
+//      não tenha rodado (defesa que não depende de nada estar de pé);
+//   2. varredura periódica que encerra as órfãs (impede de persistir);
+//   3. abrir missão nova encerra as anteriores (só existe uma aeronave).
+// Um voo aeromédico não passa de ~1 h; 12 h é folga para o caso de o marco
+// final vir atrasado.
+const MISSION_TTL_H = Number(process.env.MISSION_TTL_HOURS) || 12
+// alvo a mais de 250 km não é desta missão (RMS de Salvador cabe em ~150 km):
+// evita ETE absurdo se um caso antigo escapar das defesas acima
+const MAX_ENROUTE_KM = 250
+
+// a missão corrente do grupo — a mais recente ainda dentro do TTL
+export async function currentMission() {
+  const { rows } = await query(
+    `SELECT c.id, c.snapshot, m.case_id, m.chat_id, m.last_pos_post_at, m.near_alerted
+       FROM mission_chat m JOIN cases c ON c.id = m.case_id
+      WHERE m.status = 'ativa' AND m.created_at > now() - make_interval(hours => $1)
+      ORDER BY m.created_at DESC LIMIT 1`,
+    [MISSION_TTL_H]
+  )
+  return rows[0] || null
+}
+
+// encerra em silêncio as missões que ninguém fechou (log, sem ruído no grupo)
+export async function sweepStaleMissions() {
+  try {
+    const { rows } = await query(
+      `UPDATE mission_chat SET status = 'encerrada'
+        WHERE status = 'ativa' AND created_at < now() - make_interval(hours => $1)
+        RETURNING case_id`,
+      [MISSION_TTL_H]
+    )
+    if (rows.length) {
+      console.log(`[bot] ${rows.length} missão(ões) encerrada(s) por inatividade (>${MISSION_TTL_H}h): caso(s) ${rows.map((r) => r.case_id).join(', ')}`)
+    }
+  } catch (e) {
+    console.error('[bot] sweepStaleMissions:', e.message)
+  }
+}
+
 // ---------- mensagens compostas ----------
 function briefingHtml(caseRow, snap) {
   const L = []
@@ -131,12 +179,19 @@ const HANDOVER_HTML = [
 export async function notifyMission(caseRow, snap, user) {
   const chatId = await boundChat()
   if (!chatId) throw new Error('grupo não vinculado — adicione o bot ao grupo e envie /vincular <código>')
+  // o GOA é uma aeronave só: abrir uma missão fecha qualquer outra ainda
+  // aberta, para o rastreamento nunca mirar o ponto de encontro errado
+  await query(`UPDATE mission_chat SET status = 'encerrada' WHERE status = 'ativa' AND case_id <> $1`, [caseRow.id])
   await query(
     `INSERT INTO mission_chat (case_id, chat_id, created_by) VALUES ($1,$2,$3)
-     ON CONFLICT (case_id) DO UPDATE SET status = 'ativa', chat_id = EXCLUDED.chat_id`,
+     ON CONFLICT (case_id) DO UPDATE SET
+       status = 'ativa', chat_id = EXCLUDED.chat_id, created_at = now(),
+       last_pos_post_at = NULL, near_alerted = FALSE`,
     [caseRow.id, chatId, user?.id || null]
   )
-  await send(chatId, briefingHtml(caseRow, snap))
+  // o briefing já vem com o menu: é a primeira mensagem da missão e onde a
+  // equipe olha primeiro
+  await send(chatId, briefingHtml(caseRow, snap), { reply_markup: MENU_KEYBOARD })
   if (meetPoint(snap)) {
     await send(chatId, LZ_PREP_HTML, {
       reply_markup: { inline_keyboard: [[{ text: '✅ LZ SEGURA', callback_data: `lz:${caseRow.id}` }]] },
@@ -183,7 +238,7 @@ async function closeMission(caseId) {
 const POS_FRESH_MS = 90_000
 const POS_CADENCE_MS = 5 * 60_000
 
-async function enrouteTick() {
+export async function enrouteTick() {
   try {
     const { rows: pos } = await query(
       `SELECT lat, lon, gs_kmh, reported_at FROM aircraft_position WHERE aircraft_id = 'goa'`
@@ -192,18 +247,13 @@ async function enrouteTick() {
     if (!p || Date.now() - new Date(p.reported_at).getTime() > POS_FRESH_MS) return
     if (!(p.gs_kmh > 40)) return
 
-    const { rows: missions } = await query(
-      `SELECT m.case_id, m.chat_id, m.last_pos_post_at, m.near_alerted, c.snapshot
-         FROM mission_chat m JOIN cases c ON c.id = m.case_id
-        WHERE m.status = 'ativa'
-        ORDER BY m.created_at DESC LIMIT 1`
-    )
-    const m = missions[0]
+    const m = await currentMission()
     if (!m) return
     const mp = meetPoint(m.snapshot)
     if (!mp) return
 
     const distKm = haversineKm(p, mp)
+    if (distKm > MAX_ENROUTE_KM) return
     const eteMin = (distKm / p.gs_kmh) * 60
     const near = eteMin <= 2 || distKm <= 4
 
@@ -219,13 +269,128 @@ async function enrouteTick() {
   }
 }
 
+// ---------- comandos: menu do "/" e menu clicável ----------
+// Os comandos aparecem sozinhos no menu "/" do Telegram porque são
+// registrados via setMyCommands no boot. Escopos separados: o grupo da
+// operação vê só o que se usa em missão; /vincular (instalação) fica na
+// conversa privada, para não convidar ninguém a rebobinar o vínculo do grupo
+// no meio de um acionamento.
+export const CMDS_GRUPO = [
+  { command: 'caso', description: 'Briefing da missão ativa' },
+  { command: 'tempos', description: 'Horários já marcados e o que falta' },
+  { command: 'goa', description: 'Onde está a aeronave agora' },
+  { command: 'lz', description: 'Checklist do ponto de encontro' },
+  { command: 'passagem', description: 'Cobrar a passagem do caso' },
+  { command: 'ajuda', description: 'Menu do bot' },
+]
+const CMDS_PRIVADO = [...CMDS_GRUPO, { command: 'vincular', description: 'Vincular este chat ao SkyRescue' }]
+
+async function registerCommands() {
+  await tg('setMyCommands', { commands: CMDS_GRUPO, scope: { type: 'all_group_chats' } })
+  await tg('setMyCommands', { commands: CMDS_PRIVADO, scope: { type: 'all_private_chats' } })
+}
+
+const AJUDA_HTML = [
+  '🚁 <b>SkyRescue — bot da missão</b>',
+  'Eu falo sozinho nos momentos que importam: briefing ao acionar o grupo,',
+  'cada horário marcado, avisos de deslocamento e o encerramento.',
+  '',
+  'Toque no menu abaixo ou digite <b>/</b> para ver os comandos.',
+  '',
+  '⚠️ <i>Sem dados pessoais do paciente neste grupo.</i>',
+].join('\n')
+
+const MENU_KEYBOARD = {
+  inline_keyboard: [
+    [{ text: '📋 Missão', callback_data: 'menu:caso' }, { text: '🕐 Tempos', callback_data: 'menu:tempos' }],
+    [{ text: '🚁 Onde está o GOA', callback_data: 'menu:goa' }],
+    [{ text: '🤝 Ponto de encontro', callback_data: 'menu:lz' }, { text: '🩺 Passagem', callback_data: 'menu:passagem' }],
+  ],
+}
+
+const SEM_MISSAO = 'Nenhuma missão ativa no momento. O briefing chega aqui quando a regulação acionar o grupo.'
+
+// horários marcados + o próximo marco esperado
+function temposHtml(snap, caseId) {
+  const ev = snap?.events || {}
+  const marcados = MILESTONES.filter((m) => ev[m.id])
+  const proximo = MILESTONES.find((m) => !ev[m.id])
+  const L = [`🕐 <b>Cronologia — Caso ${esc(snap?.id || caseId)}</b>`]
+  L.push(marcados.length
+    ? marcados.map((m) => `• ${m.label}: <b>${hhmm(ev[m.id])}</b>`).join('\n')
+    : '<i>Nenhum horário marcado ainda.</i>')
+  if (proximo) L.push(`\n⏭️ Próximo: <b>${proximo.label}</b>`)
+  return L.join('\n')
+}
+
+// posição da aeronave: só o rastreamento sabe, e ele pode estar mudo
+async function goaHtml(m) {
+  const { rows } = await query(
+    `SELECT lat, lon, gs_kmh, reported_at FROM aircraft_position WHERE aircraft_id = 'goa'`
+  )
+  const p = rows[0]
+  if (!p) return '🚁 Sem rastreamento: o modo navegação não foi aberto nesta missão.'
+  const idadeMin = Math.round((Date.now() - new Date(p.reported_at).getTime()) / 60000)
+  if (Date.now() - new Date(p.reported_at).getTime() > POS_FRESH_MS) {
+    return `🚁 Sem sinal há ~${idadeMin} min (tablet fechado ou sem cobertura). Última posição: <a href="${mapsLink(p)}">Maps</a>.`
+  }
+  const L = [`🚁 <b>GOA agora</b> — <a href="${mapsLink(p)}">Maps</a> · ${Math.round(p.gs_kmh || 0)} km/h`]
+  const mp = m && meetPoint(m.snapshot)
+  if (mp) {
+    const distKm = haversineKm(p, mp)
+    const ete = p.gs_kmh > 40 ? ` · ETE ~${Math.max(1, Math.round((distKm / p.gs_kmh) * 60))} min` : ''
+    L.push(`Distância do ponto de encontro: <b>${distKm < 10 ? distKm.toFixed(1) : Math.round(distKm)} km</b>${ete}`)
+  }
+  return L.join('\n')
+}
+
+// um handler por comando: usado tanto pelo texto "/x" quanto pelos botões do
+// menu, para os dois caminhos nunca divergirem
+export const HANDLERS = {
+  ajuda: async (chatId) => { await send(chatId, AJUDA_HTML, { reply_markup: MENU_KEYBOARD }) },
+
+  caso: async (chatId) => {
+    const m = await currentMission()
+    await send(chatId, m ? briefingHtml(m, m.snapshot || {}) : SEM_MISSAO)
+  },
+
+  tempos: async (chatId) => {
+    const m = await currentMission()
+    await send(chatId, m ? temposHtml(m.snapshot, m.case_id) : SEM_MISSAO)
+  },
+
+  goa: async (chatId) => {
+    await send(chatId, await goaHtml(await currentMission()))
+  },
+
+  lz: async (chatId) => {
+    const m = await currentMission()
+    if (!m) return void (await send(chatId, SEM_MISSAO))
+    const mp = meetPoint(m.snapshot)
+    const extra = mp
+      ? `\n\n🤝 <b>${esc(mp.name)}</b> — <a href="${mapsLink(mp)}">Maps</a>\n✈️ <code>${fmtDDM(mp)}</code>`
+      : ''
+    await send(chatId, LZ_PREP_HTML + extra, {
+      reply_markup: { inline_keyboard: [[{ text: '✅ LZ SEGURA', callback_data: `lz:${m.case_id}` }]] },
+    })
+  },
+
+  passagem: async (chatId) => {
+    const m = await currentMission()
+    if (!m) return void (await send(chatId, SEM_MISSAO))
+    await send(chatId, HANDOVER_HTML, {
+      reply_markup: { inline_keyboard: [[{ text: '✅ Passagem feita', callback_data: `pass:${m.case_id}` }]] },
+    })
+  },
+}
+
 // ---------- comandos e botões no grupo (long polling) ----------
 async function onUpdate(u) {
   const msg = u.message
   if (msg?.text) {
     const [cmd, arg] = msg.text.trim().split(/\s+/)
-    const bare = cmd.split('@')[0] // /vincular@NomeDoBot
-    if (bare === '/vincular') {
+    const bare = cmd.split('@')[0].replace(/^\//, '') // /vincular@NomeDoBot
+    if (bare === 'vincular') {
       if (!LINK_CODE || arg !== LINK_CODE) {
         await send(msg.chat.id, '❌ Código inválido. Use <code>/vincular &lt;código&gt;</code> (o código está no servidor, BOT_LINK_CODE).')
         return
@@ -235,26 +400,27 @@ async function onUpdate(u) {
          ON CONFLICT (id) DO UPDATE SET chat_id = EXCLUDED.chat_id, title = EXCLUDED.title, linked_at = now()`,
         [msg.chat.id, msg.chat.title || null]
       )
-      await send(msg.chat.id, '✅ Grupo vinculado ao SkyRescue. Os briefings de missão chegam aqui.')
-    } else if (bare === '/caso') {
-      const { rows } = await query(
-        `SELECT c.id, c.snapshot FROM mission_chat m JOIN cases c ON c.id = m.case_id
-          WHERE m.status = 'ativa' ORDER BY m.created_at DESC LIMIT 1`
-      )
-      if (!rows[0]) await send(msg.chat.id, 'Nenhuma missão ativa no momento.')
-      else await send(msg.chat.id, briefingHtml(rows[0], rows[0].snapshot || {}))
+      await send(msg.chat.id, '✅ Grupo vinculado ao SkyRescue. Os briefings de missão chegam aqui.', { reply_markup: MENU_KEYBOARD })
+      return
     }
+    // /start abre o menu (é o que todo bot faz e o que o usuário espera)
+    const handler = HANDLERS[bare === 'start' ? 'ajuda' : bare]
+    if (handler) await handler(msg.chat.id)
     return
   }
   const cb = u.callback_query
   if (cb?.data) {
-    const [kind, caseId] = cb.data.split(':')
+    const [kind, arg] = cb.data.split(':')
     const who = [cb.from?.first_name, cb.from?.last_name].filter(Boolean).join(' ') || cb.from?.username || 'alguém'
-    const col = kind === 'pass' ? 'handover' : kind === 'lz' ? 'lz_ready' : null
-    if (col) {
-      await query(`UPDATE mission_chat SET ${col}_at = now(), ${col}_by = $2 WHERE case_id = $1`, [caseId, who])
-      const label = kind === 'pass' ? 'Passagem do caso confirmada' : 'LZ segura confirmada'
-      await send(cb.message.chat.id, `✅ <b>${label}</b> — por ${esc(who)} às ${hhmm(Date.now())}`)
+    if (kind === 'menu') {
+      await HANDLERS[arg]?.(cb.message.chat.id)
+    } else {
+      const col = kind === 'pass' ? 'handover' : kind === 'lz' ? 'lz_ready' : null
+      if (col) {
+        await query(`UPDATE mission_chat SET ${col}_at = now(), ${col}_by = $2 WHERE case_id = $1`, [arg, who])
+        const label = kind === 'pass' ? 'Passagem do caso confirmada' : 'LZ segura confirmada'
+        await send(cb.message.chat.id, `✅ <b>${label}</b> — por ${esc(who)} às ${hhmm(Date.now())}`)
+      }
     }
     await tg('answerCallbackQuery', { callback_query_id: cb.id })
   }
@@ -281,7 +447,14 @@ export function startBot() {
     console.log('[bot] TELEGRAM_BOT_TOKEN ausente — modo dry-run (mensagens no console, sem polling)')
   } else {
     pollLoop()
+    // o menu "/" do Telegram é servidor-side: registrar no boot basta para os
+    // comandos aparecerem sozinhos para todo mundo do grupo
+    registerCommands()
+      .then(() => console.log(`[bot] ${CMDS_GRUPO.length} comandos registrados no menu do Telegram`))
+      .catch((e) => console.error('[bot] setMyCommands:', e.message))
     console.log('[bot] Telegram ativo (long polling)')
   }
+  sweepStaleMissions() // limpa o que ficou aberto enquanto o serviço esteve fora
   setInterval(enrouteTick, 60_000).unref()
+  setInterval(sweepStaleMissions, 15 * 60_000).unref()
 }

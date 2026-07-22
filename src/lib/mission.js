@@ -150,19 +150,24 @@ export function combinedWeatherStatus(wScene, wBase) {
 }
 
 // ---------------- Janela diurna (VFR) ----------------
-export function daylightCheck({ sunsetISO, airTotalMin, nightAllowed, marginMin }) {
+// `refMs` é a hora de referência da avaliação — a hora do acionamento, não a
+// hora em que a tela é redesenhada ou o registro é impresso. Sem essa âncora o
+// mesmo caso vira "inviável" só por ser reimpresso mais tarde.
+export function daylightCheck({ sunsetISO, airTotalMin, nightAllowed, marginMin, refMs }) {
   if (nightAllowed) return { status: 'ok', note: 'Operação noturna habilitada — verificar critérios específicos (LZ iluminada).' }
   if (!sunsetISO || airTotalMin == null) return { status: 'unknown', note: 'Sem dados de pôr do sol ou tempos.' }
+  const ref = new Date(refMs ?? Date.now())
   const sunset = new Date(sunsetISO)
-  const end = new Date(Date.now() + airTotalMin * 60000)
+  const end = new Date(ref.getTime() + airTotalMin * 60000)
   const slackMin = (sunset - end) / 60000
+  const base = `partida ~${fmtHM(ref)}`
   if (slackMin < marginMin) {
-    return { status: 'fail', sunset, end, slackMin, note: `Aeronave pousaria de volta na base ~${fmtHM(end)}, pôr do sol ${fmtHM(sunset)} (margem < ${marginMin} min).` }
+    return { status: 'fail', ref, sunset, end, slackMin, note: `${base}: aeronave pousaria de volta na base ~${fmtHM(end)}, pôr do sol ${fmtHM(sunset)} (margem < ${marginMin} min).` }
   }
   if (slackMin < marginMin + 40) {
-    return { status: 'warn', sunset, end, slackMin, note: `Janela apertada: retorno à base ~${fmtHM(end)}, pôr do sol ${fmtHM(sunset)}.` }
+    return { status: 'warn', ref, sunset, end, slackMin, note: `${base}: janela apertada — retorno à base ~${fmtHM(end)}, pôr do sol ${fmtHM(sunset)}.` }
   }
-  return { status: 'ok', sunset, end, slackMin, note: `Pôr do sol ${fmtHM(sunset)} — janela suficiente.` }
+  return { status: 'ok', ref, sunset, end, slackMin, note: `${base}: pôr do sol ${fmtHM(sunset)} — janela suficiente.` }
 }
 
 function fmtHM(d) {
