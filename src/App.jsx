@@ -12,9 +12,11 @@ import NavMode from './components/NavMode.jsx'
 import CommunityModal from './components/Community.jsx'
 import { LzPhotoModal } from './components/LzPhotos.jsx'
 import Checklist from './components/Checklist.jsx'
+import PatientForm from './components/PatientForm.jsx'
 import Tracking, { MILESTONES, MilestoneQuick } from './components/Tracking.jsx'
 import { sendEvent } from './lib/eventQueue.js'
 import { makeDraftSaver, readDraft, draftWorthKeeping } from './lib/draft.js'
+import { emptyPatient, readPatient, savePatient, clearPatient, openProntuario } from './lib/patient.js'
 import ConfigModal from './components/ConfigModal.jsx'
 import { DecisionStrip, TimePanel, WeatherPanel, LZPanel, AlertsPanel, GatesPanel, CoordReadout } from './components/Results.jsx'
 import {
@@ -36,6 +38,10 @@ export default function App({ user, onLogout }) {
   const [geoBusy, setGeoBusy] = useState(false)
   const [caseId, setCaseId] = useState('')
   const [notes, setNotes] = useState('')
+
+  // ficha do paciente (PII) — vive só no cliente, nunca no snapshot do servidor
+  const [patient, setPatient] = useState(emptyPatient)
+  const updatePatient = (k, v) => setPatient((p) => ({ ...p, [k]: v }))
 
   // checklist
   const [manualChecked, setManualChecked] = useState({})
@@ -558,8 +564,30 @@ export default function App({ user, onLogout }) {
       lateRef.current.applySnapshot?.(d.snapshot, d.dbId)
       setRestored({ at: d.at })
     }
+    // ficha do paciente: restaura a última do usuário e pré-preenche o
+    // médico regulador com o nome de quem está logado, se ainda vazio
+    const pp = readPatient(user?.id) || emptyPatient()
+    if (!pp.medico && user?.full_name) pp.medico = user.full_name
+    setPatient(pp)
     booted.current = true
   }, [user?.id])
+
+  // espelha a ficha do paciente no localStorage (chave própria, sem PII no
+  // servidor); grava na hora que a aba some, igual ao rascunho do caso
+  useEffect(() => {
+    if (!booted.current) return
+    savePatient(user?.id, patient)
+  }, [patient, user?.id])
+  useEffect(() => {
+    const flush = () => savePatient(user?.id, patient)
+    const onHide = () => { if (document.visibilityState === 'hidden') flush() }
+    document.addEventListener('visibilitychange', onHide)
+    window.addEventListener('pagehide', flush)
+    return () => {
+      document.removeEventListener('visibilitychange', onHide)
+      window.removeEventListener('pagehide', flush)
+    }
+  }, [patient, user?.id])
 
   // assinatura do que compõe o caso: muda => reagenda a gravação do rascunho
   const draftSig = JSON.stringify([
@@ -642,6 +670,10 @@ export default function App({ user, onLogout }) {
     // congela a avaliação na hora original do caso (casos antigos, sem refAt,
     // caem no ts da gravação)
     setCaseRefAt(c.refAt || c.ts || null); setRefSunset(c.sunsetISO || null)
+    // a PII do paciente não é gravada no caso; ao abrir outro caso a ficha
+    // é zerada (mantendo só o médico logado) para não anexar dados do
+    // paciente errado ao documento
+    setPatient(() => { const e = emptyPatient(); if (user?.full_name) e.medico = user.full_name; return e })
     setSaveFlash(false); setSaveErr('')
   }
 
@@ -681,9 +713,33 @@ export default function App({ user, onLogout }) {
     a.click()
   }
 
+  // Prontuário exportável: leva o contexto operacional JÁ calculado (score,
+  // tempos, destino, cronologia) para o médico não redigitar; a PII vem da
+  // ficha (patient) e não passa pelo servidor.
+  const exportProntuario = () => {
+    const hits = Object.values(score.perSection).flatMap((s) => s.hits)
+    const air = mission?.airTotal, gnd = mission?.ground?.total
+    const ctx = {
+      caseId,
+      sceneLabel: sceneLabel || '',
+      sceneCoords: scene ? `${fmtCoordsDDM(scene)} (dec ${fmtCoords(scene)})` : '',
+      destino: hospital ? destinoLabel() : '',
+      meio: rec ? (rec.key === 'blocked' ? 'Terrestre (aéreo inviável no momento)' : rec.key === 'green' ? 'Transporte terrestre' : 'Aeromédico (helicóptero)') : '',
+      justificativa: `Score SkyRescue ${score.total} pts — ${score.band.label}${gates.ok ? '' : ' · IMPEDITIVOS: ' + gates.fails.map((f) => f.label).join('; ')}`,
+      criterios: hits.join('; '),
+      tempos: air != null ? `Aéreo ${fmtMin(air)}${gnd != null ? ` · Terrestre ${fmtMin(gnd)}${mission.delta != null ? ` (Δ ${fmtMin(Math.abs(mission.delta))})` : ''}` : ''}` : '',
+      lz: lzPoint ? `${manualLz ? 'Manual' : lzPoint.name} — ${fmtCoordsDDM(lzPoint)}` : '',
+      cronologia: MILESTONES.map((m) => ({ label: m.label, time: events[m.id] ? new Date(events[m.id]).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '' })),
+      medico: user?.full_name || '',
+    }
+    openProntuario(patient, ctx)
+  }
+
   const newCase = () => {
     revGeoRef.current++
     draft.clear(); setRestored(null)
+    clearPatient(user?.id)
+    setPatient(() => { const e = emptyPatient(); if (user?.full_name) e.medico = user.full_name; return e })
     setDbId(null); setSaveFlash(false); setSaveErr('')
     setScene(null); setSceneLabel(''); setQ(''); setCaseId(''); setNotes(''); setGeoResults(null)
     setManualChecked({}); setAutoOverrides({}); setGateManual({}); setGateOverrides({})
@@ -794,6 +850,8 @@ export default function App({ user, onLogout }) {
             <h2>Observações da regulação</h2>
             <textarea rows={3} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="mecanismo, achados, decisão, contatos…" style={{ width: '100%' }} />
           </div>
+
+          <PatientForm patient={patient} onChange={updatePatient} />
         </div>
 
         {/* -------- coluna direita: mapa e operação -------- */}
@@ -943,7 +1001,8 @@ export default function App({ user, onLogout }) {
                 </button>
                 <button className="btn sec" onClick={() => setShowCases(true)}><IconFolder size={14} /> Casos ({cases.length})</button>
                 <button className="btn sec" onClick={copyResumo}><IconCopy size={14} /> Copiar resumo</button>
-                <button className="btn sec" onClick={() => window.print()}><IconPrint size={14} /> Imprimir</button>
+                <button className="btn sec" onClick={exportProntuario} title="Abre o prontuário do paciente em HTML para imprimir como PDF, anexar ao e-mail e assinar no gov.br"><IconPrint size={14} /> Prontuário (PDF)</button>
+                <button className="btn sec" onClick={() => window.print()}><IconPrint size={14} /> Registro</button>
                 <button className="btn sec" onClick={exportJSON}><IconDownload size={14} /> Exportar JSON</button>
               </div>
               {saveFlash && (
