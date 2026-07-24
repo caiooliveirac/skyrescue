@@ -52,6 +52,10 @@ CREATE TABLE IF NOT EXISTS cases (
   -- snapshot completo do app (fonte da verdade p/ reabrir o caso)
   snapshot         JSONB NOT NULL
 );
+-- qual ABA gravou por último. A tela ao vivo usa isto para não reaplicar em si
+-- mesma o próprio eco (e entrar em ping-pong de gravações com as outras telas)
+ALTER TABLE cases ADD COLUMN IF NOT EXISTS updated_by_client TEXT;
+
 CREATE INDEX IF NOT EXISTS cases_created_by_idx ON cases (created_by);
 CREATE INDEX IF NOT EXISTS cases_created_at_idx ON cases (created_at DESC);
 CREATE INDEX IF NOT EXISTS cases_ref_idx        ON cases (case_ref);
@@ -153,7 +157,7 @@ CREATE TABLE IF NOT EXISTS case_audit (
   id       BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   case_id  BIGINT,                               -- sem FK: preserva histórico após DELETE
   user_id  BIGINT REFERENCES users(id) ON DELETE SET NULL,
-  action   TEXT NOT NULL,                        -- 'create' | 'update' | 'delete'
+  action   TEXT NOT NULL,                        -- 'create' | 'update' | 'autosave' | 'delete'
   at       TIMESTAMPTZ NOT NULL DEFAULT now(),
   case_ref TEXT
 );

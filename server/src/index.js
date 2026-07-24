@@ -124,7 +124,7 @@ app.get('/api/cases/:id', requireAuth, async (req, res) => {
 // Resposta enxuta de propósito: isto roda a cada 5 s por tela aberta.
 app.get('/api/cases/:id/live', requireAuth, async (req, res) => {
   const { rows } = await query(
-    `SELECT c.snapshot->'events' AS events, c.updated_at,
+    `SELECT c.snapshot, c.updated_at, c.updated_by_client,
             uu.full_name AS updated_by_name, uu.username AS updated_by_username,
             m.status AS mission_status
        FROM cases c
@@ -135,12 +135,78 @@ app.get('/api/cases/:id/live', requireAuth, async (req, res) => {
   )
   if (!rows[0]) return res.status(404).json({ error: 'caso não encontrado' })
   const r = rows[0]
-  res.json({
-    events: r.events || {},
+  const base = {
     updatedAt: r.updated_at,
     updatedBy: r.updated_by_name || r.updated_by_username || null,
+    updatedByClient: r.updated_by_client || null,
+    // o status do grupo muda sem tocar no caso (o bot encerra a missão por
+    // conta própria), então vai SEMPRE, mesmo na resposta curta
     missionStatus: r.mission_status || null,
-  })
+  }
+  // nada mudou desde a última consulta desta tela: responde curto. Numa
+  // ocorrência de 40 min são ~480 consultas por tela aberta, e a esmagadora
+  // maioria não tem novidade nenhuma para contar.
+  if (req.query.since && String(r.updated_at.toISOString()) === String(req.query.since)) {
+    return res.json({ ...base, unchanged: true })
+  }
+  res.json({ ...base, snapshot: r.snapshot || {} })
+})
+
+// Gravação POR CAMPO da tela ao vivo.
+//
+// O PUT grava o snapshot inteiro: com duas pessoas na mesma ocorrência, quem
+// gravasse por último apagava o que a outra tinha acabado de escrever — a
+// médica escreve a observação, o regulador troca o destino 1 s depois, e a
+// observação some. Aqui cada tela manda só os campos que ELA mudou, e o merge
+// é do servidor, com a linha travada para dois PATCH simultâneos não se
+// perderem. Mesma ideia do POST /events, que já grava um marco de cada vez.
+app.patch('/api/cases/:id/live', requireAuth, async (req, res) => {
+  const fields = req.body?.fields
+  if (!fields || typeof fields !== 'object' || Array.isArray(fields))
+    return res.status(400).json({ error: 'campos obrigatórios' })
+  // os marcos têm caminho próprio (POST /events), que é quem avisa o grupo
+  delete fields.events
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const cur = await client.query('SELECT snapshot, case_ref FROM cases WHERE id = $1 FOR UPDATE', [req.params.id])
+    if (!cur.rows[0]) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'caso não encontrado' }) }
+    const merged = { ...(cur.rows[0].snapshot || {}), ...fields }
+    const p = promote(merged)
+    const { rows } = await client.query(
+      `UPDATE cases SET
+         case_ref=$2, updated_by=$3, updated_at=now(), scene_label=$4, scene_lat=$5, scene_lon=$6,
+         score_total=$7, score_band=$8, recommendation=$9, hospital_name=$10,
+         air_total_min=$11, ground_total_min=$12, delta_min=$13, gates_ok=$14, notes=$15,
+         snapshot=$16, updated_by_client=$17
+       WHERE id=$1 RETURNING updated_at`,
+      [req.params.id, p.case_ref, req.user.id, p.scene_label, p.scene_lat, p.scene_lon,
+       p.score_total, p.score_band, p.recommendation, p.hospital_name,
+       p.air_total_min, p.ground_total_min, p.delta_min, p.gates_ok, p.notes, merged,
+       typeof req.body?.clientId === 'string' ? req.body.clientId.slice(0, 40) : null]
+    )
+    // auditoria coalescida: a tela grava sozinha o tempo todo e uma linha por
+    // gravação afogaria o rastro de quem fez o quê
+    const recente = await client.query(
+      `SELECT 1 FROM case_audit
+        WHERE case_id = $1 AND user_id = $2 AND at > now() - interval '5 minutes' LIMIT 1`,
+      [req.params.id, req.user.id]
+    )
+    if (!recente.rows[0]) {
+      await client.query(
+        'INSERT INTO case_audit (case_id, user_id, action, case_ref) VALUES ($1,$2,$3,$4)',
+        [req.params.id, req.user.id, 'autosave', p.case_ref]
+      )
+    }
+    await client.query('COMMIT')
+    res.json({ ok: true, updated_at: rows[0].updated_at })
+  } catch (e) {
+    await client.query('ROLLBACK')
+    console.error('patch case:', e)
+    res.status(500).json({ error: 'erro ao gravar alteração' })
+  } finally {
+    client.release()
+  }
 })
 
 app.post('/api/cases', requireAuth, async (req, res) => {
@@ -155,12 +221,14 @@ app.post('/api/cases', requireAuth, async (req, res) => {
       `INSERT INTO cases
          (case_ref, created_by, updated_by, scene_label, scene_lat, scene_lon,
           score_total, score_band, recommendation, hospital_name,
-          air_total_min, ground_total_min, delta_min, gates_ok, notes, snapshot)
-       VALUES ($1,$2,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+          air_total_min, ground_total_min, delta_min, gates_ok, notes, snapshot,
+          updated_by_client)
+       VALUES ($1,$2,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
        RETURNING id, created_at`,
       [p.case_ref, req.user.id, p.scene_label, p.scene_lat, p.scene_lon,
        p.score_total, p.score_band, p.recommendation, p.hospital_name,
-       p.air_total_min, p.ground_total_min, p.delta_min, p.gates_ok, p.notes, snapshot]
+       p.air_total_min, p.ground_total_min, p.delta_min, p.gates_ok, p.notes, snapshot,
+       typeof req.body?.clientId === 'string' ? req.body.clientId.slice(0, 40) : null]
     )
     await client.query(
       'INSERT INTO case_audit (case_id, user_id, action, case_ref) VALUES ($1,$2,$3,$4)',
@@ -202,11 +270,13 @@ app.put('/api/cases/:id', requireAuth, async (req, res) => {
       `UPDATE cases SET
          case_ref=$2, updated_by=$3, updated_at=now(), scene_label=$4, scene_lat=$5, scene_lon=$6,
          score_total=$7, score_band=$8, recommendation=$9, hospital_name=$10,
-         air_total_min=$11, ground_total_min=$12, delta_min=$13, gates_ok=$14, notes=$15, snapshot=$16
+         air_total_min=$11, ground_total_min=$12, delta_min=$13, gates_ok=$14, notes=$15, snapshot=$16,
+         updated_by_client=$17
        WHERE id=$1 RETURNING id, updated_at`,
       [req.params.id, p.case_ref, req.user.id, p.scene_label, p.scene_lat, p.scene_lon,
        p.score_total, p.score_band, p.recommendation, p.hospital_name,
-       p.air_total_min, p.ground_total_min, p.delta_min, p.gates_ok, p.notes, snapshot]
+       p.air_total_min, p.ground_total_min, p.delta_min, p.gates_ok, p.notes, snapshot,
+       typeof req.body?.clientId === 'string' ? req.body.clientId.slice(0, 40) : null]
     )
     if (!rows[0]) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'caso não encontrado' }) }
     await client.query(

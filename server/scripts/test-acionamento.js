@@ -39,6 +39,17 @@ async function main() {
   await query(`INSERT INTO bot_chat (id, chat_id, title) VALUES (1, -1, 'grupo de teste')
                ON CONFLICT (id) DO UPDATE SET chat_id = -1`)
   await query(`UPDATE mission_chat SET status = 'encerrada'`)
+  // O banco de dev é compartilhado com os testes de navegador: qualquer caso
+  // que tenha sobrado com 'decisao' marcado e sem missão seria ADOTADO como
+  // missão órfã e faria as asserções de adoção falharem por contaminação. Dar
+  // a eles uma missão encerrada os tira do caminho sem apagar nada.
+  await query(
+    `INSERT INTO mission_chat (case_id, chat_id, status)
+     SELECT c.id, -1, 'encerrada' FROM cases c
+      LEFT JOIN mission_chat m ON m.case_id = c.id
+      WHERE m.case_id IS NULL AND c.snapshot->'events'->>'decisao' IS NOT NULL
+     ON CONFLICT (case_id) DO NOTHING`
+  )
 
   console.log('=== o marco do acionamento abre o grupo (o bug de 24/07) ===')
   const ts = Date.now()

@@ -30,12 +30,17 @@ export const api = {
   // casos
   listCases: () => req('GET', '/cases'),
   getCase: (id) => req('GET', `/cases/${id}`),
-  createCase: (snapshot) => req('POST', '/cases', { snapshot }),
-  updateCase: (id, snapshot) => req('PUT', `/cases/${id}`, { snapshot }),
+  createCase: (snapshot, clientId) => req('POST', '/cases', { snapshot, clientId }),
+  updateCase: (id, snapshot, opts = {}) =>
+    req('PUT', `/cases/${id}`, { snapshot, clientId: opts.clientId }),
+  // gravação automática da tela ao vivo: só os campos que ESTA tela mudou, para
+  // duas pessoas na mesma ocorrência não apagarem o campo uma da outra
+  patchCase: (id, fields, clientId) =>
+    req('PATCH', `/cases/${id}/live`, { fields, clientId }),
   deleteCase: (id) => req('DELETE', `/cases/${id}`),
   notifyCase: (id) => req('POST', `/cases/${id}/notify`),
   saveEvent: (id, event, ts) => req('POST', `/cases/${id}/events`, { event, ts }),
-  liveCase: (id) => req('GET', `/cases/${id}/live`),
+  liveCase: (id, since) => req('GET', `/cases/${id}/live${since ? `?since=${encodeURIComponent(since)}` : ''}`),
   // pontos de pouso da comunidade
   listCommunityLz: () => req('GET', '/community-lz'),
   createCommunityLz: (p) => req('POST', '/community-lz', p),

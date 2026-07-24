@@ -97,6 +97,15 @@ export default function App({ user, onLogout }) {
     try { const { cases } = await api.listCases(); setCases(cases); setCasesErr('') }
     catch (e) { setCasesErr(e.message || 'falha ao carregar casos') }
   }
+  // a lista se atualiza sozinha: um caso aberto por outro regulador tem que
+  // aparecer sem ninguém recarregar a página. Cadência folgada (30 s) — aqui a
+  // novidade é "existe um caso novo", não segundos de diferença.
+  useEffect(() => {
+    const id = setInterval(refreshCases, 30_000)
+    const onVis = () => { if (!document.hidden) refreshCases() }
+    document.addEventListener('visibilitychange', onVis)
+    return () => { clearInterval(id); document.removeEventListener('visibilitychange', onVis) }
+  }, [])
 
   // pontos de pouso sugeridos pela comunidade (pendentes + validados)
   const [communityLz, setCommunityLz] = useState([])
@@ -507,9 +516,53 @@ export default function App({ user, onLogout }) {
   // cadência (marcos separados por minutos) ninguém percebe diferença para SSE.
   const eventsRef = useRef(events)
   useEffect(() => { eventsRef.current = events }, [events])
-  const lastSeenUpdRef = useRef(null)     // updated_at já explicado para esta tela
-  const [liveMsg, setLiveMsg] = useState(null)       // marcos vindos de outra tela
-  const [remoteChange, setRemoteChange] = useState(null) // resto do caso mudou
+  const sinceRef = useRef(null)      // updated_at da última resposta desta tela
+  const baseRef = useRef(null)       // último snapshot VINDO do servidor
+  const [liveMsg, setLiveMsg] = useState(null)   // o que chegou de outra tela
+
+  // Campos que uma PESSOA edita: os únicos que sincronizam e os únicos que
+  // disparam gravação. Os derivados (score, tempos, lzPoint, recomendação) cada
+  // tela recalcula da SUA Config — que é local do navegador. Se eles entrassem
+  // na comparação, duas telas com Config diferente se regravariam em ping-pong
+  // para sempre. Eles vão junto na gravação; só não mandam nela.
+  const CAMPOS_VIVOS = [
+    'id', 'scene', 'sceneLabel', 'notes', 'hospitalId', 'landingSel', 'ambEta',
+    'manualChecked', 'autoOverrides', 'gateManual', 'gateOverrides', 'lzSelId', 'manualLz',
+  ]
+  // calculados por cada tela a partir da SUA Config; viajam junto na gravação
+  // (alimentam a lista de casos e o relatório) mas nunca disparam gravação
+  const DERIVADOS = ['ts', 'hospitalName', 'lzPoint', 'landingName', 'scoreTotal',
+    'band', 'recommendation', 'gatesOk', 'mission']
+  const mesmo = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null)
+  // assinatura do que é AUTORAL no caso — muda => há o que gravar
+  const assinaturaViva = (s) =>
+    JSON.stringify([...CAMPOS_VIVOS.map((k) => s?.[k] ?? null), s?.events ?? null])
+
+  // aplica no formulário um campo que veio de outra tela
+  const SETTERS = {
+    id: setCaseId, scene: setScene, sceneLabel: setSceneLabel, notes: setNotes,
+    hospitalId: setHospitalId, landingSel: setLandingSel, ambEta: setAmbEta,
+    manualChecked: setManualChecked, autoOverrides: setAutoOverrides,
+    gateManual: setGateManual, gateOverrides: setGateOverrides,
+    lzSelId: setLzSelId, manualLz: setManualLz,
+  }
+  const ROTULOS = {
+    id: 'identificador', scene: 'local da ocorrência', sceneLabel: 'local da ocorrência',
+    notes: 'observações', hospitalId: 'hospital de destino', landingSel: 'ponto de desembarque',
+    ambEta: 'tempo da ambulância', manualChecked: 'pontuação', autoOverrides: 'pontuação',
+    gateManual: 'condições operacionais', gateOverrides: 'condições operacionais',
+    lzSelId: 'LZ escolhida', manualLz: 'LZ escolhida',
+  }
+  // vazio de cada campo: input controlado do React não aceita null
+  const VAZIO = {
+    id: '', sceneLabel: '', notes: '', ambEta: '', landingSel: 'auto',
+    hospitalId: cfg.hospitals[0]?.id || '', scene: null, lzSelId: null, manualLz: null,
+    manualChecked: {}, autoOverrides: {}, gateManual: {}, gateOverrides: {},
+  }
+  const clientIdRef = useRef(Math.random().toString(36).slice(2, 10) + Date.now().toString(36))
+  const ultimoSalvoRef = useRef(null)   // assinatura viva que já está no servidor
+  const enviandoRef = useRef(new Set()) // campos com gravação nossa em voo
+  const [autoSave, setAutoSave] = useState(null) // {at} | {err}
 
   // aba oculta consulta MENOS, nunca "nada": kiosk, webview e painel embutido
   // mentem no document.hidden (alguns dizem oculto com a tela na frente), e uma
@@ -525,33 +578,58 @@ export default function App({ user, onLogout }) {
       if (!forcar && Date.now() - ultimo < espera - 500) return
       ultimo = Date.now()
       try {
-        const r = await api.liveCase(dbId)
+        const r = await api.liveCase(dbId, sinceRef.current)
         if (!alive) return
         setMissionOpen(r.missionStatus || null)
+        if (r.unchanged) return
+        sinceRef.current = r.updatedAt
+        const remoto = r.snapshot || {}
+        const base = baseRef.current
+        baseRef.current = remoto
+        const chamou = []
+
+        // ---- marcos ----
         // um marco que esta tela acabou de tocar (POST em voo, fila offline ou
         // debounce aberto) é MAIS novo que o servidor — nunca sobrescrever
         const pend = pendingEvents(dbId)
-        const prev = eventsRef.current
-        const chegaram = Object.entries(r.events || {}).filter(
-          ([id, ts]) => ts && !pend.has(id) && !evtTimersRef.current[id] && prev[id] !== ts
+        const prevEv = eventsRef.current
+        const chegaram = Object.entries(remoto.events || {}).filter(
+          ([id, ts]) => ts && !pend.has(id) && !evtTimersRef.current[id] && prevEv[id] !== ts
         )
         if (chegaram.length) {
-          eventsRef.current = { ...prev, ...Object.fromEntries(chegaram) }
+          eventsRef.current = { ...prevEv, ...Object.fromEntries(chegaram) }
           setEvents((p) => ({ ...p, ...Object.fromEntries(chegaram) }))
-          const quais = chegaram
-            .map(([id, ts]) => `${MILESTONES.find((m) => m.id === id)?.label || id} ${fmtClock(ts)}`)
-            .join(' · ')
-          setLiveMsg({ quais, by: r.updatedBy })
+          chamou.push(...chegaram.map(([id, ts]) =>
+            `${MILESTONES.find((m) => m.id === id)?.label || id} ${fmtClock(ts)}`))
         }
-        // updated_at que os marcos não explicam: alguém mexeu no resto do caso
-        // (destino, LZ, pontuação). Não sobrescrevemos o formulário embaixo da
-        // mão de ninguém — avisamos e deixamos a decisão de recarregar com quem
-        // está na tela.
-        if (lastSeenUpdRef.current == null) {
-          lastSeenUpdRef.current = r.updatedAt
-        } else if (r.updatedAt !== lastSeenUpdRef.current) {
-          lastSeenUpdRef.current = r.updatedAt
-          if (!chegaram.length) setRemoteChange({ by: r.updatedBy })
+
+        // ---- o resto do caso ----
+        // Campo a campo, comparando com o último estado VINDO DO SERVIDOR (não
+        // com o nosso): assim uma alteração remota no destino não desfaz a
+        // marcação que este operador está fazendo no checklist, e a nossa
+        // própria gravação, já refletida na base, não se reaplica.
+        //
+        // O que NÃO fazer (e eu fiz): descartar a resposta inteira quando o
+        // último a gravar fomos nós. A mesma resposta carrega o que as OUTRAS
+        // telas gravaram antes — com duas pessoas editando ao mesmo tempo, cada
+        // tela via a si própria como última gravadora e engolia a mudança da
+        // outra em silêncio, ficando parada para sempre.
+        if (base) {
+          const tocados = []
+          for (const k of CAMPOS_VIVOS) {
+            if (enviandoRef.current.has(k)) continue // nossa gravação em voo
+            if (mesmo(remoto[k], base[k])) continue
+            SETTERS[k]?.(remoto[k] ?? VAZIO[k])
+            tocados.push(ROTULOS[k] || k)
+          }
+          if (tocados.length) chamou.push(...[...new Set(tocados)])
+        }
+
+        if (chamou.length) {
+          // o que veio de fora já está na tela; a assinatura passa a ser a do
+          // servidor para a gravação automática não devolver o mesmo conteúdo
+          ultimoSalvoRef.current = assinaturaViva(remoto)
+          setLiveMsg({ quais: chamou.join(' · '), by: r.updatedBy })
         }
       } catch (e) { /* camada opcional: sem rede a tela segue com o que tem */ }
     }
@@ -691,6 +769,51 @@ export default function App({ user, onLogout }) {
 
   const discardDraft = () => { draft.clear(); setRestored(null); lateRef.current.newCase?.() }
 
+  // ---------- gravação automática ----------
+  // Depois que o caso existe no servidor, ninguém mais precisa clicar
+  // "Atualizar caso": a ocorrência é acompanhada em várias telas ao mesmo tempo
+  // e o que uma pessoa marca só serve para as outras se chegar lá sozinho.
+  // Grava 1,5 s depois da última mudança AUTORAL (assinatura viva) — o que a
+  // tela recalcula sozinha não conta, senão gravaria a cada tique do relógio.
+  // A auditoria é coalescida no servidor (uma linha por usuário a cada 5 min).
+  useEffect(() => {
+    if (dbId == null || !booted.current) return
+    const snap = snapshot()
+    const sig = assinaturaViva(snap)
+    if (sig === ultimoSalvoRef.current) return
+    const t = setTimeout(async () => {
+      const base = baseRef.current || {}
+      // só o que ESTA tela mudou em relação ao que o servidor tem. Mandar o
+      // snapshot inteiro apagaria o campo que a outra tela acabou de escrever.
+      const alterados = {}
+      for (const k of CAMPOS_VIVOS) if (!mesmo(snap[k], base[k])) alterados[k] = snap[k] ?? null
+      if (!Object.keys(alterados).length) { ultimoSalvoRef.current = sig; return }
+      // os derivados (score, tempos, destino por extenso) acompanham: são o que
+      // alimenta a lista de casos e o relatório, e cada tela os recalcula ao abrir
+      for (const k of DERIVADOS) alterados[k] = snap[k] ?? null
+      const anterior = ultimoSalvoRef.current
+      ultimoSalvoRef.current = sig
+      const emVoo = Object.keys(alterados)
+      emVoo.forEach((k) => enviandoRef.current.add(k))
+      try {
+        await api.patchCase(dbId, alterados, clientIdRef.current)
+        // a base passa a conter o que gravamos — o poll não reaplica isto como
+        // novidade. O updated_at NÃO é adotado: a mesma linha pode ter mudanças
+        // de outras telas que ainda não vimos.
+        baseRef.current = { ...baseRef.current, ...alterados }
+        setAutoSave({ at: Date.now() })
+      } catch (e) {
+        // volta a assinatura: a próxima mudança tenta de novo, e o rascunho
+        // local já guardou tudo de qualquer forma
+        ultimoSalvoRef.current = anterior
+        setAutoSave({ err: e.message || String(e) })
+      } finally {
+        emVoo.forEach((k) => enviandoRef.current.delete(k))
+      }
+    }, 1500)
+    return () => clearTimeout(t)
+  }, [draftSig, dbId])
+
   // grava no servidor (Postgres). dbId != null => atualiza o mesmo caso.
   const saveCase = async () => {
     if (saving) return
@@ -700,14 +823,19 @@ export default function App({ user, onLogout }) {
     if (!caseId) setCaseId(snap.id)
     try {
       if (dbId != null) {
-        await api.updateCase(dbId, snap)
+        await api.updateCase(dbId, snap, { clientId: clientIdRef.current })
       } else {
-        const { id } = await api.createCase(snap)
+        const { id } = await api.createCase(snap, clientIdRef.current)
         setDbId(id)
       }
-      // a gravação é NOSSA: o poll não deve avisar "alterado por outra tela"
-      lastSeenUpdRef.current = null
-      setRemoteChange(null)
+      // a base absorve o que gravamos (o poll não reaplica isto como novidade).
+      // O `since` NÃO avança com gravação nossa: a mesma linha pode carregar
+      // mudança de outra tela que ainda não vimos, e a resposta curta
+      // ("unchanged") a esconderia para sempre.
+      sinceRef.current = null
+      ultimoSalvoRef.current = assinaturaViva(snap)
+      baseRef.current = snap
+      setAutoSave({ at: Date.now() })
       await refreshCases()
       setSaveFlash(true)
       setTimeout(() => setSaveFlash(false), 4000)
@@ -729,15 +857,16 @@ export default function App({ user, onLogout }) {
       if (!caseId) setCaseId(snap.id)
       let id = dbId
       if (id != null) {
-        await api.updateCase(id, snap)
+        await api.updateCase(id, snap, { clientId: clientIdRef.current })
       } else {
-        const r = await api.createCase(snap)
+        const r = await api.createCase(snap, clientIdRef.current)
         id = r.id
         setDbId(id)
         await refreshCases()
       }
-      lastSeenUpdRef.current = null
-      setRemoteChange(null)
+      sinceRef.current = null
+      ultimoSalvoRef.current = assinaturaViva(snap)
+      baseRef.current = snap
       await api.notifyCase(id)
       setMissionOpen('ativa')
       setNotifyMsg({ ok: true, text: 'Briefing enviado ao grupo da missão.' })
@@ -757,8 +886,11 @@ export default function App({ user, onLogout }) {
     setDbId(id ?? null)
     setMissionOpen(mission)
     setNotifyMsg(null)
-    // o poll ao vivo recomeça do zero para o caso que está entrando
-    lastSeenUpdRef.current = null; setLiveMsg(null); setRemoteChange(null)
+    // o poll ao vivo recomeça do zero para o caso que está entrando: o que
+    // acabou de ser carregado JÁ é o estado do servidor, não é novidade de fora
+    // e não precisa ser regravado
+    sinceRef.current = null; setLiveMsg(null); setAutoSave(null)
+    baseRef.current = c; ultimoSalvoRef.current = assinaturaViva(c)
     setCaseId(c.id || ''); setSceneLabel(c.sceneLabel || ''); setScene(c.scene)
     const hospOk = cfg.hospitals.some((h) => h.id === c.hospitalId)
     setHospitalId(hospOk ? c.hospitalId : cfg.hospitals[0]?.id || '')
@@ -841,7 +973,8 @@ export default function App({ user, onLogout }) {
     setPatient(() => { const e = emptyPatient(); if (user?.full_name) e.medico = user.full_name; return e })
     setDbId(null); setSaveFlash(false); setSaveErr('')
     setMissionOpen(null); setNotifyMsg(null)
-    lastSeenUpdRef.current = null; setLiveMsg(null); setRemoteChange(null)
+    sinceRef.current = null; baseRef.current = null; ultimoSalvoRef.current = null
+    setLiveMsg(null); setAutoSave(null)
     setScene(null); setSceneLabel(''); setQ(''); setCaseId(''); setNotes(''); setGeoResults(null)
     setManualChecked({}); setAutoOverrides({}); setGateManual({}); setGateOverrides({})
     setAmbEta(''); setLzSelId(null); setManualLz(null); setEvents({}); setLandingSel('auto')
@@ -1091,7 +1224,7 @@ export default function App({ user, onLogout }) {
               {liveMsg && (
                 <div className="alert ok" style={{ marginTop: 8, marginBottom: 0 }}>
                   <IconUsers size={15} style={{ flex: 'none', marginTop: 1 }} />
-                  <span>Marcado em outra tela: <b>{liveMsg.quais}</b>{liveMsg.by ? <> · por {liveMsg.by}</> : null}</span>
+                  <span>Atualizado em outra tela: <b>{liveMsg.quais}</b>{liveMsg.by ? <> · por {liveMsg.by}</> : null}</span>
                 </div>
               )}
             </div>
@@ -1101,8 +1234,10 @@ export default function App({ user, onLogout }) {
             <div className="card">
               <h2>
                 <IconSave size={14} /> Registro
-                <span className={'badge ' + (dbId != null ? 'ok' : '')} style={{ marginLeft: 'auto' }}>
-                  {dbId != null ? `Salvo · caso #${dbId}` : 'Não salvo'}
+                <span className={'badge ' + (dbId != null && !autoSave?.err ? 'ok' : autoSave?.err ? 'fail' : '')} style={{ marginLeft: 'auto' }}>
+                  {dbId == null ? 'Não salvo'
+                    : autoSave?.err ? `Caso #${dbId} · sem gravar`
+                    : `Caso #${dbId} · salvo ${autoSave?.at ? fmtClock(autoSave.at) : 'automaticamente'}`}
                 </span>
                 {missionOpen && (
                   <span className={'badge ' + (missionOpen === 'ativa' ? 'ok' : '')} style={{ marginLeft: 6 }}>
@@ -1111,7 +1246,10 @@ export default function App({ user, onLogout }) {
                 )}
               </h2>
               <div className="row">
-                <button className="btn" onClick={saveCase} disabled={saving}>{saving ? <span className="spin" /> : <IconSave size={14} />} {dbId != null ? 'Atualizar caso' : 'Salvar caso'}</button>
+                <button className="btn" onClick={saveCase} disabled={saving}
+                  title={dbId != null ? 'O caso já se grava sozinho a cada alteração; use para forçar agora' : 'Grava o caso no servidor'}>
+                  {saving ? <span className="spin" /> : <IconSave size={14} />} {dbId != null ? 'Salvar agora' : 'Salvar caso'}
+                </button>
                 <button className="btn sec" onClick={notifyGroup} disabled={notifying}
                   title={missionOpen === 'ativa'
                     ? 'Reenvia o briefing da missão ao grupo do Telegram'
@@ -1136,15 +1274,12 @@ export default function App({ user, onLogout }) {
                   <IconAlert size={15} style={{ flex: 'none', marginTop: 1 }} /> Falha ao salvar no servidor: {saveErr}
                 </div>
               )}
-              {remoteChange && (
-                <div className="alert warn" style={{ marginTop: 10, marginBottom: 0 }}>
+              {autoSave?.err && (
+                <div className="alert fail" style={{ marginTop: 10, marginBottom: 0 }}>
                   <IconAlert size={15} style={{ flex: 'none', marginTop: 1 }} />
                   <span>
-                    Este caso foi alterado em outra tela{remoteChange.by ? <> por <b>{remoteChange.by}</b></> : null} —
-                    os horários já estão sincronizados, o resto (destino, LZ, pontuação) não.{' '}
-                    <button className="btn xs sec" style={{ marginLeft: 4 }} onClick={() => loadCase({ id: dbId })}>
-                      Recarregar o caso
-                    </button>
+                    A gravação automática falhou ({autoSave.err}). O caso está guardado neste
+                    aparelho e volta a subir na próxima alteração — ou clique em <b>Salvar agora</b>.
                   </span>
                 </div>
               )}
