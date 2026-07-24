@@ -142,6 +142,17 @@ app.post('/api/cases', requireAuth, async (req, res) => {
     )
     await client.query('COMMIT')
     res.status(201).json({ id: rows[0].id, created_at: rows[0].created_at })
+
+    // caso que JÁ nasce com o acionamento autorizado: o médico marcou o marco
+    // antes de salvar (com o caso ainda só local, o marco não vai ao servidor).
+    // Sem isto o grupo ficaria mudo de novo, por outra porta.
+    const marcados = Object.entries(snapshot.events || {})
+      .filter(([, ts]) => ts)
+      .map(([id, ts]) => ({ id, ts, edited: false }))
+    if (marcados.some((m) => m.id === 'decisao')) {
+      echoMilestones(rows[0].id, marcados, req.user)
+        .catch((e) => console.error('bot acionamento na criação:', e.message))
+    }
   } catch (e) {
     await client.query('ROLLBACK')
     console.error('create case:', e)

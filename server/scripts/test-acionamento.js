@@ -5,7 +5,7 @@
 // atropela as defesas contra missão fantasma. Roda contra skyrescue_dev, em
 // dry-run (sem TELEGRAM_BOT_TOKEN as mensagens só vão para o console).
 import { query, pool } from '../src/db.js'
-import { echoMilestones, missionStatus } from '../src/telegram.js'
+import { echoMilestones, missionStatus, currentMission } from '../src/telegram.js'
 
 let falhas = 0
 const ok = (nome, cond, detalhe = '') => {
@@ -75,12 +75,36 @@ async function main() {
   ok('livre encerra a missão', (await missionStatus(c2)) === 'encerrada', `retorno=${e.r}`)
   ok('encerramento sai com a cronologia', e.out.includes('Missão encerrada'))
 
+  console.log('\n=== /caso acha o acionamento órfão (o "absurdo" de 24/07) ===')
+  // caso com o acionamento autorizado que nunca virou missão no grupo:
+  // é o estado do caso 107 depois do bot ficar mudo
+  await query(`UPDATE mission_chat SET status='encerrada'`)
+  const orf = await mkCase('teste-acion-orfao', snap('teste-acion-orfao', { events: { decisao: Date.now() - 10 * 60000 } }))
+  ok('o caso órfão não tem missão', (await missionStatus(orf)) === null)
+  const m = await currentMission()
+  ok('currentMission adota o acionamento órfão', m?.case_id === orf, `retornou ${m?.case_id}`)
+  ok('e o registra como missão ativa', (await missionStatus(orf)) === 'ativa')
+  const m2 = await currentMission()
+  ok('na segunda vez já vem pelo caminho normal', m2?.case_id === orf)
+
+  console.log('\n=== limites da adoção (não vira missão fantasma) ===')
+  await query(`UPDATE mission_chat SET status='encerrada'`)
+  const velho = await mkCase('teste-acion-velho', snap('teste-acion-velho', { events: { decisao: Date.now() - 30 * 3600000 } }))
+  ok('acionamento fora do TTL não é adotado', (await currentMission()) === null)
+  const livre = await mkCase('teste-acion-livre', snap('teste-acion-livre', { events: { decisao: Date.now() - 60000, livre: Date.now() } }))
+  ok('missão já liberada não é adotada', (await currentMission()) === null)
+  const semMarco = await mkCase('teste-acion-semmarco', snap('teste-acion-semmarco', { events: {} }))
+  ok('caso sem acionamento autorizado não é adotado', (await currentMission()) === null)
+  ok('nenhum dos três ganhou mission_chat',
+    (await missionStatus(velho)) === null && (await missionStatus(livre)) === null && (await missionStatus(semMarco)) === null)
+
   console.log('\n=== sem grupo vinculado, o erro sobe (vira aviso na tela) ===')
   await query(`DELETE FROM bot_chat WHERE id = 1`)
   const c3 = await mkCase('teste-acion-3', snap('teste-acion-3', { events: { decisao: ts } }))
   const f = await marcar(c3, [{ id: 'decisao', ts, edited: false }])
   ok('echoMilestones lança quando o grupo não está vinculado', f.erro != null, f.erro?.message || 'não lançou')
   ok('e nenhuma missão fica pendurada', (await missionStatus(c3)) === null)
+  ok('sem grupo vinculado também não há adoção', (await currentMission()) === null)
 
   // limpeza (inclusive o vínculo derrubado no último cenário)
   await query(`DELETE FROM cases WHERE case_ref LIKE 'teste-acion-%'`)

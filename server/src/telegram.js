@@ -113,7 +113,41 @@ export async function currentMission() {
       ORDER BY m.created_at DESC LIMIT 1`,
     [MISSION_TTL_H]
   )
-  return rows[0] || null
+  return rows[0] || adotarAcionamentoOrfao()
+}
+
+// Rede de segurança do outro lado: um acionamento autorizado no app que, por
+// qualquer motivo (bot fora do ar no minuto do marco, Telegram em Bad Gateway,
+// caso criado já com o marco), não virou missão no grupo. Sem isto o /caso
+// responde "nenhuma missão ativa" enquanto existe acionamento registrado — foi
+// o que aconteceu com o caso 107 em 24/07/2026, e é indefensável no plantão.
+//
+// Adota em silêncio (sem despejar briefing no grupo): quem perguntar /caso
+// recebe o briefing do handler, e o rastreamento volta a mirar o alvo certo.
+// Limites que impedem missão fantasma: só caso NUNCA acionado, com marco
+// 'decisao' dentro do TTL e sem 'Aeronave liberada'.
+async function adotarAcionamentoOrfao() {
+  const chatId = await boundChat()
+  if (!chatId) return null
+  const { rows } = await query(
+    `SELECT c.id, c.snapshot
+       FROM cases c LEFT JOIN mission_chat m ON m.case_id = c.id
+      WHERE m.case_id IS NULL
+        AND c.snapshot->'events'->>'decisao' IS NOT NULL
+        AND c.snapshot->'events'->>'livre' IS NULL
+        AND to_timestamp((c.snapshot->'events'->>'decisao')::bigint / 1000.0)
+              > now() - make_interval(hours => $1)
+      ORDER BY (c.snapshot->'events'->>'decisao')::bigint DESC LIMIT 1`,
+    [MISSION_TTL_H]
+  )
+  const c = rows[0]
+  if (!c) return null
+  await query(
+    `INSERT INTO mission_chat (case_id, chat_id) VALUES ($1,$2) ON CONFLICT (case_id) DO NOTHING`,
+    [c.id, chatId]
+  )
+  console.log(`[bot] acionamento órfão adotado: caso ${c.id} virou a missão corrente`)
+  return { id: c.id, snapshot: c.snapshot, case_id: c.id, chat_id: chatId, last_pos_post_at: null, near_alerted: false }
 }
 
 // status da missão DESTE caso no grupo: 'ativa' | 'encerrada' | null (nunca
