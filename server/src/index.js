@@ -6,7 +6,7 @@ import {
   cookieOptions, authMiddleware, requireAuth, requireAdmin,
   COOKIE_NAME, startSessionGC,
 } from './auth.js'
-import { startBot, notifyMission, postMilestones, MILESTONES } from './telegram.js'
+import { startBot, notifyMission, echoMilestones, MILESTONES } from './telegram.js'
 
 const app = express()
 app.set('trust proxy', 1) // atrás do nginx/Cloudflare
@@ -105,7 +105,14 @@ app.get('/api/cases', requireAuth, async (_req, res) => {
 })
 
 app.get('/api/cases/:id', requireAuth, async (req, res) => {
-  const { rows } = await query('SELECT * FROM cases WHERE id = $1', [req.params.id])
+  // mission_status ('ativa' | 'encerrada' | null) para o app mostrar, ao reabrir
+  // um caso, se o grupo da missão já foi acionado
+  const { rows } = await query(
+    `SELECT c.*, m.status AS mission_status
+       FROM cases c LEFT JOIN mission_chat m ON m.case_id = c.id
+      WHERE c.id = $1`,
+    [req.params.id]
+  )
   if (!rows[0]) return res.status(404).json({ error: 'caso não encontrado' })
   res.json({ case: rows[0] })
 })
@@ -178,8 +185,10 @@ app.put('/api/cases/:id', requireAuth, async (req, res) => {
     const changed = Object.entries(after)
       .filter(([id, ts]) => ts && before[id] !== ts)
       .map(([id, ts]) => ({ id, ts, edited: before[id] != null }))
+    // mesma regra do POST /events: se o 'decisao' chega por aqui (marcado sem
+    // sinal e sincronizado no "Atualizar caso"), ele também aciona o grupo
     if (changed.length) {
-      postMilestones(req.params.id, changed, req.user.full_name || req.user.username)
+      echoMilestones(req.params.id, changed, req.user)
         .catch((e) => console.error('bot milestones:', e.message))
     }
   } catch (e) {
@@ -232,9 +241,18 @@ app.post('/api/cases/:id/events', requireAuth, async (req, res) => {
       'INSERT INTO case_audit (case_id, user_id, action, case_ref) VALUES ($1,$2,$3,$4)',
       [req.params.id, req.user.id, 'update', prev.rows[0].case_ref]
     )
-    res.json({ ok: true })
-    postMilestones(req.params.id, [{ id: event, ts: t, edited: old != null }], req.user.full_name || req.user.username)
-      .catch((e) => console.error('bot milestone:', e.message))
+    // o horário JÁ está gravado: uma falha do Telegram daqui em diante não pode
+    // virar 500 (o cliente reenfileiraria e o marco piscaria como não salvo).
+    // Vira aviso na resposta, para o médico ver que o grupo não foi acionado.
+    let mission = null
+    let missionError = null
+    try {
+      mission = await echoMilestones(req.params.id, [{ id: event, ts: t, edited: old != null }], req.user)
+    } catch (e) {
+      console.error('bot milestone:', e.message)
+      if (event === 'decisao') { mission = 'erro'; missionError = e.message }
+    }
+    res.json({ ok: true, mission, missionError })
   } catch (e) {
     console.error('save event:', e)
     res.status(500).json({ error: 'erro ao registrar horário' })

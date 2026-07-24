@@ -88,6 +88,8 @@ export default function App({ user, onLogout }) {
   const [saving, setSaving] = useState(false)
   const [notifying, setNotifying] = useState(false)
   const [notifyMsg, setNotifyMsg] = useState(null) // {ok, text} do acionamento do grupo
+  // grupo da missão deste caso: null = nunca acionado, 'ativa', 'encerrada'
+  const [missionOpen, setMissionOpen] = useState(null)
   const [saveFlash, setSaveFlash] = useState(false) // confirmação transitória de gravação
   const [saveErr, setSaveErr] = useState('')
 
@@ -447,10 +449,21 @@ export default function App({ user, onLogout }) {
   // Se estiver sem sinal (comum em voo), o horário entra numa fila local e é
   // reenviado quando a conexão voltar — ver lib/eventQueue.js.
   const evtTimersRef = useRef({})
+  // marcar "Acionamento do GOA autorizado" ACIONA o grupo no servidor (o médico
+  // não precisa clicar "Grupo da missão" também). A resposta diz se o bot
+  // conseguiu falar — sem isso ele não teria como saber que o grupo ficou mudo.
+  const onEventSaved = (r) => {
+    if (r?.mission === 'aberta') {
+      setMissionOpen('ativa')
+      setNotifyMsg({ ok: true, text: 'Acionamento autorizado — briefing enviado ao grupo da missão.' })
+    } else if (r?.mission === 'erro') {
+      setNotifyMsg({ ok: false, text: `Horário gravado, mas o grupo NÃO foi acionado: ${r.missionError || 'falha no Telegram'}` })
+    }
+  }
   const pushEvent = (id, ts, delay = 1200) => {
     if (dbId == null) return // caso ainda não salvo: fica só local, como antes
     clearTimeout(evtTimersRef.current[id])
-    evtTimersRef.current[id] = setTimeout(() => sendEvent(dbId, id, ts), delay)
+    evtTimersRef.current[id] = setTimeout(() => sendEvent(dbId, id, ts, onEventSaved), delay)
   }
   const markEvent = (id) => {
     const ts = Date.now()
@@ -647,6 +660,7 @@ export default function App({ user, onLogout }) {
         await refreshCases()
       }
       await api.notifyCase(id)
+      setMissionOpen('ativa')
       setNotifyMsg({ ok: true, text: 'Briefing enviado ao grupo da missão.' })
     } catch (e) {
       setNotifyMsg({ ok: false, text: e.message || String(e) })
@@ -656,10 +670,14 @@ export default function App({ user, onLogout }) {
   }
 
   // restaura o estado do app a partir de um snapshot (banco ou rascunho local)
-  const applySnapshot = (c, id) => {
+  // `mission` é o status do grupo da missão vindo do servidor ('ativa' |
+  // 'encerrada' | null); o rascunho local não sabe e assume nunca acionado
+  const applySnapshot = (c, id, mission = null) => {
     revGeoRef.current++
     pendingLzSelRef.current = c.scene ? c.lzSelId || null : null
     setDbId(id ?? null)
+    setMissionOpen(mission)
+    setNotifyMsg(null)
     setCaseId(c.id || ''); setSceneLabel(c.sceneLabel || ''); setScene(c.scene)
     const hospOk = cfg.hospitals.some((h) => h.id === c.hospitalId)
     setHospitalId(hospOk ? c.hospitalId : cfg.hospitals[0]?.id || '')
@@ -681,7 +699,7 @@ export default function App({ user, onLogout }) {
   const loadCase = async (row) => {
     try {
       const { case: full } = await api.getCase(row.id)
-      applySnapshot(full.snapshot || {}, row.id)
+      applySnapshot(full.snapshot || {}, row.id, full.mission_status || null)
       setRestored(null)
       setShowCases(false)
     } catch (e) {
@@ -741,6 +759,7 @@ export default function App({ user, onLogout }) {
     clearPatient(user?.id)
     setPatient(() => { const e = emptyPatient(); if (user?.full_name) e.medico = user.full_name; return e })
     setDbId(null); setSaveFlash(false); setSaveErr('')
+    setMissionOpen(null); setNotifyMsg(null)
     setScene(null); setSceneLabel(''); setQ(''); setCaseId(''); setNotes(''); setGeoResults(null)
     setManualChecked({}); setAutoOverrides({}); setGateManual({}); setGateOverrides({})
     setAmbEta(''); setLzSelId(null); setManualLz(null); setEvents({}); setLandingSel('auto')
@@ -976,11 +995,15 @@ export default function App({ user, onLogout }) {
               <Tracking events={events} onMark={markEvent} onEdit={editEvent} mission={mission} />
               {dbId == null ? (
                 <div className="small" style={{ marginTop: 8 }}>
-                  Para o bot avisar os horários no grupo: <b>salve o caso</b> e clique <b>Grupo da missão</b> no Registro.
+                  <b>Salve o caso</b> para que os horários — e o acionamento do grupo — cheguem ao servidor.
+                </div>
+              ) : missionOpen === 'ativa' ? (
+                <div className="small" style={{ marginTop: 8 }}>
+                  Grupo da missão <b>acionado</b>: cada horário marcado aqui é avisado no Telegram na hora.
                 </div>
               ) : (
                 <div className="small" style={{ marginTop: 8 }}>
-                  Horários marcados aqui são gravados no servidor na hora — e avisados no grupo se a missão foi acionada.
+                  Marcar <b>Acionamento do GOA autorizado</b> aciona o grupo da missão no Telegram e envia o briefing.
                 </div>
               )}
             </div>
@@ -993,11 +1016,19 @@ export default function App({ user, onLogout }) {
                 <span className={'badge ' + (dbId != null ? 'ok' : '')} style={{ marginLeft: 'auto' }}>
                   {dbId != null ? `Salvo · caso #${dbId}` : 'Não salvo'}
                 </span>
+                {missionOpen && (
+                  <span className={'badge ' + (missionOpen === 'ativa' ? 'ok' : '')} style={{ marginLeft: 6 }}>
+                    {missionOpen === 'ativa' ? 'Grupo acionado' : 'Missão encerrada'}
+                  </span>
+                )}
               </h2>
               <div className="row">
                 <button className="btn" onClick={saveCase} disabled={saving}>{saving ? <span className="spin" /> : <IconSave size={14} />} {dbId != null ? 'Atualizar caso' : 'Salvar caso'}</button>
-                <button className="btn sec" onClick={notifyGroup} disabled={notifying} title="Envia o briefing da missão ao grupo do Telegram (salva o caso antes)">
-                  {notifying ? <span className="spin" /> : <IconUsers size={14} />} Grupo da missão
+                <button className="btn sec" onClick={notifyGroup} disabled={notifying}
+                  title={missionOpen === 'ativa'
+                    ? 'Reenvia o briefing da missão ao grupo do Telegram'
+                    : 'Envia o briefing da missão ao grupo do Telegram (salva o caso antes). Marcar "Acionamento do GOA autorizado" faz isso sozinho.'}>
+                  {notifying ? <span className="spin" /> : <IconUsers size={14} />} {missionOpen === 'ativa' ? 'Reenviar briefing' : 'Grupo da missão'}
                 </button>
                 <button className="btn sec" onClick={() => setShowCases(true)}><IconFolder size={14} /> Casos ({cases.length})</button>
                 <button className="btn sec" onClick={copyResumo}><IconCopy size={14} /> Copiar resumo</button>

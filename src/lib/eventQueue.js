@@ -39,7 +39,11 @@ export async function flush() {
 
 // Envia um horário ao servidor; se falhar (ou se já houver pendências,
 // para preservar a ordem), entra na fila e tenta de novo depois.
-export function sendEvent(caseId, event, ts) {
+// `onResult` recebe a resposta do servidor no envio direto — é por ela que o
+// app fica sabendo que o marco do acionamento abriu o grupo da missão. Pelo
+// caminho da fila não há retorno (outra sessão, talvez outro dia): o servidor
+// aciona o grupo do mesmo jeito, o app só descobre ao reabrir o caso.
+export function sendEvent(caseId, event, ts, onResult) {
   const q = load()
   const rest = q.filter((it) => !(it.caseId === caseId && it.event === event))
   if (q.length) {
@@ -47,10 +51,12 @@ export function sendEvent(caseId, event, ts) {
     flush()
     return
   }
-  api.saveEvent(caseId, event, ts).catch(() => {
-    save([...rest, { caseId, event, ts }])
-    schedule()
-  })
+  // dois argumentos, não .catch(): assim um erro dentro do onResult (React) não
+  // é confundido com falha de rede e não reenfileira um horário já gravado
+  api.saveEvent(caseId, event, ts).then(
+    (r) => onResult?.(r),
+    () => { save([...rest, { caseId, event, ts }]); schedule() }
+  )
 }
 
 if (typeof window !== 'undefined') {

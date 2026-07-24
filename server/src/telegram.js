@@ -116,6 +116,14 @@ export async function currentMission() {
   return rows[0] || null
 }
 
+// status da missão DESTE caso no grupo: 'ativa' | 'encerrada' | null (nunca
+// acionada). Só o null autoriza abrir a missão sozinho: uma 'encerrada' que
+// volta a falar é exatamente a missão fantasma que as defesas acima combatem.
+export async function missionStatus(caseId) {
+  const { rows } = await query('SELECT status FROM mission_chat WHERE case_id = $1', [caseId])
+  return rows[0]?.status || null
+}
+
 // encerra em silêncio as missões que ninguém fechou (log, sem ruído no grupo)
 export async function sweepStaleMissions() {
   try {
@@ -218,6 +226,33 @@ export async function postMilestones(caseId, changed, byName) {
   }
   // aeronave liberada encerra a missão no grupo com o resumo dos tempos
   if (changed.some((c) => c.id === 'livre')) await closeMission(caseId)
+}
+
+// Marcar "Acionamento do GOA autorizado" É acionar o GOA: se o grupo da missão
+// ainda não foi aberto para este caso, o próprio marco abre.
+//
+// Incidente 24/07/2026 (caso 107): o médico marcou o marco, o horário foi
+// gravado (200) e o bot ficou calado — abrir a missão era um SEGUNDO clique,
+// num card diferente ("Grupo da missão", no Registro). No plantão ninguém faz
+// dois gestos para uma decisão só, e o grupo dos pilotos não soube do
+// acionamento. Regra: quem autoriza o GOA aciona o grupo.
+//
+// Só abre quando a missão NUNCA foi acionada (missionStatus === null). Com um
+// registro 'encerrada', o marco é correção de horário de missão velha —
+// ressuscitá-la seria trazer de volta a missão fantasma de 21/07.
+//
+// Devolve 'aberta' quando acionou aqui (o briefing já publica os horários já
+// marcados, então não se ecoa de novo) ou null quando foi só eco.
+export async function echoMilestones(caseId, changed, user) {
+  if (changed.some((c) => c.id === 'decisao') && (await missionStatus(caseId)) === null) {
+    const { rows } = await query('SELECT id, snapshot FROM cases WHERE id = $1', [caseId])
+    if (rows[0]) {
+      await notifyMission(rows[0], rows[0].snapshot || {}, user)
+      return 'aberta'
+    }
+  }
+  await postMilestones(caseId, changed, user?.full_name || user?.username)
+  return null
 }
 
 async function closeMission(caseId) {
