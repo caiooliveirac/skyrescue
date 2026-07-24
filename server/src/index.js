@@ -117,6 +117,32 @@ app.get('/api/cases/:id', requireAuth, async (req, res) => {
   res.json({ case: rows[0] })
 })
 
+// Estado ao vivo do caso aberto: o mínimo que várias telas precisam ver uma da
+// outra durante a ocorrência. A regulação no PC, o médico no celular e o piloto
+// no modo navegação olham o MESMO caso — quando alguém toca "Decolagem da
+// base", tem que aparecer em todas as telas, não só no grupo do Telegram.
+// Resposta enxuta de propósito: isto roda a cada 5 s por tela aberta.
+app.get('/api/cases/:id/live', requireAuth, async (req, res) => {
+  const { rows } = await query(
+    `SELECT c.snapshot->'events' AS events, c.updated_at,
+            uu.full_name AS updated_by_name, uu.username AS updated_by_username,
+            m.status AS mission_status
+       FROM cases c
+       LEFT JOIN users uu ON uu.id = c.updated_by
+       LEFT JOIN mission_chat m ON m.case_id = c.id
+      WHERE c.id = $1`,
+    [req.params.id]
+  )
+  if (!rows[0]) return res.status(404).json({ error: 'caso não encontrado' })
+  const r = rows[0]
+  res.json({
+    events: r.events || {},
+    updatedAt: r.updated_at,
+    updatedBy: r.updated_by_name || r.updated_by_username || null,
+    missionStatus: r.mission_status || null,
+  })
+})
+
 app.post('/api/cases', requireAuth, async (req, res) => {
   const snapshot = req.body?.snapshot
   if (!snapshot || typeof snapshot !== 'object')

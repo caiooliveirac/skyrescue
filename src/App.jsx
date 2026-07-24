@@ -3,7 +3,7 @@ import { loadCfg, saveCfg, TAG_LABELS, hospitalHelipads, landingPoints } from '.
 import { api } from './lib/backend.js'
 import { geocode, reverseGeocode, fetchWeather, fetchMetar, groundRoute, overpass, lzQuery, obstacleQuery, heliRadius } from './lib/api.js'
 import { catalogNear } from './data/helipads-catalog.js'
-import { haversineKm, fmtMin, fmtCoords, fmtCoordsDMS, fmtCoordsDDM, gmapsLink } from './lib/geo.js'
+import { haversineKm, fmtMin, fmtClock, fmtCoords, fmtCoordsDMS, fmtCoordsDDM, gmapsLink } from './lib/geo.js'
 import { computeMission, autoChecks, daylightCheck, rangeCheck, combinedWeatherStatus, classifyWeather } from './lib/mission.js'
 import { computeScore, recommendation, evaluateGates, ITEM_BY_ID } from './lib/score.js'
 import { rankLZ, parseObstacles } from './lib/lz.js'
@@ -14,7 +14,7 @@ import { LzPhotoModal } from './components/LzPhotos.jsx'
 import Checklist from './components/Checklist.jsx'
 import PatientForm from './components/PatientForm.jsx'
 import Tracking, { MILESTONES, MilestoneQuick } from './components/Tracking.jsx'
-import { sendEvent } from './lib/eventQueue.js'
+import { sendEvent, pendingEvents } from './lib/eventQueue.js'
 import { makeDraftSaver, readDraft, draftWorthKeeping } from './lib/draft.js'
 import { emptyPatient, readPatient, savePatient, clearPatient, openProntuario } from './lib/patient.js'
 import ConfigModal from './components/ConfigModal.jsx'
@@ -463,7 +463,13 @@ export default function App({ user, onLogout }) {
   const pushEvent = (id, ts, delay = 1200) => {
     if (dbId == null) return // caso ainda não salvo: fica só local, como antes
     clearTimeout(evtTimersRef.current[id])
-    evtTimersRef.current[id] = setTimeout(() => sendEvent(dbId, id, ts, onEventSaved), delay)
+    // a entrada SAI do mapa ao disparar: enquanto ela existe, o poll de tempo
+    // real não toca neste marco. Se ficasse para trás, a tela nunca mais
+    // aceitaria a correção do horário feita em outra tela.
+    evtTimersRef.current[id] = setTimeout(() => {
+      delete evtTimersRef.current[id]
+      sendEvent(dbId, id, ts, onEventSaved)
+    }, delay)
   }
   const markEvent = (id) => {
     const ts = Date.now()
@@ -478,6 +484,7 @@ export default function App({ user, onLogout }) {
   }
   const undoEvent = (id) => {
     clearTimeout(evtTimersRef.current[id])
+    delete evtTimersRef.current[id]
     setEvents((p) => { const n = { ...p }; delete n[id]; return n })
   }
   const editEvent = (id, hhmm) => {
@@ -488,6 +495,73 @@ export default function App({ user, onLogout }) {
     setEvents((p) => ({ ...p, [id]: d.getTime() }))
     pushEvent(id, d.getTime())
   }
+
+  // ---------- a ocorrência ao vivo, em todas as telas ----------
+  // A mesma ocorrência é acompanhada em vários lugares ao mesmo tempo: a
+  // regulação no PC, o médico no celular, o piloto no modo navegação. Quando um
+  // toca "Decolagem da base", tem que aparecer nas outras telas — sem F5, e não
+  // só no grupo do Telegram.
+  //
+  // Poll de 5 s do estado mínimo do caso, mesma escolha do rastreamento:
+  // atravessa Cloudflare/nginx e rede de celular sem manutenção, e nesta
+  // cadência (marcos separados por minutos) ninguém percebe diferença para SSE.
+  const eventsRef = useRef(events)
+  useEffect(() => { eventsRef.current = events }, [events])
+  const lastSeenUpdRef = useRef(null)     // updated_at já explicado para esta tela
+  const [liveMsg, setLiveMsg] = useState(null)       // marcos vindos de outra tela
+  const [remoteChange, setRemoteChange] = useState(null) // resto do caso mudou
+
+  // aba oculta consulta MENOS, nunca "nada": kiosk, webview e painel embutido
+  // mentem no document.hidden (alguns dizem oculto com a tela na frente), e uma
+  // tela de regulação muda por causa disso é justamente o defeito a evitar
+  const LIVE_MS = 5000
+  const LIVE_MS_OCULTA = 30_000
+  useEffect(() => {
+    if (dbId == null) return
+    let alive = true
+    let ultimo = 0
+    const tick = async (forcar) => {
+      const espera = document.hidden ? LIVE_MS_OCULTA : LIVE_MS
+      if (!forcar && Date.now() - ultimo < espera - 500) return
+      ultimo = Date.now()
+      try {
+        const r = await api.liveCase(dbId)
+        if (!alive) return
+        setMissionOpen(r.missionStatus || null)
+        // um marco que esta tela acabou de tocar (POST em voo, fila offline ou
+        // debounce aberto) é MAIS novo que o servidor — nunca sobrescrever
+        const pend = pendingEvents(dbId)
+        const prev = eventsRef.current
+        const chegaram = Object.entries(r.events || {}).filter(
+          ([id, ts]) => ts && !pend.has(id) && !evtTimersRef.current[id] && prev[id] !== ts
+        )
+        if (chegaram.length) {
+          eventsRef.current = { ...prev, ...Object.fromEntries(chegaram) }
+          setEvents((p) => ({ ...p, ...Object.fromEntries(chegaram) }))
+          const quais = chegaram
+            .map(([id, ts]) => `${MILESTONES.find((m) => m.id === id)?.label || id} ${fmtClock(ts)}`)
+            .join(' · ')
+          setLiveMsg({ quais, by: r.updatedBy })
+        }
+        // updated_at que os marcos não explicam: alguém mexeu no resto do caso
+        // (destino, LZ, pontuação). Não sobrescrevemos o formulário embaixo da
+        // mão de ninguém — avisamos e deixamos a decisão de recarregar com quem
+        // está na tela.
+        if (lastSeenUpdRef.current == null) {
+          lastSeenUpdRef.current = r.updatedAt
+        } else if (r.updatedAt !== lastSeenUpdRef.current) {
+          lastSeenUpdRef.current = r.updatedAt
+          if (!chegaram.length) setRemoteChange({ by: r.updatedBy })
+        }
+      } catch (e) { /* camada opcional: sem rede a tela segue com o que tem */ }
+    }
+    tick(true)
+    const id = setInterval(tick, LIVE_MS)
+    // voltar para a aba tem que mostrar o estado de agora, não o de 30 s atrás
+    const onVis = () => { if (!document.hidden) tick(true) }
+    document.addEventListener('visibilitychange', onVis)
+    return () => { alive = false; clearInterval(id); document.removeEventListener('visibilitychange', onVis) }
+  }, [dbId])
 
   const destinoLabel = () => {
     if (!hospital) return '—'
@@ -631,6 +705,9 @@ export default function App({ user, onLogout }) {
         const { id } = await api.createCase(snap)
         setDbId(id)
       }
+      // a gravação é NOSSA: o poll não deve avisar "alterado por outra tela"
+      lastSeenUpdRef.current = null
+      setRemoteChange(null)
       await refreshCases()
       setSaveFlash(true)
       setTimeout(() => setSaveFlash(false), 4000)
@@ -659,6 +736,8 @@ export default function App({ user, onLogout }) {
         setDbId(id)
         await refreshCases()
       }
+      lastSeenUpdRef.current = null
+      setRemoteChange(null)
       await api.notifyCase(id)
       setMissionOpen('ativa')
       setNotifyMsg({ ok: true, text: 'Briefing enviado ao grupo da missão.' })
@@ -678,6 +757,8 @@ export default function App({ user, onLogout }) {
     setDbId(id ?? null)
     setMissionOpen(mission)
     setNotifyMsg(null)
+    // o poll ao vivo recomeça do zero para o caso que está entrando
+    lastSeenUpdRef.current = null; setLiveMsg(null); setRemoteChange(null)
     setCaseId(c.id || ''); setSceneLabel(c.sceneLabel || ''); setScene(c.scene)
     const hospOk = cfg.hospitals.some((h) => h.id === c.hospitalId)
     setHospitalId(hospOk ? c.hospitalId : cfg.hospitals[0]?.id || '')
@@ -760,6 +841,7 @@ export default function App({ user, onLogout }) {
     setPatient(() => { const e = emptyPatient(); if (user?.full_name) e.medico = user.full_name; return e })
     setDbId(null); setSaveFlash(false); setSaveErr('')
     setMissionOpen(null); setNotifyMsg(null)
+    lastSeenUpdRef.current = null; setLiveMsg(null); setRemoteChange(null)
     setScene(null); setSceneLabel(''); setQ(''); setCaseId(''); setNotes(''); setGeoResults(null)
     setManualChecked({}); setAutoOverrides({}); setGateManual({}); setGateOverrides({})
     setAmbEta(''); setLzSelId(null); setManualLz(null); setEvents({}); setLandingSel('auto')
@@ -1006,6 +1088,12 @@ export default function App({ user, onLogout }) {
                   Marcar <b>Acionamento do GOA autorizado</b> aciona o grupo da missão no Telegram e envia o briefing.
                 </div>
               )}
+              {liveMsg && (
+                <div className="alert ok" style={{ marginTop: 8, marginBottom: 0 }}>
+                  <IconUsers size={15} style={{ flex: 'none', marginTop: 1 }} />
+                  <span>Marcado em outra tela: <b>{liveMsg.quais}</b>{liveMsg.by ? <> · por {liveMsg.by}</> : null}</span>
+                </div>
+              )}
             </div>
           )}
 
@@ -1046,6 +1134,18 @@ export default function App({ user, onLogout }) {
               {saveErr && (
                 <div className="alert fail" style={{ marginTop: 10, marginBottom: 0 }}>
                   <IconAlert size={15} style={{ flex: 'none', marginTop: 1 }} /> Falha ao salvar no servidor: {saveErr}
+                </div>
+              )}
+              {remoteChange && (
+                <div className="alert warn" style={{ marginTop: 10, marginBottom: 0 }}>
+                  <IconAlert size={15} style={{ flex: 'none', marginTop: 1 }} />
+                  <span>
+                    Este caso foi alterado em outra tela{remoteChange.by ? <> por <b>{remoteChange.by}</b></> : null} —
+                    os horários já estão sincronizados, o resto (destino, LZ, pontuação) não.{' '}
+                    <button className="btn xs sec" style={{ marginLeft: 4 }} onClick={() => loadCase({ id: dbId })}>
+                      Recarregar o caso
+                    </button>
+                  </span>
                 </div>
               )}
               {notifyMsg && (

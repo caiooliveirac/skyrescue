@@ -15,6 +15,22 @@ const save = (q) => {
 let flushing = false
 let timer = null
 
+// Marcos deste caso que ainda não chegaram ao servidor (sem sinal, ou POST em
+// voo). O poll de tempo real precisa saber quais NÃO pode sobrescrever com o
+// estado do servidor — senão o horário que o piloto acabou de tocar some da
+// tela dele por alguns segundos e volta depois.
+const inflight = new Set()
+const key = (caseId, event) => `${caseId}:${event}`
+export function pendingEvents(caseId) {
+  const ids = new Set()
+  for (const it of load()) if (String(it.caseId) === String(caseId)) ids.add(it.event)
+  for (const k of inflight) {
+    const [cid, ev] = k.split(':')
+    if (cid === String(caseId)) ids.add(ev)
+  }
+  return ids
+}
+
 function schedule() {
   clearTimeout(timer)
   if (load().length) timer = setTimeout(flush, 20_000)
@@ -53,9 +69,11 @@ export function sendEvent(caseId, event, ts, onResult) {
   }
   // dois argumentos, não .catch(): assim um erro dentro do onResult (React) não
   // é confundido com falha de rede e não reenfileira um horário já gravado
+  const k = key(caseId, event)
+  inflight.add(k)
   api.saveEvent(caseId, event, ts).then(
-    (r) => onResult?.(r),
-    () => { save([...rest, { caseId, event, ts }]); schedule() }
+    (r) => { inflight.delete(k); onResult?.(r) },
+    () => { inflight.delete(k); save([...rest, { caseId, event, ts }]); schedule() }
   )
 }
 
