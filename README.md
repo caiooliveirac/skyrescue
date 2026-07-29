@@ -112,6 +112,20 @@ No plantão ninguém clica em "Salvar" antes de sair — o tablet dorme, a bater
 
 Cobre recarregar a página, fechar a aba, fechar o navegador, crash/queda de energia e aba descartada pelo sistema em segundo plano. O rascunho é **por usuário** (o computador da regulação é compartilhado: o rascunho de um plantonista não aparece para o próximo que logar) e expira em 36 h, para trabalho antigo não ressuscitar. Ele não substitui a gravação no servidor — continua sendo o "Salvar/Atualizar caso" que registra o caso para a equipe e para o bot; é rede de segurança contra perder o que foi digitado. Implementação em `src/lib/draft.js`.
 
+## Ficha do paciente (prontuário)
+
+Preenchida durante a ocorrência e exportada como HTML → PDF, assinável no gov.br. É **do caso**, não do aparelho: fica no servidor (tabela `case_patient`) e sincroniza ao vivo, então o que o médico acrescenta no celular aparece para quem está na regulação, e reabrir o caso em qualquer aparelho traz a ficha de volta.
+
+Contém dado identificável de paciente, e por isso é a única parte do sistema que contém:
+
+- **Tabela própria**, fora de `cases.snapshot` — o snapshot alimenta o briefing do Telegram, a listagem e o relatório, onde PII vazaria por construção. No poll de 5 s viaja só o carimbo de tempo (`patientAt`); o conteúdo só sai para quem pede `/api/cases/:id/patient`.
+- **Gravação por campo** (merge no servidor, com a linha travada): duas pessoas preenchendo partes diferentes da ficha não apagam o campo uma da outra. Uma alteração remota nunca sobrescreve edição local ainda não gravada.
+- **Auditoria de leitura e escrita** em `case_audit` (`patient_read` / `patient_write`), coalescida por usuário a cada 5 min.
+- **Retenção**: a ficha vive e morre com o caso (`ON DELETE CASCADE`).
+- **Espelho offline** no navegador (`src/lib/patient.js`), por usuário e por caso: em voo com 4G ruim é ele que segura o que foi digitado até a rede voltar.
+
+Como é guardada em texto no Postgres, **backups e dumps deste banco contêm dado de paciente identificado** — tratar as cópias com o mesmo cuidado do banco de produção.
+
 ## Fluxo de uso na regulação
 
 1. **Local** — busque o endereço/rodovia ou clique no mapa.
@@ -133,7 +147,7 @@ Cobre recarregar a página, fechar a aba, fechar o navegador, crash/queda de ene
 
 - Ferramenta de **apoio à decisão** — não substitui o julgamento do médico regulador nem a decisão final do comandante da aeronave.
 - Meteorologia e áreas de pouso são **indicativas**; reconhecimento visual pelo piloto é obrigatório e a fonte meteorológica oficial é a REDEMET.
-- Não insira dados pessoais de pacientes (LGPD). Use identificadores de caso.
+- Dados pessoais de paciente **só na Ficha do paciente** (prontuário), que tem tabela própria, acesso restrito à equipe autorizada e todo acesso registrado em auditoria. Fora dela — identificador do caso, observações da regulação, nome do ponto de pouso — use identificadores, nunca dado identificável (LGPD).
 - Servidores públicos (OSRM demo, Overpass) têm limites de uso — adequados para piloto/validação; para produção, ver `ESPECIFICACAO.md` (roadmap).
 
 Especificação completa do sistema (para evoluir com desenvolvedor ou IA): **`ESPECIFICACAO.md`**.

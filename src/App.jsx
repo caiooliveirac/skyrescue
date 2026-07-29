@@ -16,7 +16,7 @@ import PatientForm from './components/PatientForm.jsx'
 import Tracking, { MILESTONES, MilestoneQuick } from './components/Tracking.jsx'
 import { sendEvent, pendingEvents } from './lib/eventQueue.js'
 import { makeDraftSaver, readDraft, draftWorthKeeping } from './lib/draft.js'
-import { emptyPatient, readPatient, savePatient, clearPatient, openProntuario } from './lib/patient.js'
+import { emptyPatient, readPatient, savePatient, clearPatient, movePatient, migrateLegacyPatient, openProntuario, PATIENT_KEYS, patientWorthKeeping } from './lib/patient.js'
 import ConfigModal from './components/ConfigModal.jsx'
 import { DecisionStrip, TimePanel, WeatherPanel, LZPanel, AlertsPanel, GatesPanel, CoordReadout } from './components/Results.jsx'
 import {
@@ -581,6 +581,17 @@ export default function App({ user, onLogout }) {
         const r = await api.liveCase(dbId, sinceRef.current)
         if (!alive) return
         setMissionOpen(r.missionStatus || null)
+
+        // ---- ficha do paciente ----
+        // No poll viaja só o carimbo de tempo (PII não entra numa resposta que
+        // se repete a cada 5 s). Mudou lá => busca a ficha. Precisa vir ANTES
+        // do `unchanged`: a ficha muda sem tocar em cases.updated_at, e no
+        // caminho curto ela ficaria invisível para sempre.
+        if (r.patientAt && r.patientAt !== patientAtRef.current) {
+          puxarFicha(dbId)
+            .then((base) => { if (base && alive) setLiveMsg({ quais: 'ficha do paciente', by: r.updatedBy }) })
+        }
+
         if (r.unchanged) return
         sinceRef.current = r.updatedAt
         const remoto = r.snapshot || {}
@@ -723,28 +734,38 @@ export default function App({ user, onLogout }) {
   const lateRef = useRef({})
   const booted = useRef(false)
   const [restored, setRestored] = useState(null) // {at} do rascunho recuperado
+
+  // ficha do paciente guardada para AQUELE caso, com o médico regulador
+  // pré-preenchido com quem está logado (se a ficha ainda não disser outro)
+  const patientFor = (id) => {
+    const p = readPatient(user?.id, id) || emptyPatient()
+    if (!p.medico && user?.full_name) p.medico = user.full_name
+    return p
+  }
+
   useEffect(() => {
+    migrateLegacyPatient(user?.id) // ficha da v1 (sem caso) vira ficha do rascunho
     const d = readDraft(user?.id)
     if (d) {
+      // applySnapshot já traz a ficha do caso que está sendo restaurado
       lateRef.current.applySnapshot?.(d.snapshot, d.dbId)
       setRestored({ at: d.at })
+    } else {
+      setPatient(patientFor(null))
     }
-    // ficha do paciente: restaura a última do usuário e pré-preenche o
-    // médico regulador com o nome de quem está logado, se ainda vazio
-    const pp = readPatient(user?.id) || emptyPatient()
-    if (!pp.medico && user?.full_name) pp.medico = user.full_name
-    setPatient(pp)
     booted.current = true
   }, [user?.id])
 
-  // espelha a ficha do paciente no localStorage (chave própria, sem PII no
-  // servidor); grava na hora que a aba some, igual ao rascunho do caso
+  // espelha a ficha no localStorage, na gaveta DO CASO aberto; grava na hora
+  // que a aba some, igual ao rascunho. Isto é o espelho offline — a fonte da
+  // verdade é o servidor (ver o autosave da ficha, mais abaixo). `dbId` entra
+  // nas dependências: trocar de caso troca de gaveta.
   useEffect(() => {
     if (!booted.current) return
-    savePatient(user?.id, patient)
-  }, [patient, user?.id])
+    savePatient(user?.id, dbId, patient)
+  }, [patient, user?.id, dbId])
   useEffect(() => {
-    const flush = () => savePatient(user?.id, patient)
+    const flush = () => { if (booted.current) savePatient(user?.id, dbId, patient) }
     const onHide = () => { if (document.visibilityState === 'hidden') flush() }
     document.addEventListener('visibilitychange', onHide)
     window.addEventListener('pagehide', flush)
@@ -752,7 +773,165 @@ export default function App({ user, onLogout }) {
       document.removeEventListener('visibilitychange', onHide)
       window.removeEventListener('pagehide', flush)
     }
-  }, [patient, user?.id])
+  }, [patient, user?.id, dbId])
+
+  // ---------- ficha do paciente no servidor ----------
+  // Mesma mecânica do caso: grava só o que ESTA tela mudou, contra o último
+  // estado vindo do servidor. Duas pessoas na mesma ocorrência escrevem em
+  // campos diferentes da ficha (a médica a hipótese, a regulação os vitais) e
+  // nenhuma pode apagar o campo da outra.
+  const basePatientRef = useRef(null)      // última ficha VINDA do servidor
+  const enviandoPatientRef = useRef(new Set()) // campos com PATCH nosso em voo
+  // espelho do estado para o poll: o efeito que consulta o servidor é criado
+  // uma vez por caso e enxergaria uma ficha velha se lesse a closure (mesmo
+  // motivo do eventsRef, mais acima)
+  const patientRef = useRef(patient)
+  useEffect(() => { patientRef.current = patient }, [patient])
+  const patientAtRef = useRef(null)        // updated_at da ficha já aplicada
+  const [patientSync, setPatientSync] = useState(null) // {at} | {err}
+  // Ficha que veio do espelho local para um caso que o servidor não tem ficha:
+  // pode ter sido escrita ANTES desta mudança, quando a tela prometia que o
+  // dado não sairia do navegador. Fica retida — nada sobe sem o usuário mandar.
+  // Não confundir com ficha nova: essa grava sozinha, como todo o resto do caso.
+  const [fichaPendente, setFichaPendente] = useState(false)
+
+  // Traz a ficha do servidor para a tela, campo a campo.
+  //
+  // O que NÃO pode ser sobrescrito é o que esta tela tem de DIFERENTE do último
+  // estado que veio do servidor: isso é edição local ainda não gravada. Só o
+  // foco não serve de critério — bastaria alguém deixar o cursor parado num
+  // campo para ele devolver o valor velho por cima do que o colega escreveu.
+  // Quem não digitou nada não tem o que perder, e numa ocorrência ao vivo é
+  // melhor ver o valor novo da equipe.
+  const puxarFicha = async (id) => {
+    try {
+      const r = await api.getPatient(id)
+      const remoto = r.patient || null
+      patientAtRef.current = r.updatedAt || null
+      if (!remoto) {
+        // servidor ainda não tem ficha deste caso: o espelho local (se houver)
+        // continua valendo e vira candidato a subir — ver `fichaSoLocal`
+        basePatientRef.current = null
+        return null
+      }
+      const anterior = basePatientRef.current
+      const atual = patientRef.current
+      const base = { ...emptyPatient(), ...remoto }
+      const novo = { ...atual }
+      for (const k of PATIENT_KEYS) {
+        if (enviandoPatientRef.current.has(k)) continue // gravação nossa em voo
+        // edição local ainda não gravada vence e será enviada pelo autosave; a
+        // base fica com o valor LOCAL para não virar diferença fantasma, que
+        // reenviaria o campo a cada resposta do servidor
+        if (anterior && String(atual[k] ?? '') !== String(anterior[k] ?? '')) {
+          base[k] = atual[k] ?? ''
+          continue
+        }
+        novo[k] = base[k] ?? ''
+      }
+      if (!novo.medico && user?.full_name) novo.medico = user.full_name
+      basePatientRef.current = base
+      setFichaPendente(false) // o servidor tem ficha: ela manda, nada a consentir
+      setPatient(novo)
+      setPatientSync({ at: Date.now() })
+      return base
+    } catch (e) {
+      // sem rede a tela segue com o espelho local. Não precisa reagendar: como
+      // `patientAtRef` continua no valor antigo, o próximo poll que der certo
+      // vê o carimbo diferente e busca de novo sozinho.
+      setPatientSync({ err: e.message || String(e) })
+      return null
+    }
+  }
+
+  // Sobe a ficha inteira de uma vez. Usado quando o caso acaba de nascer no
+  // servidor e quando o usuário manda subir uma ficha que só existia local.
+  const subirFicha = async (id, p) => {
+    const campos = {}
+    for (const k of PATIENT_KEYS) if (String(p?.[k] || '').trim() !== '') campos[k] = p[k]
+    if (!Object.keys(campos).length) return
+    const r = await api.patchPatient(id, campos, clientIdRef.current)
+    basePatientRef.current = { ...emptyPatient(), ...campos }
+    patientAtRef.current = r?.updatedAt || patientAtRef.current
+    setFichaPendente(false)
+    setPatientSync({ at: Date.now() })
+  }
+
+  // Reenvio depois de falha. Sem isto, a gravação só seria retentada na tecla
+  // SEGUINTE — e o caso típico a bordo é justamente digitar, perder o sinal e
+  // parar de digitar: o texto ficaria só no tablet, que é exatamente o defeito
+  // que esta mudança existe para eliminar. Volta a tentar sozinho, e na hora em
+  // que o sistema avisa que a rede voltou.
+  const [retryFicha, setRetryFicha] = useState(0)
+  const retryFichaRef = useRef(null)
+  const reagendarFicha = () => {
+    if (retryFichaRef.current) return // já há uma tentativa marcada
+    retryFichaRef.current = setTimeout(() => {
+      retryFichaRef.current = null
+      setRetryFicha((n) => n + 1)
+    }, 15000)
+  }
+  useEffect(() => {
+    const agora = () => {
+      clearTimeout(retryFichaRef.current); retryFichaRef.current = null
+      setRetryFicha((n) => n + 1)
+    }
+    window.addEventListener('online', agora)
+    return () => {
+      window.removeEventListener('online', agora)
+      clearTimeout(retryFichaRef.current); retryFichaRef.current = null
+    }
+  }, [])
+
+  // gravação automática da ficha: 1,5 s depois da última tecla, só os campos
+  // alterados em relação ao servidor
+  const patientSig = JSON.stringify(PATIENT_KEYS.map((k) => patient?.[k] ?? ''))
+  useEffect(() => {
+    if (dbId == null || !booted.current) return
+    if (fichaPendente) return // ficha retida esperando o "enviar" do usuário
+    // servidor sem ficha ainda: a comparação é contra o vazio, e o primeiro
+    // campo digitado cria a ficha lá — é o caminho normal de quem preenche
+    const base = basePatientRef.current || emptyPatient()
+    const alterados = {}
+    for (const k of PATIENT_KEYS) {
+      if (String(patient[k] ?? '') !== String(base[k] ?? '')) alterados[k] = patient[k] ?? ''
+    }
+    if (!Object.keys(alterados).length) return
+    const t = setTimeout(async () => {
+      const emVoo = Object.keys(alterados)
+      emVoo.forEach((k) => enviandoPatientRef.current.add(k))
+      try {
+        const r = await api.patchPatient(dbId, alterados, clientIdRef.current)
+        basePatientRef.current = { ...(basePatientRef.current || emptyPatient()), ...alterados }
+        patientAtRef.current = r?.updatedAt || patientAtRef.current
+        setPatientSync({ at: Date.now() })
+      } catch (e) {
+        // o espelho local já guardou; volta a tentar sozinho, sem depender de
+        // a pessoa digitar de novo
+        setPatientSync({ err: e.message || String(e) })
+        reagendarFicha()
+      } finally {
+        emVoo.forEach((k) => enviandoPatientRef.current.delete(k))
+      }
+    }, 1500)
+    return () => clearTimeout(t)
+  }, [patientSig, dbId, fichaPendente, retryFicha])
+
+  const fichaSoLocal = fichaPendente && patientWorthKeeping(patient)
+  const [enviandoFicha, setEnviandoFicha] = useState(false)
+  // Subir é ATO EXPLÍCITO, nunca automático: estas fichas foram digitadas sob
+  // um aviso na tela de que nunca sairiam do navegador. Quem escreveu decide.
+  const enviarFichaLocal = async () => {
+    if (dbId == null || enviandoFicha) return
+    setEnviandoFicha(true)
+    try {
+      await subirFicha(dbId, patient)
+    } catch (e) {
+      setPatientSync({ err: e.message || String(e) })
+    } finally {
+      setEnviandoFicha(false)
+    }
+  }
 
   // assinatura do que compõe o caso: muda => reagenda a gravação do rascunho
   const draftSig = JSON.stringify([
@@ -826,6 +1005,11 @@ export default function App({ user, onLogout }) {
         await api.updateCase(dbId, snap, { clientId: clientIdRef.current })
       } else {
         const { id } = await api.createCase(snap, clientIdRef.current)
+        // a ficha digitada antes do caso existir no servidor vai junto: no
+        // espelho local (muda de gaveta) e no servidor, que passa a ser a
+        // fonte da verdade dela a partir daqui
+        movePatient(user?.id, null, id)
+        await subirFicha(id, patient).catch((e) => console.warn('ficha não subiu:', e?.message || e))
         setDbId(id)
       }
       // a base absorve o que gravamos (o poll não reaplica isto como novidade).
@@ -861,6 +1045,8 @@ export default function App({ user, onLogout }) {
       } else {
         const r = await api.createCase(snap, clientIdRef.current)
         id = r.id
+        movePatient(user?.id, null, id) // ver saveCase
+        await subirFicha(id, patient).catch((e) => console.warn('ficha não subiu:', e?.message || e))
         setDbId(id)
         await refreshCases()
       }
@@ -901,10 +1087,20 @@ export default function App({ user, onLogout }) {
     // congela a avaliação na hora original do caso (casos antigos, sem refAt,
     // caem no ts da gravação)
     setCaseRefAt(c.refAt || c.ts || null); setRefSunset(c.sunsetISO || null)
-    // a PII do paciente não é gravada no caso; ao abrir outro caso a ficha
-    // é zerada (mantendo só o médico logado) para não anexar dados do
-    // paciente errado ao documento
-    setPatient(() => { const e = emptyPatient(); if (user?.full_name) e.medico = user.full_name; return e })
+    // Ficha do paciente: o espelho local entra na hora (a tela não fica em
+    // branco esperando a rede) e o servidor, que é a fonte da verdade, chega
+    // logo atrás e vence quando tem conteúdo. Caso sem ficha em lugar nenhum
+    // abre em branco — nunca com o paciente do caso anterior.
+    const fichaLocal = patientFor(id ?? null)
+    setPatient(fichaLocal)
+    basePatientRef.current = null
+    patientAtRef.current = null
+    enviandoPatientRef.current.clear()
+    setPatientSync(null)
+    // retém o que veio do espelho até o servidor responder: se ele já tem
+    // ficha, ela vence; se não tem, subir é decisão do usuário
+    setFichaPendente(id != null && patientWorthKeeping(fichaLocal))
+    if (id != null) puxarFicha(id)
     setSaveFlash(false); setSaveErr('')
   }
 
@@ -969,8 +1165,12 @@ export default function App({ user, onLogout }) {
   const newCase = () => {
     revGeoRef.current++
     draft.clear(); setRestored(null)
-    clearPatient(user?.id)
-    setPatient(() => { const e = emptyPatient(); if (user?.full_name) e.medico = user.full_name; return e })
+    // some só a ficha do rascunho em curso; as fichas dos casos já gravados
+    // continuam nas gavetas deles (e no servidor)
+    clearPatient(user?.id, null)
+    setPatient(patientFor(null))
+    basePatientRef.current = null; patientAtRef.current = null
+    enviandoPatientRef.current.clear(); setPatientSync(null); setFichaPendente(false)
     setDbId(null); setSaveFlash(false); setSaveErr('')
     setMissionOpen(null); setNotifyMsg(null)
     sinceRef.current = null; baseRef.current = null; ultimoSalvoRef.current = null
@@ -1085,7 +1285,10 @@ export default function App({ user, onLogout }) {
             <textarea rows={3} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="mecanismo, achados, decisão, contatos…" style={{ width: '100%' }} />
           </div>
 
-          <PatientForm patient={patient} onChange={updatePatient} />
+          <PatientForm
+            patient={patient} onChange={updatePatient}
+            sync={patientSync} soLocal={fichaSoLocal} enviando={enviandoFicha}
+            onEnviar={enviarFichaLocal} />
         </div>
 
         {/* -------- coluna direita: mapa e operação -------- */}
@@ -1300,7 +1503,7 @@ export default function App({ user, onLogout }) {
       </div>
 
       <div className="footer">
-        <b>SkyRescue β</b> — ferramenta de apoio à decisão em fase piloto. Não substitui o julgamento do médico regulador, os protocolos do SAMU 192 / SESAB, nem a decisão final do comandante da aeronave (GOA/CBMBA). Meteorologia (Open-Meteo) e áreas de pouso (OpenStreetMap) são indicativas e exigem confirmação operacional. Rotas terrestres via OSRM, sem trânsito em tempo real. Não insira dados pessoais de pacientes (LGPD). Os casos são registrados no servidor do GOA com controle de acesso e autoria.
+        <b>SkyRescue β</b> — ferramenta de apoio à decisão em fase piloto. Não substitui o julgamento do médico regulador, os protocolos do SAMU 192 / SESAB, nem a decisão final do comandante da aeronave (GOA/CBMBA). Meteorologia (Open-Meteo) e áreas de pouso (OpenStreetMap) são indicativas e exigem confirmação operacional. Rotas terrestres via OSRM, sem trânsito em tempo real. Os casos são registrados no servidor do GOA com controle de acesso e autoria. Dados pessoais de paciente só na <b>Ficha do paciente</b>, que é restrita à equipe autorizada e tem todo acesso registrado — fora dela (identificador do caso, observações) não escreva dado identificável.
       </div>
 
       {showCfg && <ConfigModal cfg={cfg} onClose={() => setShowCfg(false)} onSave={(c) => { setCfg(c); saveCfg(c); setShowCfg(false) }} />}

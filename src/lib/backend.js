@@ -38,6 +38,12 @@ export const api = {
   patchCase: (id, fields, clientId) =>
     req('PATCH', `/cases/${id}/live`, { fields, clientId }),
   deleteCase: (id) => req('DELETE', `/cases/${id}`),
+  // ficha do paciente: caminho próprio, separado do snapshot, para a PII não
+  // trafegar no poll de 5 s nem no briefing do bot. Gravação por campo pela
+  // mesma razão do patchCase — duas telas escrevendo na mesma ficha.
+  getPatient: (id) => req('GET', `/cases/${id}/patient`),
+  patchPatient: (id, fields, clientId) =>
+    req('PATCH', `/cases/${id}/patient`, { fields, clientId }),
   notifyCase: (id) => req('POST', `/cases/${id}/notify`),
   saveEvent: (id, event, ts) => req('POST', `/cases/${id}/events`, { event, ts }),
   liveCase: (id, since) => req('GET', `/cases/${id}/live${since ? `?since=${encodeURIComponent(since)}` : ''}`),

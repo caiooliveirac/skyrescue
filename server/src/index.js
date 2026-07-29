@@ -7,6 +7,7 @@ import {
   COOKIE_NAME, startSessionGC,
 } from './auth.js'
 import { startBot, notifyMission, echoMilestones, MILESTONES } from './telegram.js'
+import { sanitizePatient } from './patient-fields.js'
 
 const app = express()
 app.set('trust proxy', 1) // atrás do nginx/Cloudflare
@@ -126,10 +127,12 @@ app.get('/api/cases/:id/live', requireAuth, async (req, res) => {
   const { rows } = await query(
     `SELECT c.snapshot, c.updated_at, c.updated_by_client,
             uu.full_name AS updated_by_name, uu.username AS updated_by_username,
-            m.status AS mission_status
+            m.status AS mission_status,
+            p.updated_at AS patient_at
        FROM cases c
        LEFT JOIN users uu ON uu.id = c.updated_by
        LEFT JOIN mission_chat m ON m.case_id = c.id
+       LEFT JOIN case_patient p ON p.case_id = c.id
       WHERE c.id = $1`,
     [req.params.id]
   )
@@ -142,6 +145,12 @@ app.get('/api/cases/:id/live', requireAuth, async (req, res) => {
     // o status do grupo muda sem tocar no caso (o bot encerra a missão por
     // conta própria), então vai SEMPRE, mesmo na resposta curta
     missionStatus: r.mission_status || null,
+    // Quando a ficha do paciente mudou pela última vez — só o carimbo, nunca o
+    // conteúdo: PII não entra num poll que roda a cada 5 s por tela aberta. A
+    // tela rebusca /patient só quando este valor anda. Vai no `base` pelo mesmo
+    // motivo que missionStatus: a ficha muda sem tocar em cases.updated_at, e
+    // na resposta curta ela ficaria invisível para sempre.
+    patientAt: r.patient_at || null,
   }
   // nada mudou desde a última consulta desta tela: responde curto. Numa
   // ocorrência de 40 min são ~480 consultas por tela aberta, e a esmagadora
@@ -316,6 +325,104 @@ app.delete('/api/cases/:id', requireAuth, async (req, res) => {
     [req.params.id, req.user.id, 'delete', rows[0].case_ref]
   )
   res.json({ ok: true })
+})
+
+// ---------- ficha do paciente (prontuário) ----------
+//
+// DADO IDENTIFICÁVEL. Fica fora do snapshot de propósito (ver comentário da
+// tabela case_patient em db/schema.sql) e por isso tem caminho próprio: a PII
+// só trafega em quem pede explicitamente por ela, nunca no poll de 5 s nem no
+// briefing do bot.
+//
+// Todo acesso — leitura inclusive — vai para a auditoria, coalescido por
+// usuário a cada 5 min. Sem coalescer, o rebusque da tela ao vivo afogaria a
+// tabela e o rastro de quem leu o quê ficaria ilegível de tão grande.
+async function auditaFicha(client, caseId, userId, action) {
+  const recente = await client.query(
+    `SELECT 1 FROM case_audit
+      WHERE case_id = $1 AND user_id = $2 AND action = $3
+        AND at > now() - interval '5 minutes' LIMIT 1`,
+    [caseId, userId, action]
+  )
+  if (recente.rows[0]) return
+  const ref = await client.query('SELECT case_ref FROM cases WHERE id = $1', [caseId])
+  await client.query(
+    'INSERT INTO case_audit (case_id, user_id, action, case_ref) VALUES ($1,$2,$3,$4)',
+    [caseId, userId, action, ref.rows[0]?.case_ref || null]
+  )
+}
+
+app.get('/api/cases/:id/patient', requireAuth, async (req, res) => {
+  const client = await pool.connect()
+  try {
+    const { rows } = await client.query(
+      `SELECT p.data, p.updated_at, p.updated_by_client,
+              uu.full_name AS updated_by_name, uu.username AS updated_by_username
+         FROM case_patient p
+         LEFT JOIN users uu ON uu.id = p.updated_by
+        WHERE p.case_id = $1`,
+      [req.params.id]
+    )
+    const r = rows[0]
+    // caso sem ficha ainda não é erro: é ficha em branco
+    if (r) await auditaFicha(client, req.params.id, req.user.id, 'patient_read')
+    res.json({
+      patient: r?.data || null,
+      updatedAt: r?.updated_at || null,
+      updatedBy: r?.updated_by_name || r?.updated_by_username || null,
+      updatedByClient: r?.updated_by_client || null,
+    })
+  } catch (e) {
+    console.error('get patient:', e)
+    res.status(500).json({ error: 'erro ao ler a ficha' })
+  } finally {
+    client.release()
+  }
+})
+
+// Gravação POR CAMPO, pelo mesmo motivo do PATCH /cases/:id/live: o médico
+// escreve a hipótese no celular enquanto a regulação preenche os vitais no PC.
+// Quem mandasse a ficha inteira apagaria o campo que o outro acabou de digitar.
+app.patch('/api/cases/:id/patient', requireAuth, async (req, res) => {
+  const fields = req.body?.fields
+  if (!fields || typeof fields !== 'object' || Array.isArray(fields))
+    return res.status(400).json({ error: 'campos obrigatórios' })
+  const limpos = sanitizePatient(fields)
+  if (!Object.keys(limpos).length)
+    return res.status(400).json({ error: 'nenhum campo de ficha reconhecido' })
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const existe = await client.query('SELECT 1 FROM cases WHERE id = $1', [req.params.id])
+    if (!existe.rows[0]) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'caso não encontrado' }) }
+    // trava a linha da ficha (ou cria vazia) antes de mesclar, para dois PATCH
+    // simultâneos não se perderem
+    await client.query(
+      `INSERT INTO case_patient (case_id, data) VALUES ($1, '{}'::jsonb)
+       ON CONFLICT (case_id) DO NOTHING`,
+      [req.params.id]
+    )
+    const cur = await client.query(
+      'SELECT data FROM case_patient WHERE case_id = $1 FOR UPDATE', [req.params.id]
+    )
+    const merged = { ...(cur.rows[0]?.data || {}), ...limpos }
+    const { rows } = await client.query(
+      `UPDATE case_patient
+          SET data = $2, updated_at = now(), updated_by = $3, updated_by_client = $4
+        WHERE case_id = $1 RETURNING updated_at`,
+      [req.params.id, merged, req.user.id,
+       typeof req.body?.clientId === 'string' ? req.body.clientId.slice(0, 40) : null]
+    )
+    await auditaFicha(client, req.params.id, req.user.id, 'patient_write')
+    await client.query('COMMIT')
+    res.json({ ok: true, updatedAt: rows[0].updated_at })
+  } catch (e) {
+    await client.query('ROLLBACK')
+    console.error('patch patient:', e)
+    res.status(500).json({ error: 'erro ao gravar a ficha' })
+  } finally {
+    client.release()
+  }
 })
 
 // ---------- bot da missão ----------

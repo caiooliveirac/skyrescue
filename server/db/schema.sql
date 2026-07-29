@@ -152,12 +152,34 @@ CREATE TABLE IF NOT EXISTS mission_chat (
   near_alerted     BOOLEAN NOT NULL DEFAULT FALSE
 );
 
+-- ---------- ficha do paciente (prontuário) ----------
+-- DADO IDENTIFICÁVEL DE PACIENTE. Fica em tabela PRÓPRIA, e não em `cases`
+-- nem dentro de `cases.snapshot`, por um motivo concreto: o snapshot é copiado
+-- para o briefing do Telegram (src/telegram.js), para a listagem de casos e
+-- para o relatório exportado. PII ali vazaria por construção, sem ninguém
+-- decidir nada. Aqui ela só sai por quem pede /api/cases/:id/patient.
+--
+-- Retenção: a ficha vive e morre com o caso (ON DELETE CASCADE). Não há
+-- expurgo por tempo — descartar é ato explícito de quem apaga o caso.
+--
+-- Guardada em texto (JSONB), protegida por login, controle de acesso e
+-- auditoria. Isto significa que backups e dumps deste banco contêm dado de
+-- paciente identificado: onde eles forem parar herda essa sensibilidade.
+CREATE TABLE IF NOT EXISTS case_patient (
+  case_id           BIGINT PRIMARY KEY REFERENCES cases(id) ON DELETE CASCADE,
+  data              JSONB       NOT NULL DEFAULT '{}'::jsonb,
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_by        BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  updated_by_client TEXT
+);
+
 -- ---------- trilha de auditoria dos casos ----------
 CREATE TABLE IF NOT EXISTS case_audit (
   id       BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   case_id  BIGINT,                               -- sem FK: preserva histórico após DELETE
   user_id  BIGINT REFERENCES users(id) ON DELETE SET NULL,
-  action   TEXT NOT NULL,                        -- 'create' | 'update' | 'autosave' | 'delete'
+  -- 'create' | 'update' | 'autosave' | 'delete' | 'patient_read' | 'patient_write'
+  action   TEXT NOT NULL,
   at       TIMESTAMPTZ NOT NULL DEFAULT now(),
   case_ref TEXT
 );
