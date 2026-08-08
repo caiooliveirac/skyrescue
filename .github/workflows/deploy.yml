@@ -143,6 +143,25 @@ jobs:
             fi
           EOF
 
+      # O deploy publica por rsync/install e nunca tocava no git de
+      # /home/ubuntu/skyrescue: o checkout do servidor ficava parado no commit
+      # antigo com os arquivos novos por cima, parecendo "produção editada à
+      # mão". Alinhar aqui mantém `git log`/`labctl status` dizendo a verdade
+      # sobre o que está no ar.
+      - name: Alinhar git do servidor com o commit publicado
+        run: |
+          ssh -i ~/.ssh/id_ed25519 ${{ env.REMOTE }} bash -s << 'EOF'
+            set -euo pipefail
+            cd /home/ubuntu/skyrescue
+            git fetch --quiet origin
+            # reset --hard e não checkout: o rsync do backend deixa o working
+            # tree modificado e o checkout recusaria. .env e node_modules são
+            # ignorados pelo git, então sobrevivem.
+            git checkout -q -B main
+            git reset --hard --quiet "${{ github.sha }}"
+            echo "servidor agora em $(git rev-parse --short HEAD)"
+          EOF
+
       - name: Notify Telegram (success)
         if: success()
         env:
