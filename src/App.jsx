@@ -22,13 +22,64 @@ import { DecisionStrip, TimePanel, WeatherPanel, LZPanel, AlertsPanel, GatesPane
 import {
   IconHeli, IconPlus, IconFolder, IconPrint, IconSettings, IconSearch, IconPin,
   IconTarget, IconZap, IconCopy, IconSave, IconDownload, IconHelipadH,
-  IconClock, IconCloud, IconAlert, IconRoute, IconX, IconUsers,
+  IconClock, IconCloud, IconAlert, IconRoute, IconX, IconUsers, IconLayers,
 } from './components/Icons.jsx'
+
+// Telas do caso. No celular (cabine) o app mostra UMA por vez, escolhida no
+// hub de ícones; no desktop da central (>= 1020px) todas aparecem juntas como
+// sempre. A "rota" é só o hash da URL — sem router, e o botão voltar do
+// Android já sai da tela sem sair do caso.
+const VIEWS = ['hub', 'caso', 'fatores', 'navegar', 'nav', 'paciente', 'missao']
+// abas do topo quando o celular está dentro de uma tela: trocar de tela é um
+// toque, sem passar pelo hub
+const VIEW_TABS = [
+  ['caso', 'Caso', IconTarget],
+  ['fatores', 'Fatores', IconAlert],
+  ['navegar', 'Mapa', IconRoute],
+  ['paciente', 'Paciente', IconUsers],
+  ['missao', 'Missão', IconClock],
+]
+
+function useHashView() {
+  const read = () => {
+    const v = location.hash.slice(1)
+    return VIEWS.includes(v) ? v : 'hub'
+  }
+  const [view, setView] = useState(read)
+  useEffect(() => {
+    const h = () => setView(read())
+    window.addEventListener('hashchange', h)
+    return () => window.removeEventListener('hashchange', h)
+  }, [])
+  return view
+}
+
+function useWide() {
+  const mq = () => window.matchMedia('(min-width: 1020px)')
+  const [wide, setWide] = useState(() => mq().matches)
+  useEffect(() => {
+    const m = mq()
+    // 'change' cobre girar o celular; 'resize' cobre o desktop arrastando a
+    // janela (e emuladores que trocam o viewport sem emitir 'change')
+    const h = () => setWide(m.matches)
+    m.addEventListener('change', h)
+    window.addEventListener('resize', h)
+    return () => { m.removeEventListener('change', h); window.removeEventListener('resize', h) }
+  }, [])
+  return wide
+}
+
+const go = (v) => { location.hash = v }
 
 export default function App({ user, onLogout }) {
   const [cfg, setCfg] = useState(loadCfg)
   const [showCfg, setShowCfg] = useState(false)
   const [showCases, setShowCases] = useState(false)
+
+  // navegação por tela (celular) x tela única (central)
+  const view = useHashView()
+  const wide = useWide()
+  const show = (v) => wide || view === v
 
   // ocorrência
   const [scene, setScene] = useState(null)
@@ -110,7 +161,7 @@ export default function App({ user, onLogout }) {
   // pontos de pouso sugeridos pela comunidade (pendentes + validados)
   const [communityLz, setCommunityLz] = useState([])
   const [showComm, setShowComm] = useState(false)
-  const [showNav, setShowNav] = useState(false) // modo navegação do piloto (GPS)
+  // modo navegação do piloto (GPS) virou tela: view === 'nav'
   const [commDraft, setCommDraft] = useState(null) // {lat, lon} clicado no mapa
   // fotos dos pontos de pouso: o ponto tocado no mapa e a contagem por ponto
   // (uma chamada só alimenta o selo de câmera de todos os marcadores)
@@ -1199,15 +1250,21 @@ export default function App({ user, onLogout }) {
           </div>
         </div>
         <div className="spacer" />
-        <button className="tbtn" onClick={newCase}><IconPlus size={14} /> Novo caso</button>
-        <button className="tbtn" onClick={() => setShowCases(true)}><IconFolder size={14} /> Casos ({cases.length})</button>
-        <button className="tbtn" onClick={() => window.print()}><IconPrint size={14} /> Registro</button>
-        <button className="tbtn" onClick={() => setShowCfg(true)}><IconSettings size={14} /> Config</button>
+        <button className="tbtn" onClick={newCase} title="Novo caso"><IconPlus size={14} /> <span className="tlabel">Novo caso</span></button>
+        <button className="tbtn" onClick={() => setShowCases(true)} title={`Casos registrados (${cases.length})`}>
+          <IconFolder size={14} /> <span className="tlabel">Casos ({cases.length})</span>
+        </button>
+        <button className="tbtn" onClick={() => window.print()} title="Imprimir registro do caso">
+          <IconPrint size={14} /> <span className="tlabel">Registro</span>
+        </button>
+        <button className="tbtn" onClick={() => setShowCfg(true)} title="Configuração"><IconSettings size={14} /> <span className="tlabel">Config</span></button>
         {user && <span className="who" title={user.role}>{user.full_name || user.username}</span>}
-        <button className="tbtn" onClick={doLogout} title="Encerrar sessão"><IconX size={14} /> Sair</button>
+        <button className="tbtn" onClick={doLogout} title="Encerrar sessão"><IconX size={14} /> <span className="tlabel">Sair</span></button>
       </div>
 
-      <DecisionStrip scene={scene} score={score} gates={gates} rec={rec} onCopy={copyResumo} />
+      {/* faixa de decisão só na central: no celular o score já está no hub e no
+          card "Pontuação de elegibilidade", e a faixa custava uma tela inteira */}
+      {wide && <DecisionStrip scene={scene} score={score} gates={gates} rec={rec} onCopy={copyResumo} />}
 
       {restored && (
         <div className="notice notice-draft">
@@ -1218,15 +1275,74 @@ export default function App({ user, onLogout }) {
         </div>
       )}
 
-      {!cfg.base.verified && (
-        <div className="notice">
-          <b>Primeiro uso:</b> confirme a posição da base do GOA e as posições de hospitais/helipontos na tela <b>Config</b>.
+      {!wide && view === 'hub' && (
+        <div className="hub">
+          <button className="tile" onClick={() => go('caso')}>
+            <IconTarget size={38} />
+            <span className="t">Caso</span>
+            <span className="d">local · pontuação · destino</span>
+            <span className={'badge ' + (score.total >= 9 ? 'fail' : score.total >= 5 ? 'warn' : score.total > 0 ? 'ok' : '')}>
+              {score.total} pts{rec ? ` · ${score.band.label}` : ''}
+            </span>
+          </button>
+
+          <button className="tile" onClick={() => go('fatores')}>
+            <IconAlert size={38} />
+            <span className="t">Fatores</span>
+            <span className="d">gates · meteo · tempos · LZ</span>
+            <span className={'badge ' + (gates.fails.length ? 'fail' : gates.warns.length ? 'warn' : 'ok')}>
+              {gates.fails.length ? `${gates.fails.length} impeditivo${gates.fails.length > 1 ? 's' : ''}`
+                : gates.warns.length ? `${gates.warns.length} a confirmar`
+                : 'condições ok'}
+            </span>
+          </button>
+
+          <button className="tile" onClick={() => go('navegar')}>
+            <IconRoute size={38} />
+            <span className="t">Navegação</span>
+            <span className="d">mapa · LZ · modo piloto</span>
+            <span className="badge">{mission?.airTotal != null ? `aéreo ${fmtMin(mission.airTotal)}` : 'sem cena'}</span>
+          </button>
+
+          <button className="tile" onClick={() => go('paciente')}>
+            <IconUsers size={38} />
+            <span className="t">Paciente</span>
+            <span className="d">ficha · prontuário</span>
+            <span className={'badge ' + (patientWorthKeeping(patient) ? 'ok' : '')}>
+              {patientWorthKeeping(patient) ? 'ficha iniciada' : 'ficha vazia'}
+            </span>
+          </button>
+
+          <button className="tile" onClick={() => go('missao')}>
+            <IconClock size={38} />
+            <span className="t">Missão</span>
+            <span className="d">horários · grupo · registro</span>
+            <span className={'badge ' + (missionOpen === 'ativa' ? 'ok' : dbId == null ? 'warn' : '')}>
+              {missionOpen === 'ativa' ? 'grupo acionado'
+                : dbId == null ? 'não salvo'
+                : `${Object.keys(events).length} horário${Object.keys(events).length === 1 ? '' : 's'}`}
+            </span>
+          </button>
         </div>
       )}
 
+      {!wide && view !== 'hub' && view !== 'nav' && (
+        <div className="viewbar">
+          <button className="vtab home" onClick={() => go('hub')} title="Todas as telas"><IconLayers size={17} /></button>
+          {VIEW_TABS.map(([v, label, Icon]) => (
+            <button key={v} className={'vtab' + (view === v ? ' on' : '')} onClick={() => go(v)}>
+              <Icon size={17} /> {label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {(wide || view !== 'hub') && (
       <div className="wrap">
         {/* -------- coluna esquerda: avaliação -------- */}
+        {(show('caso') || show('fatores') || show('paciente')) && (
         <div className="col">
+          {show('caso') && (
           <div className="card">
             <h2><span className="step-num">1</span> Local da ocorrência</h2>
             <div className="row">
@@ -1263,7 +1379,9 @@ export default function App({ user, onLogout }) {
               <input type="text" value={caseId} onChange={(e) => setCaseId(e.target.value)} placeholder="ex.: 2026-0707-014" />
             </div>
           </div>
+          )}
 
+          {show('caso') && (
           <div className="card" style={{ paddingBottom: 10 }}>
             <h2>
               <span className="step-num">2</span> Pontuação de elegibilidade
@@ -1273,26 +1391,38 @@ export default function App({ user, onLogout }) {
               Marque o que se aplica — itens <span className="auto-tag" style={{ fontStyle: 'normal' }}>AUTO</span> são calculados pelos tempos e podem ser sobrescritos.
             </div>
           </div>
+          )}
+          {show('caso') && (
           <Checklist isChecked={isChecked} isOverridden={isOverridden} onToggle={toggleItem} onReset={resetAuto} score={score} />
+          )}
 
+          {show('fatores') && (
           <div className="card">
             <h2><span className="step-num">3</span> Condições operacionais (gates)</h2>
             <GatesPanel gates={gates} manualVals={gateManual} onManual={(id, v) => setGateManual((p) => ({ ...p, [id]: v }))} onOverride={(id, v) => setGateOverrides((p) => { const n = { ...p }; if (v) n[id] = v; else delete n[id]; return n })} />
           </div>
+          )}
 
+          {show('caso') && (
           <div className="card">
             <h2>Observações da regulação</h2>
             <textarea rows={3} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="mecanismo, achados, decisão, contatos…" style={{ width: '100%' }} />
           </div>
+          )}
 
+          {show('paciente') && (
           <PatientForm
             patient={patient} onChange={updatePatient}
             sync={patientSync} soLocal={fichaSoLocal} enviando={enviandoFicha}
             onEnviar={enviarFichaLocal} />
+          )}
         </div>
+        )}
 
         {/* -------- coluna direita: mapa e operação -------- */}
+        {(show('caso') || show('fatores') || show('navegar') || show('missao')) && (
         <div className="col">
+          {show('navegar') && (
           <div className="card mapbox">
             <div className="mapmode">
               <button className={mapMode === 'scene' ? 'on' : ''} onClick={() => setMapMode('scene')}><IconPin size={13} /> Ocorrência</button>
@@ -1318,11 +1448,13 @@ export default function App({ user, onLogout }) {
               <button className={baseLayer === 'sat' ? 'on' : ''} onClick={() => pickBaseLayer('sat')}>Satélite</button>
               <button className={baseLayer === 'hybrid' ? 'on' : ''} onClick={() => pickBaseLayer('hybrid')}>Híbrido</button>
             </div>
-            <button className="navlaunch" onClick={() => setShowNav(true)} title="Modo navegação do piloto — posição GPS ao vivo, rumo e ETE">
+            <button className="navlaunch" onClick={() => go('nav')} title="Modo navegação do piloto — posição GPS ao vivo, rumo e ETE">
               <IconRoute size={15} /> Navegar
             </button>
           </div>
+          )}
 
+          {show('caso') && (
           <div className="card">
             <h2><span className="step-num">4</span> Destino e operação</h2>
             <div className="field">
@@ -1373,13 +1505,16 @@ export default function App({ user, onLogout }) {
               {!cfg.ambBases?.length && <div className="small">Dica: cadastre bases SAMU em Config para sugestão automática.</div>}
             </div>
           </div>
+          )}
 
+          {show('fatores') && (
           <div className="card">
             <h2><IconClock size={14} /> Tempos estimados {route == null && scene && !routeErr ? <span className="spin" /> : null}</h2>
             <TimePanel mission={mission} />
           </div>
+          )}
 
-          {scene && (
+          {show('fatores') && scene && (
             <div className="card">
               <h2><IconTarget size={14} /> Áreas de pouso próximas à ocorrência</h2>
               <LZPanel
@@ -1393,21 +1528,21 @@ export default function App({ user, onLogout }) {
             </div>
           )}
 
-          {scene && (
+          {show('fatores') && scene && (
             <div className="card">
               <h2><IconCloud size={14} /> Meteorologia</h2>
               <WeatherPanel wxScene={wxScene} wxBase={wxBase} wxErr={wxErr} metar={metar} daylight={daylight} />
             </div>
           )}
 
-          {scene && (
+          {show('fatores') && scene && (
             <div className="card">
               <h2><IconAlert size={14} /> Alertas de segurança</h2>
               <AlertsPanel alerts={alerts} />
             </div>
           )}
 
-          {scene && (
+          {show('missao') && scene && (
             <div className="card">
               <h2><IconRoute size={14} /> Acompanhamento da missão</h2>
               <Tracking events={events} onMark={markEvent} onEdit={editEvent} mission={mission} />
@@ -1433,7 +1568,7 @@ export default function App({ user, onLogout }) {
             </div>
           )}
 
-          {scene && (
+          {show('missao') && scene && (
             <div className="card">
               <h2>
                 <IconSave size={14} /> Registro
@@ -1500,7 +1635,9 @@ export default function App({ user, onLogout }) {
             </div>
           )}
         </div>
+        )}
       </div>
+      )}
 
       <div className="footer">
         <b>SkyRescue β</b> — ferramenta de apoio à decisão em fase piloto. Não substitui o julgamento do médico regulador, os protocolos do SAMU 192 / SESAB, nem a decisão final do comandante da aeronave (GOA/CBMBA). Meteorologia (Open-Meteo) e áreas de pouso (OpenStreetMap) são indicativas e exigem confirmação operacional. Rotas terrestres via OSRM, sem trânsito em tempo real. Os casos são registrados no servidor do GOA com controle de acesso e autoria. Dados pessoais de paciente só na <b>Ficha do paciente</b>, que é restrita à equipe autorizada e tem todo acesso registrado — fora dela (identificador do caso, observações) não escreva dado identificável.
@@ -1508,18 +1645,18 @@ export default function App({ user, onLogout }) {
 
       {showCfg && <ConfigModal cfg={cfg} onClose={() => setShowCfg(false)} onSave={(c) => { setCfg(c); saveCfg(c); setShowCfg(false) }} />}
 
-      {showNav && (
+      {view === 'nav' && (
         <NavMode
           cfg={cfg} scene={scene} lzPoint={lzPoint}
           hospital={hospital} landingHelipad={landingHelipad}
           events={events} onQuickMark={quickMarkEvent} onUndoMark={undoEvent}
-          onClose={() => setShowNav(false)}
+          onClose={() => go(wide ? 'caso' : 'navegar')}
         />
       )}
 
       {/* chip flutuante de marcação rápida: aparece após o primeiro horário
           registrado e some quando a missão termina (todos os marcos feitos) */}
-      {scene && !showNav && Object.keys(events).length > 0 && (
+      {scene && view !== 'nav' && Object.keys(events).length > 0 && (
         <MilestoneQuick events={events} onMark={quickMarkEvent} onUndo={undoEvent} className="qmark-fab" />
       )}
 

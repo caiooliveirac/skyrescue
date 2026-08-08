@@ -176,6 +176,68 @@ a { color: var(--accent); }
 @media (max-width: 1020px) { .wrap { grid-template-columns: 1fr; } }
 .col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 
+/* ---------- hub de telas (só no celular; a central segue em tela única) ----------
+   Alvos grandes: quem toca aqui está de luva, com o helicóptero balançando. */
+.hub {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  padding: 16px 16px 40px;
+}
+.hub .tile {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 4px;
+  min-height: 132px;
+  padding: 14px 14px 12px;
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--radius); box-shadow: var(--shadow);
+  color: var(--ink); text-align: left; cursor: pointer;
+  font: inherit;
+}
+.hub .tile:active { border-color: var(--accent); }
+.hub .tile svg { color: var(--accent); margin-bottom: 2px; }
+.hub .tile .t { font-size: 17px; font-weight: 700; line-height: 1.15; }
+.hub .tile .d { font-size: 11.5px; color: var(--muted); line-height: 1.25; }
+.hub .tile .badge { margin-top: auto; }
+
+/* no celular a topbar é só ícones: cada linha que ela ganha é uma linha que o
+   caso perde. Rótulo continua no title (tooltip) e no desktop da central. */
+@media (max-width: 1019px) {
+  .tlabel { display: none; }
+  .topbar .who { display: none; }
+}
+/* na tela mais estreita some até a marca — o logo já identifica o app */
+@media (max-width: 620px) {
+  .logo-word { display: none; }
+}
+
+/* abas de tela (celular): trocar de tela sem voltar ao hub.
+   Grudam no topo porque em voo a mão acha a aba, não o scroll. */
+.viewbar {
+  position: sticky; top: 0; z-index: 400;
+  display: flex; align-items: center; gap: 6px;
+  padding: 8px 12px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.viewbar::-webkit-scrollbar { display: none; }
+.vtab {
+  display: inline-flex; align-items: center; gap: 5px;
+  flex: none;
+  min-height: 44px; padding: 0 13px;
+  background: var(--surface-2); border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted); font: inherit; font-size: 13.5px; font-weight: 600;
+  white-space: nowrap; cursor: pointer;
+}
+.vtab.home { padding: 0 11px; }
+.vtab svg { flex: none; }
+.vtab.on {
+  background: var(--accent-soft); border-color: var(--accent);
+  color: var(--ink);
+}
+
 .card {
   background: var(--surface);
   border: 1px solid var(--line);
@@ -779,6 +841,36 @@ input[type="checkbox"] { accent-color: #22d3ee; width: 16px; height: 16px; }
   background: var(--grad-primary); color: #fff; border: none; cursor: pointer;
   font-size: 13px; font-weight: 700; border-radius: 11px; padding: 10px 16px;
   box-shadow: 0 4px 18px rgba(34, 211, 238, 0.35);
+}
+
+/* No celular nada flutua sobre o mapa: os controles saem da sobreposição e
+   viram linhas próprias. Mapa pequeno + 3 grupos de botões por cima = botão
+   escondendo botão e legenda comendo metade da cena. */
+@media (max-width: 1019px) {
+  .mapbox { display: flex; flex-direction: column; gap: 8px; padding: 8px; }
+
+  .navlaunch { position: static; order: 0; justify-content: center; min-height: 48px; font-size: 15px; }
+
+  .mapmode {
+    position: static; order: 1;
+    flex-wrap: nowrap; justify-content: flex-start;
+    overflow-x: auto; scrollbar-width: none;
+    padding-bottom: 2px;
+  }
+  .mapmode::-webkit-scrollbar { display: none; }
+  .mapmode button { flex: none; min-height: 40px; padding: 0 12px; font-size: 12.5px; }
+
+  .maplayers { position: static; order: 2; align-self: stretch; }
+  .maplayers button { flex: 1; min-height: 40px; }
+
+  #map { order: 3; height: 58vh; min-height: 300px; }
+
+  /* legenda vira nota de rodapé do card, fora do mapa */
+  .maplegend {
+    position: static; order: 4;
+    background: none; border: none; backdrop-filter: none; -webkit-backdrop-filter: none;
+    padding: 0 2px; gap: 8px 12px;
+  }
 }
 
 /* ---------- modal ---------- */
