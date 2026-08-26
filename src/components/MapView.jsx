@@ -34,6 +34,10 @@ const helipadIcon = (landing) =>
 // infraestrutura registrada, não um ponto já coordenado da missão
 const anacIcon = () =>
   L.divIcon({ className: 'mk', html: '<div class="mk-anac">H</div>', iconSize: [20, 20], iconAnchor: [10, 10] })
+// base SAMU (ambulância): quadrado-S vermelho discreto — é de onde parte a
+// rota terrestre que alimenta a sugestão automática de ETA até a cena
+const samuIcon = () =>
+  L.divIcon({ className: 'mk', html: '<div class="mk-samu">S</div>', iconSize: [20, 20], iconAnchor: [10, 10] })
 // ponto de pouso da comunidade: pendente = círculo-H âmbar tracejado
 // (sugestão de usuário, aguarda admin); aprovado = cor padrão da base
 // ponto da comunidade; o selo de câmera avisa que o local tem foto — quem
@@ -228,6 +232,14 @@ export default function MapView({
       ).addTo(lay)
     }
 
+    // bases SAMU (ambulâncias) — origem do cálculo de rota terrestre
+    // base → ocorrência usado na comparação terrestre × aéreo
+    for (const b of cfg.ambBases || []) {
+      L.marker([b.lat, b.lon], { icon: samuIcon(), zIndexOffset: 30 })
+        .bindTooltip(`${b.name} — base SAMU (ambulância)`)
+        .addTo(lay)
+    }
+
     // helipontos registrados ANAC (catálogo) — camada persistente, sempre no
     // mapa. Omite os que já têm marcador próprio: hospital com heliponto /
     // heliponto de apoio a <150 m, ou candidato de LZ com letra na cena atual.
@@ -382,6 +394,7 @@ export default function MapView({
         <span><b className="lg-pad apoio">H</b> heliponto de apoio</span>
         <span><b className="lg-pad anac">H</b> heliponto ANAC</span>
         <span><b className="lg-pad comm">H</b> sugestão da comunidade (a validar)</span>
+        <span><b className="lg-samu">S</b> base SAMU (ambulância)</span>
         <span><b className="lg-acft">➤</b> GOA em voo (ao vivo)</span>
       </div>
     </>

@@ -325,6 +325,9 @@ export default function App({ user, onLogout }) {
 
   // ---------- cálculo ----------
   const lzPoint = manualLz || (lzList || []).find((c) => c.id === lzSelId) || null
+  // sem ETA digitado, usa a melhor rota calculada base SAMU → cena — a
+  // comparação terrestre × aéreo sai completa sem depender de estimativa manual
+  const ambAuto = ambEta === '' && ambSug?.length ? ambSug[0] : null
   const mission = useMemo(
     () =>
       computeMission({
@@ -334,9 +337,9 @@ export default function App({ user, onLogout }) {
         lzPoint: lzPoint ? { lat: lzPoint.lat, lon: lzPoint.lon } : null,
         landingHelipad,
         groundRoute: route,
-        ambulanceEtaMin: ambEta === '' ? null : Number(ambEta),
+        ambulanceEtaMin: ambEta !== '' ? Number(ambEta) : ambAuto ? ambAuto.min : null,
       }),
-    [cfg, scene, hospital, lzPoint, landingHelipad, route, ambEta]
+    [cfg, scene, hospital, lzPoint, landingHelipad, route, ambEta, ambAuto]
   )
   const autos = useMemo(() => autoChecks(mission), [mission])
 
@@ -1494,7 +1497,15 @@ export default function App({ user, onLogout }) {
 
             <div className="field" style={{ marginBottom: 0 }}>
               <label>ETA da ambulância mais próxima até a cena (min)</label>
-              <input type="number" min="0" value={ambEta} onChange={(e) => setAmbEta(e.target.value)} placeholder="informe o tempo estimado" />
+              <input
+                type="number" min="0" value={ambEta} onChange={(e) => setAmbEta(e.target.value)}
+                placeholder={ambAuto ? `${ambAuto.min} — rota ${ambAuto.name}` : 'informe o tempo estimado'}
+              />
+              {ambAuto && (
+                <div className="small">
+                  Usando automaticamente a rota terrestre {ambAuto.name} → cena ({ambAuto.min} min) — digite um valor para substituir.
+                </div>
+              )}
               {ambSug && ambSug.length > 0 && (
                 <div className="row">
                   {ambSug.map((s, i) => (

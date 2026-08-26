@@ -102,7 +102,7 @@ Cada foto é presa ao ponto pelo mesmo identificador que o app já usa nos candi
 2. Ative **Ajustar posições** no mapa e arraste hospitais e helipontos para o lugar certo (ou edite lat/lon em **Config** — botão "buscar" geocodifica pelo endereço).
 3. Em **Config**, confira quais hospitais têm heliponto próprio (Heli) e o heliponto de apoio de cada um.
 4. Ajuste velocidade de cruzeiro, tempos fixos e fator de trânsito conforme a experiência real da equipe.
-5. (Opcional) Cadastre bases SAMU para sugestão automática do ETA da ambulância.
+5. As bases SAMU de Salvador já vêm cadastradas com as coordenadas exatas de produção (mesmas do taxímetro-digital): o app calcula a rota terrestre base → ocorrência (Google Routes com trânsito; OSRM reserva) das 3 bases mais próximas e usa a melhor como ETA da ambulância — somado ao tempo de cena e à rota ocorrência → hospital, a comparação terrestre × aéreo sai completa sem digitar nada. Digitar um ETA manual substitui o cálculo; as bases são editáveis em **Config**.
 
 A calibração (base, hospitais, tempos) fica no navegador do computador (localStorage). Já os **casos** são registrados no servidor, com o usuário que os criou.
 

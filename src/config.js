@@ -118,7 +118,23 @@ export const DEFAULTS = {
       lat: -13.006921128177416, lon: -38.493164777755744, heliponto: true, verified: true,
       note: 'Rede privada. Heliponto próprio — apoio ao HGE mediante coordenação prévia.' },
   ],
-  ambBases: [], // bases SAMU opcionais: {id, name, lat, lon}
+  // Bases SAMU 192 Salvador — coordenadas exatas usadas em produção no
+  // taximetro-digital (aba Bases do internato; capturadas no maps-samu).
+  // Alimentam a sugestão automática de ETA: rota terrestre base → ocorrência
+  // (Google Routes com trânsito; OSRM reserva), para a comparação
+  // terrestre × aéreo usar tempo de deslocamento real e não chute.
+  ambBases: [
+    { id: 'sm01', name: 'Base San Martin', lat: -12.946836, lon: -38.481288 },
+    { id: 'cb02', name: 'Base Cidade Baixa', lat: -12.935104, lon: -38.506528 },
+    { id: 'pr03', name: 'Base Paralela', lat: -12.934140, lon: -38.392223 },
+    { id: 'pm04', name: 'Base Pau Miúdo', lat: -12.959059, lon: -38.487838 },
+    { id: 'br05', name: 'Base Boca do Rio', lat: -12.983681, lon: -38.438684 },
+    { id: 'cn10', name: 'Base Centenário', lat: -12.990816, lon: -38.511382 },
+    { id: 'pp20', name: 'Base Periperi', lat: -12.868043, lon: -38.472560 },
+    { id: 'it30', name: 'Base Itapoã', lat: -12.924475, lon: -38.351147 },
+    { id: 'cz50', name: 'Base Cajazeiras', lat: -12.898305, lon: -38.389943 },
+    { id: 'cc70', name: 'Base Cabula', lat: -12.959085, lon: -38.452476 },
+  ],
 }
 
 export const TAG_LABELS = {
@@ -175,6 +191,7 @@ export function loadCfg() {
       const merged = deepMerge(JSON.parse(JSON.stringify(DEFAULTS)), c)
       merged.hospitals = mergeListById(DEFAULTS.hospitals, merged.hospitals)
       merged.helipads = mergeListById(DEFAULTS.helipads, merged.helipads)
+      merged.ambBases = mergeListById(DEFAULTS.ambBases, merged.ambBases)
       return merged
     }
   } catch (e) { /* storage indisponível */ }

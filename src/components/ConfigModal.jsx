@@ -251,9 +251,10 @@ export default function ConfigModal({ cfg, onSave, onClose }) {
           + adicionar heliponto
         </button>
 
-        <h4>Bases de ambulância (opcional)</h4>
+        <h4>Bases de ambulância (SAMU 192)</h4>
         <div className="small" style={{ marginBottom: 8 }}>
-          Cadastre bases SAMU para o sistema estimar automaticamente o tempo ambulância → cena (senão, informe o ETA manualmente).
+          Bases SAMU de Salvador já vêm carregadas com as coordenadas de produção. O sistema calcula a rota base → cena
+          das 3 mais próximas e usa a melhor como ETA da ambulância (dá para sobrescrever digitando o ETA no caso).
         </div>
         {(c.ambBases || []).map((b, i) => (
           <div className="helipad-row ambbase-row" key={b.id}>

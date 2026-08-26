@@ -18,7 +18,7 @@ O SAMU 192 Salvador passou a contar com o Grupamento de Operações Aéreas do C
 1. Local da ocorrência: endereço/rodovia+km (geocodificação Nominatim), coordenadas coladas, ou clique no mapa.
 2. Checklist clínico-operacional (seção 5).
 3. Hospital de destino (lista pré-configurada, com sugestão automática pelo perfil clínico).
-4. ETA da ambulância mais próxima até a cena (manual; ou sugerido por rota a partir de bases SAMU cadastradas).
+4. ETA da ambulância mais próxima até a cena: calculado automaticamente por rota terrestre a partir das bases SAMU pré-cadastradas (coordenadas de produção; as 3 mais próximas são roteadas e a melhor vira o ETA), com opção de digitar um valor manual que substitui o cálculo.
 5. Gates manuais: aeronave disponível, equipe disponível, segurança preservada.
 
 ## 4. Cálculos
