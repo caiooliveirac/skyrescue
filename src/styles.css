@@ -202,7 +202,7 @@ a { color: var(--accent); }
 /* no celular a topbar é só ícones: cada linha que ela ganha é uma linha que o
    caso perde. Rótulo continua no title (tooltip) e no desktop da central. */
 @media (max-width: 1019px) {
-  .tlabel { display: none; }
+  .topbar .tlabel { display: none; }
   .topbar .who { display: none; }
 }
 /* na tela mais estreita some até a marca — o logo já identifica o app */
