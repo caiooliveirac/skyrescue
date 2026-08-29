@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import L from 'leaflet'
-import 'leaflet/dist/leaflet.css'
 import { IconHeli } from './Icons.jsx'
 import { geocode, reverseGeocode } from '../lib/api.js'
+import { loadGoogleMaps } from '../lib/gmaps.js'
 
 // Tela pública: é o que qualquer pessoa vê ao cair no site, antes de login.
 // Dois caminhos — acionar o GOA (formulário) ou acompanhar um acionamento já
@@ -28,80 +27,74 @@ const IconWhats = ({ size = 20 }) => (
   </svg>
 )
 
-// pino sem asset de imagem: o ícone padrão do Leaflet depende de PNGs que o
-// build single-file não resolve; um divIcon com emoji funciona em qualquer tela
-const PIN = L.divIcon({
-  className: '',
-  html: '<div style="font-size:30px;line-height:30px;transform:translate(-50%,-100%);text-shadow:0 1px 3px rgba(0,0,0,.6)">📍</div>',
-  iconSize: [0, 0],
-})
-
-// Mapa de apontar o local. Quem liga muitas vezes é ruim de mapa: o caminho
-// principal é DIGITAR o que sabe e escolher um resultado da busca — o mapa
-// entra já centrado no lugar certo e o toque só refina. Satélite ajuda quem
-// reconhece o posto/o galpão mas não sabe o nome da rua.
+// Mapa de apontar o local — Google Maps oficial, o mesmo da tela logada
+// (chave embutida no build). Padrão HÍBRIDO: satélite com nomes de rua e
+// pontos de referência, o que mais ajuda quem reconhece o posto/o galpão mas
+// não sabe o nome da rua. O caminho principal continua sendo DIGITAR o que
+// sabe e escolher um resultado da busca; o toque no mapa só refina.
 function MapaLocal({ pin, onPin }) {
   const boxRef = useRef(null)
   const mapRef = useRef(null)
   const markRef = useRef(null)
-  const [sat, setSat] = useState(false)
-  const layersRef = useRef(null)
+  const [erro, setErro] = useState(false)
+  const onPinRef = useRef(onPin)
+  onPinRef.current = onPin
 
   useEffect(() => {
-    const map = L.map(boxRef.current, {
-      center: pin ? [pin.lat, pin.lon] : [-12.6, -38.9], // Bahia, entre as centrais
-      zoom: pin ? 15 : 7,
-      zoomControl: true,
-    })
-    const ruas = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '© OpenStreetMap', maxZoom: 19,
-    })
-    const esri = L.tileLayer(
-      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-      { attribution: 'Esri', maxZoom: 19 }
-    )
-    ruas.addTo(map)
-    layersRef.current = { ruas, esri }
-    map.on('click', (e) => onPin({ lat: e.latlng.lat, lon: e.latlng.lng }))
-    mapRef.current = map
-    return () => map.remove()
+    const key = import.meta.env.VITE_GMAPS_KEY
+    if (!key) { setErro(true); return }
+    let vivo = true
+    loadGoogleMaps(key)
+      .then((gm) => {
+        if (!vivo || !boxRef.current) return
+        const map = new gm.Map(boxRef.current, {
+          center: pin ? { lat: pin.lat, lng: pin.lon } : { lat: -12.6, lng: -38.9 }, // Bahia
+          zoom: pin ? 16 : 7,
+          mapTypeId: 'hybrid',
+          streetViewControl: false,
+          fullscreenControl: false,
+          mapTypeControl: true,
+          mapTypeControlOptions: { mapTypeIds: ['hybrid', 'roadmap'] },
+          // 'cooperative' no celular: 1 dedo rola a página, 2 dedos mexem no
+          // mapa — sem isso o mapa no meio do formulário vira armadilha de rolagem
+          gestureHandling: 'cooperative',
+        })
+        map.addListener('click', (e) => onPinRef.current({ lat: e.latLng.lat(), lon: e.latLng.lng() }))
+        mapRef.current = { gm, map }
+      })
+      .catch(() => { if (vivo) setErro(true) })
+    return () => { vivo = false; mapRef.current = null }
   }, []) // eslint-disable-line
 
   useEffect(() => {
-    const { ruas, esri } = layersRef.current || {}
-    if (!mapRef.current || !ruas) return
-    if (sat) { mapRef.current.removeLayer(ruas); esri.addTo(mapRef.current) }
-    else { mapRef.current.removeLayer(esri); ruas.addTo(mapRef.current) }
-  }, [sat])
-
-  useEffect(() => {
-    const map = mapRef.current
-    if (!map) return
-    if (!pin) { markRef.current?.remove(); markRef.current = null; return }
+    const g = mapRef.current
+    if (!g) return
+    if (!pin) { markRef.current?.setMap(null); markRef.current = null; return }
+    const pos = { lat: pin.lat, lng: pin.lon }
     if (!markRef.current) {
-      markRef.current = L.marker([pin.lat, pin.lon], { icon: PIN, draggable: true }).addTo(map)
-      markRef.current.on('dragend', () => {
-        const p = markRef.current.getLatLng()
-        onPin({ lat: p.lat, lon: p.lng })
+      markRef.current = new g.gm.Marker({ map: g.map, position: pos, draggable: true })
+      markRef.current.addListener('dragend', () => {
+        const p = markRef.current.getPosition()
+        onPinRef.current({ lat: p.lat(), lon: p.lng() })
       })
     } else {
-      markRef.current.setLatLng([pin.lat, pin.lon])
+      markRef.current.setPosition(pos)
     }
     // busca nova recentra; toque/arraste dentro da tela visível não recentra
-    if (!map.getBounds().contains([pin.lat, pin.lon]) || map.getZoom() < 13) {
-      map.setView([pin.lat, pin.lon], Math.max(map.getZoom(), 15))
+    if (!g.map.getBounds()?.contains(pos) || g.map.getZoom() < 13) {
+      g.map.panTo(pos)
+      g.map.setZoom(Math.max(g.map.getZoom(), 16))
     }
   }, [pin]) // eslint-disable-line
 
-  return (
-    <div style={{ position: 'relative' }}>
-      <div ref={boxRef} style={{ height: 280, borderRadius: 10, overflow: 'hidden' }} />
-      <button type="button" className="btn sec xs" onClick={() => setSat((s) => !s)}
-        style={{ position: 'absolute', top: 8, right: 8, zIndex: 500 }}>
-        {sat ? 'Mapa' : 'Satélite'}
-      </button>
-    </div>
-  )
+  if (erro) {
+    return (
+      <div className="small" style={{ padding: '10px 0' }}>
+        Mapa indisponível no momento — descreva o local com o máximo de detalhes no campo acima.
+      </div>
+    )
+  }
+  return <div ref={boxRef} style={{ height: 280, borderRadius: 10, overflow: 'hidden' }} />
 }
 
 export default function Acionamento({ onLogin }) {
