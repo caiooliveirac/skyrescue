@@ -27,6 +27,8 @@ export const api = {
   logout: () => req('POST', '/auth/logout'),
   changePassword: (currentPassword, newPassword) =>
     req('POST', '/auth/password', { currentPassword, newPassword }),
+  // utilidades
+  expandUrl: (u) => req('GET', '/expand-url?u=' + encodeURIComponent(u)),
   // casos
   listCases: () => req('GET', '/cases'),
   getCase: (id) => req('GET', `/cases/${id}`),

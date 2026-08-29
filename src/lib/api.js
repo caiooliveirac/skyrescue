@@ -25,6 +25,24 @@ export async function geocode(q) {
     .sort((a, b) => (b.label.includes('Bahia') ? 1 : 0) - (a.label.includes('Bahia') ? 1 : 0))
 }
 
+// Extrai coordenadas (e nome, se houver) de um link do Google Maps ou de um
+// texto "lat, lon". Links curtos (maps.app.goo.gl) precisam ser expandidos
+// antes no servidor (/api/expand-url) — CORS impede seguir o redirect aqui.
+export function parseMapsLink(text) {
+  let t = String(text || '').trim()
+  try { t = decodeURIComponent(t) } catch (e) { /* % solto: usa como veio */ }
+  const m =
+    t.match(/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/) ||            // pin exato do lugar
+    t.match(/[?&](?:q|query|ll|destination)=(-?\d+\.\d+),\s*(-?\d+\.\d+)/) ||
+    t.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/) ||                 // centro do mapa (aproximado)
+    t.match(/^(-?\d+\.\d+)[,\s]+(-?\d+\.\d+)$/)              // "lat, lon" colado
+  if (!m) return null
+  const lat = +m[1], lon = +m[2]
+  if (Math.abs(lat) > 90 || Math.abs(lon) > 180) return null
+  const name = (t.match(/\/maps\/place\/([^/@?]+)/) || [])[1]?.replace(/\+/g, ' ').trim() || null
+  return { lat, lon, name }
+}
+
 export async function reverseGeocode(lat, lon) {
   try {
     const j = await getJSON(

@@ -28,6 +28,23 @@ app.get('/api/health', async (_req, res) => {
   catch (e) { res.status(503).json({ ok: false, error: e.message }) }
 })
 
+// expande link curto do Google Maps (maps.app.goo.gl) — o navegador não
+// consegue seguir o redirect por CORS; só hosts do Google, sem proxy aberto.
+app.get('/api/expand-url', requireAuth, async (req, res) => {
+  const u = String(req.query.u || '')
+  let host
+  try { host = new URL(u).hostname } catch (e) { return res.status(400).json({ error: 'URL inválida' }) }
+  if (!/^(maps\.app\.goo\.gl|goo\.gl|g\.co)$/.test(host)) {
+    return res.status(400).json({ error: 'só links curtos do Google Maps' })
+  }
+  try {
+    const r = await fetch(u, { redirect: 'follow' })
+    res.json({ url: r.url })
+  } catch (e) {
+    res.status(502).json({ error: 'falha ao expandir link: ' + e.message })
+  }
+})
+
 // ---------- auth ----------
 app.post('/api/auth/login', async (req, res) => {
   const { username, password } = req.body || {}

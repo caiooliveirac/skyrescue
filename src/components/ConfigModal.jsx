@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { DEFAULTS, TAG_LABELS } from '../config.js'
-import { geocode } from '../lib/api.js'
+import { geocode, parseMapsLink, reverseGeocode } from '../lib/api.js'
+import { api } from '../lib/backend.js'
 import { IconSettings, IconX, IconSearch } from './Icons.jsx'
 
 // input numérico bufferizado: aceita estados intermediários ("", "-", "-12.")
@@ -36,6 +37,38 @@ function Num({ label, value, onChange, step = 1, suffix }) {
 export default function ConfigModal({ cfg, onSave, onClose }) {
   const [c, setC] = useState(() => JSON.parse(JSON.stringify(cfg)))
   const [busyGeo, setBusyGeo] = useState(null)
+  const [mapsLink, setMapsLink] = useState('')
+
+  // cria hospital a partir de link do Google Maps (completo ou curto) ou "lat, lon"
+  const addFromMaps = async () => {
+    let text = mapsLink.trim()
+    if (!text) return
+    setBusyGeo('maps')
+    try {
+      if (/(maps\.app\.goo\.gl|goo\.gl|g\.co)\//.test(text)) {
+        text = (await api.expandUrl(text)).url
+      }
+      const p = parseMapsLink(text)
+      if (!p) {
+        alert('Não achei coordenadas nesse link. Cole o link do local (botão "Compartilhar" no Maps, ou a URL completa da barra de endereço).')
+        return
+      }
+      const addr = await reverseGeocode(p.lat, p.lon)
+      setC((prev) => ({
+        ...prev,
+        hospitals: [...prev.hospitals, {
+          id: 'h' + Date.now(), name: p.name || 'Novo hospital', tags: [],
+          addr: addr || '', lat: p.lat, lon: p.lon,
+          heliponto: false, helipadIds: [], verified: true,
+        }],
+      }))
+      setMapsLink('')
+    } catch (e) {
+      alert('Falha ao ler o link: ' + (e.message || e))
+    } finally {
+      setBusyGeo(null)
+    }
+  }
 
   const set = (path, val) => {
     setC((prev) => {
@@ -216,6 +249,19 @@ export default function ConfigModal({ cfg, onSave, onClose }) {
         >
           + adicionar hospital
         </button>
+        <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+          <input
+            type="text"
+            style={{ flex: 1 }}
+            placeholder="ou cole um link do Google Maps (Compartilhar) / lat, lon"
+            value={mapsLink}
+            onChange={(e) => setMapsLink(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') addFromMaps() }}
+          />
+          <button className="btn xs sec" disabled={busyGeo === 'maps' || !mapsLink.trim()} onClick={addFromMaps}>
+            {busyGeo === 'maps' ? '…' : <><IconSearch size={11} /> adicionar do Maps</>}
+          </button>
+        </div>
         <div className="small" style={{ marginTop: 6 }}>
           Perfis disponíveis: {Object.values(TAG_LABELS).join(', ')} (edite os perfis no código ou peça na próxima versão).
         </div>
