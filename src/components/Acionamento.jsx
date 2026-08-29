@@ -48,7 +48,7 @@ const CARTO_LABELS = 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager_only
 // mapa Google interno num div oculto, então o aviso "for development purposes
 // only" do billing não aparece para o usuário — só deixa de usar o Google.
 // O caminho principal continua sendo DIGITAR e escolher na busca; toque refina.
-function MapaLocal({ pin, onPin }) {
+export function MapaLocal({ pin, onPin }) {
   const boxRef = useRef(null)
   const mapRef = useRef(null)
   const markRef = useRef(null)
