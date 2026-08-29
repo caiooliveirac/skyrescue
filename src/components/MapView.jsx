@@ -106,6 +106,7 @@ export default function MapView({
     const m = mapRef.current
     if (!m) return
     let cancelled = false
+    let pendingG = null // mutant adicionado mas ainda não confirmado/promovido
 
     const clearBase = () => {
       if (tileRef.current) { m.removeLayer(tileRef.current); tileRef.current = null }
@@ -136,31 +137,41 @@ export default function MapView({
       tileRef.current = L.tileLayer(CARTO_DARK, {
         maxZoom: 20, subdomains: 'abcd', attribution: '&copy; OpenStreetMap &copy; CARTO',
       }).addTo(m)
-    } else if (googleKey && !googleAuthFailed()) {
-      loadGoogleMaps(googleKey)
-        .then(() => {
-          if (cancelled || googleAuthFailed()) return
-          clearBase()
-          // o build ESM do plugin exporta a classe (a factory L.gridLayer.googleMutant é só do UMD)
-          const g = new GoogleMutant({ type: baseLayer === 'hybrid' ? 'hybrid' : 'satellite', maxZoom: 21 })
-          errPollRef.current = watchMutant(g, () => {
-            if (cancelled) return
-            console.warn('[skyrescue] satélite Google não renderizou (chave/API não habilitada?) — usando Esri')
-            addEsri(baseLayer === 'hybrid')
-          })
-          tileRef.current = g.addTo(m)
-        })
-        .catch((e) => {
-          console.warn('[skyrescue] satélite Google indisponível, usando Esri:', e)
-          if (!cancelled) addEsri(baseLayer === 'hybrid')
-        })
     } else {
+      // Esri entra JÁ — sem tela vazia esperando o Google; a camada Google
+      // assume quando (e se) confirmar tiles, senão o Esri fica
       addEsri(baseLayer === 'hybrid')
+      if (googleKey && !googleAuthFailed()) {
+        loadGoogleMaps(googleKey)
+          .then(() => {
+            if (cancelled || googleAuthFailed()) return
+            // o build ESM do plugin exporta a classe (a factory L.gridLayer.googleMutant é só do UMD)
+            const g = new GoogleMutant({ type: baseLayer === 'hybrid' ? 'hybrid' : 'satellite', maxZoom: 21 })
+            pendingG = g
+            errPollRef.current = watchMutant(
+              g,
+              () => {
+                if (cancelled) return
+                console.warn('[skyrescue] satélite Google não renderizou (chave/billing/API?) — ficando no Esri')
+                m.removeLayer(g); pendingG = null
+              },
+              7000,
+              () => {
+                if (cancelled) return
+                clearBase() // tira o Esri por baixo
+                tileRef.current = g; pendingG = null
+              }
+            )
+            g.addTo(m)
+          })
+          .catch((e) => console.warn('[skyrescue] satélite Google indisponível, usando Esri:', e))
+      }
     }
 
     return () => {
       cancelled = true
       offAuthFail()
+      if (pendingG) { m.removeLayer(pendingG); pendingG = null }
       if (errPollRef.current) { errPollRef.current(); errPollRef.current = null }
     }
   }, [baseLayer, googleKey])

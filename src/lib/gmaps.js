@@ -27,12 +27,16 @@ export function onGoogleAuthFailure(fn) {
 // (a heurística antiga por naturalWidth falhava SEMPRE e trocava para o Esri
 // mesmo com o Google funcionando). O sinal confiável é o 'tilesloaded' do
 // google.maps.Map interno, exposto pelo evento 'spawned' do plugin.
-// Chamar ANTES do addTo(map); devolve cancelador.
-export function watchMutant(layer, onFail, ms = 7000) {
+// Chamar ANTES do addTo(map); devolve cancelador. onOk (opcional) roda na
+// primeira confirmação de tiles — hora de tirar a camada provisória de baixo.
+export function watchMutant(layer, onFail, ms = 7000, onOk) {
   let ok = false
   layer.on('spawned', (ev) => {
     try {
-      window.google.maps.event.addListenerOnce(ev.mapObject, 'tilesloaded', () => { ok = true })
+      window.google.maps.event.addListenerOnce(ev.mapObject, 'tilesloaded', () => {
+        ok = true
+        if (onOk) onOk()
+      })
     } catch (e) { /* sem sinal: deixa o timeout decidir */ }
   })
   const t = setTimeout(() => { if (!ok) onFail() }, ms)

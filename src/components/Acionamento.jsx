@@ -66,27 +66,32 @@ function MapaLocal({ pin, onPin }) {
     mapRef.current = map
 
     let cancelled = false
-    let labels = null
-    const addEsri = () => {
-      if (cancelled) return
-      L.tileLayer(ESRI_IMAGERY, { maxZoom: 19, attribution: 'Imagens © Esri, Maxar' }).addTo(map)
-      labels = L.tileLayer(CARTO_LABELS, { maxZoom: 20, subdomains: 'abcd', attribution: '© OSM © CARTO' }).addTo(map)
-    }
+    // Esri entra JÁ — o mapa nunca abre vazio esperando o Google. Se a camada
+    // Google confirmar tiles (chave ok, billing ok), ela assume e o Esri sai;
+    // senão (BillingNotEnabled etc.) o Esri simplesmente fica.
+    let esriLayers = [
+      L.tileLayer(ESRI_IMAGERY, { maxZoom: 19, attribution: 'Imagens © Esri, Maxar' }).addTo(map),
+      L.tileLayer(CARTO_LABELS, { maxZoom: 20, subdomains: 'abcd', attribution: '© OSM © CARTO' }).addTo(map),
+    ]
     const key = import.meta.env.VITE_GMAPS_KEY
     if (key && !googleAuthFailed()) {
       loadGoogleMaps(key)
         .then(() => {
-          if (cancelled || googleAuthFailed()) return addEsri()
+          if (cancelled || googleAuthFailed()) return
           const g = new GoogleMutant({ type: 'hybrid', maxZoom: 21 })
-          watchMutant(g, () => {
-            if (cancelled) return
-            map.removeLayer(g); addEsri()
-          })
+          watchMutant(
+            g,
+            () => { if (!cancelled) map.removeLayer(g) },
+            7000,
+            () => {
+              if (cancelled) return
+              esriLayers.forEach((l) => map.removeLayer(l))
+              esriLayers = []
+            }
+          )
           g.addTo(map)
         })
-        .catch(addEsri)
-    } else {
-      addEsri()
+        .catch(() => { /* Esri já está na tela */ })
     }
     return () => { cancelled = true; map.remove(); mapRef.current = null }
   }, []) // eslint-disable-line
