@@ -16,10 +16,11 @@ const WHATSAPP = '5571988161438' // +55 71 98816-1438
 
 // pergunta extra de cada tipo: [rótulo, tipo de input, placeholder] — IAM não pede nada
 const DETALHE = {
-  Trauma: ['Que tipo de trauma?', 'text', 'ex.: TCE grave, trauma torácico…'],
   AVC: ['Hora do ictus', 'time', ''],
   Outro: ['Descreva a ocorrência', 'text', 'o que está acontecendo?'],
 }
+// trauma tem botões prontos; "Outro" abre texto livre
+const TRAUMAS = ['Ac. Moto', 'Ac. Carro', 'Ac. Ônibus / Van', 'Explosão / Queimadura', 'Múltiplas Vítimas', 'Outro']
 
 const IconWhats = ({ size = 20 }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
@@ -109,6 +110,7 @@ export default function Acionamento({ onLogin }) {
   const [medico, setMedico] = useState('')
   const [fone, setFone] = useState('')
   const [tipo, setTipo] = useState('')
+  const [trauma, setTrauma] = useState('') // botão escolhido quando tipo = Trauma
   const [detalhe, setDetalhe] = useState('')
   const [done, setDone] = useState(false)
 
@@ -147,8 +149,10 @@ export default function Acionamento({ onLogin }) {
   }
 
   const pedeDetalhe = DETALHE[tipo]
+  // Trauma: exige um botão; "Outro" (do trauma ou do tipo) exige o texto
+  const traumaOk = tipo !== 'Trauma' || (trauma && (trauma !== 'Outro' || detalhe.trim()))
   const ok = central && medico.trim() && fone.replace(/\D/g, '').length >= 10 && tipo &&
-    (!pedeDetalhe || detalhe.trim()) && localTxt.trim()
+    (!pedeDetalhe || detalhe.trim()) && traumaOk && localTxt.trim()
 
   const waLink = (msg) => `https://wa.me/${WHATSAPP}?text=${encodeURIComponent(msg)}`
   const waAcionar = () => {
@@ -157,7 +161,10 @@ export default function Acionamento({ onLogin }) {
       `Central: SAMU ${central}`,
       `Médico(a): ${medico.trim()}`,
       `Contato: ${fone.trim()}`,
-      `Tipo: ${tipo}${tipo === 'AVC' ? ` (ictus ${detalhe})` : pedeDetalhe ? ` — ${detalhe.trim()}` : ''}`,
+      `Tipo: ${tipo}${
+        tipo === 'Trauma' ? ` — ${trauma === 'Outro' ? detalhe.trim() : trauma}`
+        : tipo === 'AVC' ? ` (ictus ${detalhe})`
+        : pedeDetalhe ? ` — ${detalhe.trim()}` : ''}`,
       `Local: ${localTxt.trim()}`,
     ]
     if (pin) {
@@ -253,9 +260,27 @@ export default function Acionamento({ onLogin }) {
         <div className="field">
           <label>Tipo de ocorrência</label>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-            {TIPOS.map((t) => pick(t, tipo, (v) => { setTipo(v); setDetalhe('') }))}
+            {TIPOS.map((t) => pick(t, tipo, (v) => { setTipo(v); setTrauma(''); setDetalhe('') }))}
           </div>
         </div>
+
+        {tipo === 'Trauma' && (
+          <div className="field">
+            <label>Que tipo de trauma?</label>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+              {TRAUMAS.map((t) => pick(t, trauma, (v) => { setTrauma(v); setDetalhe('') }))}
+            </div>
+            {trauma === 'Outro' && (
+              <input
+                type="text"
+                value={detalhe}
+                onChange={(e) => setDetalhe(e.target.value)}
+                placeholder="ex.: queda de altura, FAF…"
+                style={{ marginTop: 8 }}
+              />
+            )}
+          </div>
+        )}
 
         {pedeDetalhe && (
           <div className="field">
