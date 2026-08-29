@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
+import L from 'leaflet'
+import 'leaflet/dist/leaflet.css'
+import GoogleMutant from 'leaflet.gridlayer.googlemutant'
 import { IconHeli } from './Icons.jsx'
 import { geocode, reverseGeocode } from '../lib/api.js'
-import { loadGoogleMaps } from '../lib/gmaps.js'
+import { loadGoogleMaps, googleAuthFailed } from '../lib/gmaps.js'
 
 // Tela pública: é o que qualquer pessoa vê ao cair no site, antes de login.
 // Dois caminhos — acionar o GOA (formulário) ou acompanhar um acionamento já
@@ -27,73 +30,88 @@ const IconWhats = ({ size = 20 }) => (
   </svg>
 )
 
-// Mapa de apontar o local — Google Maps oficial, o mesmo da tela logada
-// (chave embutida no build). Padrão HÍBRIDO: satélite com nomes de rua e
-// pontos de referência, o que mais ajuda quem reconhece o posto/o galpão mas
-// não sabe o nome da rua. O caminho principal continua sendo DIGITAR o que
-// sabe e escolher um resultado da busca; o toque no mapa só refina.
+// pino sem asset de imagem: o ícone padrão do Leaflet depende de PNGs que o
+// build single-file não resolve; um divIcon com emoji funciona em qualquer tela
+const PIN = L.divIcon({
+  className: '',
+  html: '<div style="font-size:30px;line-height:30px;transform:translate(-50%,-100%);text-shadow:0 1px 3px rgba(0,0,0,.6)">📍</div>',
+  iconSize: [0, 0],
+})
+
+const ESRI_IMAGERY = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
+const CARTO_LABELS = 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager_only_labels/{z}/{x}/{y}{r}.png'
+
+// Mapa de apontar o local, satélite com rótulos por padrão — o que mais ajuda
+// quem reconhece o posto/o galpão mas não sabe o nome da rua. Mesmo padrão da
+// tela logada (MapView): camada Google híbrida via GoogleMutant quando a chave
+// funciona, senão Esri World Imagery + rótulos Carto. O GoogleMutant mantém o
+// mapa Google interno num div oculto, então o aviso "for development purposes
+// only" do billing não aparece para o usuário — só deixa de usar o Google.
+// O caminho principal continua sendo DIGITAR e escolher na busca; toque refina.
 function MapaLocal({ pin, onPin }) {
   const boxRef = useRef(null)
   const mapRef = useRef(null)
   const markRef = useRef(null)
-  const [erro, setErro] = useState(false)
   const onPinRef = useRef(onPin)
   onPinRef.current = onPin
 
   useEffect(() => {
+    const map = L.map(boxRef.current, {
+      center: pin ? [pin.lat, pin.lon] : [-12.6, -38.9], // Bahia, entre as centrais
+      zoom: pin ? 16 : 7,
+      zoomControl: true,
+    })
+    map.on('click', (e) => onPinRef.current({ lat: e.latlng.lat, lon: e.latlng.lng }))
+    mapRef.current = map
+
+    let cancelled = false
+    let labels = null
+    const addEsri = () => {
+      if (cancelled) return
+      L.tileLayer(ESRI_IMAGERY, { maxZoom: 19, attribution: 'Imagens © Esri, Maxar' }).addTo(map)
+      labels = L.tileLayer(CARTO_LABELS, { maxZoom: 20, subdomains: 'abcd', attribution: '© OSM © CARTO' }).addTo(map)
+    }
     const key = import.meta.env.VITE_GMAPS_KEY
-    if (!key) { setErro(true); return }
-    let vivo = true
-    loadGoogleMaps(key)
-      .then((gm) => {
-        if (!vivo || !boxRef.current) return
-        const map = new gm.Map(boxRef.current, {
-          center: pin ? { lat: pin.lat, lng: pin.lon } : { lat: -12.6, lng: -38.9 }, // Bahia
-          zoom: pin ? 16 : 7,
-          mapTypeId: 'hybrid',
-          streetViewControl: false,
-          fullscreenControl: false,
-          mapTypeControl: true,
-          mapTypeControlOptions: { mapTypeIds: ['hybrid', 'roadmap'] },
-          // 'cooperative' no celular: 1 dedo rola a página, 2 dedos mexem no
-          // mapa — sem isso o mapa no meio do formulário vira armadilha de rolagem
-          gestureHandling: 'cooperative',
+    if (key && !googleAuthFailed()) {
+      loadGoogleMaps(key)
+        .then(() => {
+          if (cancelled || googleAuthFailed()) return addEsri()
+          const g = new GoogleMutant({ type: 'hybrid', maxZoom: 21 }).addTo(map)
+          // billing/API desligados não disparam gm_authFailure: se nenhum tile
+          // renderizou em 7 s, troca para o Esri (mesmo critério do MapView)
+          setTimeout(() => {
+            if (cancelled) return
+            const pane = map.getContainer().querySelector('.leaflet-tile-pane')
+            const ok = pane && [...pane.querySelectorAll('img')].some((i) => i.complete && i.naturalWidth > 0)
+            if (!ok) { map.removeLayer(g); addEsri() }
+          }, 7000)
         })
-        map.addListener('click', (e) => onPinRef.current({ lat: e.latLng.lat(), lon: e.latLng.lng() }))
-        mapRef.current = { gm, map }
-      })
-      .catch(() => { if (vivo) setErro(true) })
-    return () => { vivo = false; mapRef.current = null }
+        .catch(addEsri)
+    } else {
+      addEsri()
+    }
+    return () => { cancelled = true; map.remove(); mapRef.current = null }
   }, []) // eslint-disable-line
 
   useEffect(() => {
-    const g = mapRef.current
-    if (!g) return
-    if (!pin) { markRef.current?.setMap(null); markRef.current = null; return }
-    const pos = { lat: pin.lat, lng: pin.lon }
+    const map = mapRef.current
+    if (!map) return
+    if (!pin) { markRef.current?.remove(); markRef.current = null; return }
     if (!markRef.current) {
-      markRef.current = new g.gm.Marker({ map: g.map, position: pos, draggable: true })
-      markRef.current.addListener('dragend', () => {
-        const p = markRef.current.getPosition()
-        onPinRef.current({ lat: p.lat(), lon: p.lng() })
+      markRef.current = L.marker([pin.lat, pin.lon], { icon: PIN, draggable: true }).addTo(map)
+      markRef.current.on('dragend', () => {
+        const p = markRef.current.getLatLng()
+        onPinRef.current({ lat: p.lat, lon: p.lng })
       })
     } else {
-      markRef.current.setPosition(pos)
+      markRef.current.setLatLng([pin.lat, pin.lon])
     }
     // busca nova recentra; toque/arraste dentro da tela visível não recentra
-    if (!g.map.getBounds()?.contains(pos) || g.map.getZoom() < 13) {
-      g.map.panTo(pos)
-      g.map.setZoom(Math.max(g.map.getZoom(), 16))
+    if (!map.getBounds().contains([pin.lat, pin.lon]) || map.getZoom() < 13) {
+      map.setView([pin.lat, pin.lon], Math.max(map.getZoom(), 16))
     }
   }, [pin]) // eslint-disable-line
 
-  if (erro) {
-    return (
-      <div className="small" style={{ padding: '10px 0' }}>
-        Mapa indisponível no momento — descreva o local com o máximo de detalhes no campo acima.
-      </div>
-    )
-  }
   return <div ref={boxRef} style={{ height: 280, borderRadius: 10, overflow: 'hidden' }} />
 }
 
