@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import GoogleMutant from 'leaflet.gridlayer.googlemutant'
-import { loadGoogleMaps, googleAuthFailed, onGoogleAuthFailure } from '../lib/gmaps.js'
+import { loadGoogleMaps, googleAuthFailed, onGoogleAuthFailure, watchMutant } from '../lib/gmaps.js'
 import { HELIPAD_CATALOG } from '../data/helipads-catalog.js'
 import { haversineKm } from '../lib/geo.js'
 
@@ -142,18 +142,13 @@ export default function MapView({
           if (cancelled || googleAuthFailed()) return
           clearBase()
           // o build ESM do plugin exporta a classe (a factory L.gridLayer.googleMutant é só do UMD)
-          tileRef.current = new GoogleMutant({ type: baseLayer === 'hybrid' ? 'hybrid' : 'satellite', maxZoom: 21 }).addTo(m)
-          // ApiNotActivated/BillingNotEnabled não disparam gm_authFailure.
-          // Critério universal: se nenhum tile renderizou em 7s, usa o Esri.
-          errPollRef.current = setTimeout(() => {
+          const g = new GoogleMutant({ type: baseLayer === 'hybrid' ? 'hybrid' : 'satellite', maxZoom: 21 })
+          errPollRef.current = watchMutant(g, () => {
             if (cancelled) return
-            const pane = m.getContainer().querySelector('.leaflet-tile-pane')
-            const ok = pane && [...pane.querySelectorAll('img')].some((i) => i.complete && i.naturalWidth > 0)
-            if (!ok) {
-              console.warn('[skyrescue] satélite Google não renderizou (chave/API não habilitada?) — usando Esri')
-              addEsri(baseLayer === 'hybrid')
-            }
-          }, 7000)
+            console.warn('[skyrescue] satélite Google não renderizou (chave/API não habilitada?) — usando Esri')
+            addEsri(baseLayer === 'hybrid')
+          })
+          tileRef.current = g.addTo(m)
         })
         .catch((e) => {
           console.warn('[skyrescue] satélite Google indisponível, usando Esri:', e)
@@ -166,7 +161,7 @@ export default function MapView({
     return () => {
       cancelled = true
       offAuthFail()
-      if (errPollRef.current) { clearTimeout(errPollRef.current); errPollRef.current = null }
+      if (errPollRef.current) { errPollRef.current(); errPollRef.current = null }
     }
   }, [baseLayer, googleKey])
 

@@ -21,6 +21,24 @@ export function onGoogleAuthFailure(fn) {
   return () => authListeners.delete(fn)
 }
 
+// ApiNotActivated/BillingNotEnabled não disparam gm_authFailure — precisa de
+// outro sinal de que a camada GoogleMutant renderizou. O mapa vetorial do
+// Google desenha em CANVAS: não existe <img> no tile pane para inspecionar
+// (a heurística antiga por naturalWidth falhava SEMPRE e trocava para o Esri
+// mesmo com o Google funcionando). O sinal confiável é o 'tilesloaded' do
+// google.maps.Map interno, exposto pelo evento 'spawned' do plugin.
+// Chamar ANTES do addTo(map); devolve cancelador.
+export function watchMutant(layer, onFail, ms = 7000) {
+  let ok = false
+  layer.on('spawned', (ev) => {
+    try {
+      window.google.maps.event.addListenerOnce(ev.mapObject, 'tilesloaded', () => { ok = true })
+    } catch (e) { /* sem sinal: deixa o timeout decidir */ }
+  })
+  const t = setTimeout(() => { if (!ok) onFail() }, ms)
+  return () => clearTimeout(t)
+}
+
 export function loadGoogleMaps(key) {
   if (window.google?.maps?.Map) return Promise.resolve(window.google.maps)
   if (gPromise) return gPromise

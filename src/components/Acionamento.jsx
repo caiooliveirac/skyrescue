@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import GoogleMutant from 'leaflet.gridlayer.googlemutant'
 import { IconHeli } from './Icons.jsx'
 import { geocode, reverseGeocode } from '../lib/api.js'
-import { loadGoogleMaps, googleAuthFailed } from '../lib/gmaps.js'
+import { loadGoogleMaps, googleAuthFailed, watchMutant } from '../lib/gmaps.js'
 
 // Tela pública: é o que qualquer pessoa vê ao cair no site, antes de login.
 // Dois caminhos — acionar o GOA (formulário) ou acompanhar um acionamento já
@@ -57,8 +57,9 @@ function MapaLocal({ pin, onPin }) {
 
   useEffect(() => {
     const map = L.map(boxRef.current, {
-      center: pin ? [pin.lat, pin.lon] : [-12.6, -38.9], // Bahia, entre as centrais
-      zoom: pin ? 16 : 7,
+      // Salvador + RMS: o grosso dos acionamentos; a busca recentra os demais
+      center: pin ? [pin.lat, pin.lon] : [-12.85, -38.42],
+      zoom: pin ? 16 : 10,
       zoomControl: true,
     })
     map.on('click', (e) => onPinRef.current({ lat: e.latlng.lat, lon: e.latlng.lng }))
@@ -76,15 +77,12 @@ function MapaLocal({ pin, onPin }) {
       loadGoogleMaps(key)
         .then(() => {
           if (cancelled || googleAuthFailed()) return addEsri()
-          const g = new GoogleMutant({ type: 'hybrid', maxZoom: 21 }).addTo(map)
-          // billing/API desligados não disparam gm_authFailure: se nenhum tile
-          // renderizou em 7 s, troca para o Esri (mesmo critério do MapView)
-          setTimeout(() => {
+          const g = new GoogleMutant({ type: 'hybrid', maxZoom: 21 })
+          watchMutant(g, () => {
             if (cancelled) return
-            const pane = map.getContainer().querySelector('.leaflet-tile-pane')
-            const ok = pane && [...pane.querySelectorAll('img')].some((i) => i.complete && i.naturalWidth > 0)
-            if (!ok) { map.removeLayer(g); addEsri() }
-          }, 7000)
+            map.removeLayer(g); addEsri()
+          })
+          g.addTo(map)
         })
         .catch(addEsri)
     } else {
