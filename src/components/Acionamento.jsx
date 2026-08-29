@@ -1,5 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import L from 'leaflet'
+import 'leaflet/dist/leaflet.css'
 import { IconHeli } from './Icons.jsx'
+import { geocode, reverseGeocode } from '../lib/api.js'
 
 // Tela pública: é o que qualquer pessoa vê ao cair no site, antes de login.
 // Dois caminhos — acionar o GOA (formulário) ou acompanhar um acionamento já
@@ -11,7 +14,7 @@ const CENTRAIS = ['Salvador', 'Feira de Santana', 'Alagoinhas', 'SAJ', 'Itabuna'
 const TIPOS = ['Trauma', 'AVC', 'IAM', 'Outro']
 const WHATSAPP = '5571988161438' // +55 71 98816-1438
 
-// pergunta extra de cada tipo: [rótulo, tipo de input] — IAM não pede nada
+// pergunta extra de cada tipo: [rótulo, tipo de input, placeholder] — IAM não pede nada
 const DETALHE = {
   Trauma: ['Que tipo de trauma?', 'text', 'ex.: TCE grave, trauma torácico…'],
   AVC: ['Hora do ictus', 'time', ''],
@@ -24,6 +27,82 @@ const IconWhats = ({ size = 20 }) => (
   </svg>
 )
 
+// pino sem asset de imagem: o ícone padrão do Leaflet depende de PNGs que o
+// build single-file não resolve; um divIcon com emoji funciona em qualquer tela
+const PIN = L.divIcon({
+  className: '',
+  html: '<div style="font-size:30px;line-height:30px;transform:translate(-50%,-100%);text-shadow:0 1px 3px rgba(0,0,0,.6)">📍</div>',
+  iconSize: [0, 0],
+})
+
+// Mapa de apontar o local. Quem liga muitas vezes é ruim de mapa: o caminho
+// principal é DIGITAR o que sabe e escolher um resultado da busca — o mapa
+// entra já centrado no lugar certo e o toque só refina. Satélite ajuda quem
+// reconhece o posto/o galpão mas não sabe o nome da rua.
+function MapaLocal({ pin, onPin }) {
+  const boxRef = useRef(null)
+  const mapRef = useRef(null)
+  const markRef = useRef(null)
+  const [sat, setSat] = useState(false)
+  const layersRef = useRef(null)
+
+  useEffect(() => {
+    const map = L.map(boxRef.current, {
+      center: pin ? [pin.lat, pin.lon] : [-12.6, -38.9], // Bahia, entre as centrais
+      zoom: pin ? 15 : 7,
+      zoomControl: true,
+    })
+    const ruas = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap', maxZoom: 19,
+    })
+    const esri = L.tileLayer(
+      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+      { attribution: 'Esri', maxZoom: 19 }
+    )
+    ruas.addTo(map)
+    layersRef.current = { ruas, esri }
+    map.on('click', (e) => onPin({ lat: e.latlng.lat, lon: e.latlng.lng }))
+    mapRef.current = map
+    return () => map.remove()
+  }, []) // eslint-disable-line
+
+  useEffect(() => {
+    const { ruas, esri } = layersRef.current || {}
+    if (!mapRef.current || !ruas) return
+    if (sat) { mapRef.current.removeLayer(ruas); esri.addTo(mapRef.current) }
+    else { mapRef.current.removeLayer(esri); ruas.addTo(mapRef.current) }
+  }, [sat])
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map) return
+    if (!pin) { markRef.current?.remove(); markRef.current = null; return }
+    if (!markRef.current) {
+      markRef.current = L.marker([pin.lat, pin.lon], { icon: PIN, draggable: true }).addTo(map)
+      markRef.current.on('dragend', () => {
+        const p = markRef.current.getLatLng()
+        onPin({ lat: p.lat, lon: p.lng })
+      })
+    } else {
+      markRef.current.setLatLng([pin.lat, pin.lon])
+    }
+    // busca nova recentra; toque/arraste dentro da tela visível não recentra
+    if (!map.getBounds().contains([pin.lat, pin.lon]) || map.getZoom() < 13) {
+      map.setView([pin.lat, pin.lon], Math.max(map.getZoom(), 15))
+    }
+  }, [pin]) // eslint-disable-line
+
+  return (
+    <div style={{ position: 'relative' }}>
+      <div ref={boxRef} style={{ height: 280, borderRadius: 10, overflow: 'hidden' }} />
+      <button type="button" className="btn sec xs" onClick={() => setSat((s) => !s)}
+        style={{ position: 'absolute', top: 8, right: 8, zIndex: 500 }}>
+        {sat ? 'Mapa' : 'Satélite'}
+      </button>
+    </div>
+  )
+}
+
 export default function Acionamento({ onLogin }) {
   const [tela, setTela] = useState('home') // 'home' | 'acionar'
   const [central, setCentral] = useState('')
@@ -33,18 +112,61 @@ export default function Acionamento({ onLogin }) {
   const [detalhe, setDetalhe] = useState('')
   const [done, setDone] = useState(false)
 
+  // local da ocorrência: texto livre (obrigatório) + pino no mapa (refinamento)
+  const [localTxt, setLocalTxt] = useState('')
+  const [buscando, setBuscando] = useState(false)
+  const [resultados, setResultados] = useState(null) // null = sem busca; [] = nada achado
+  const [pin, setPin] = useState(null)               // {lat, lon}
+  const [pinLabel, setPinLabel] = useState('')       // endereço aproximado do pino
+  const revRef = useRef(0)
+
+  const buscar = async () => {
+    const q = localTxt.trim()
+    if (!q || buscando) return
+    setBuscando(true); setResultados(null)
+    try {
+      const sufixo = /bahia|\bba\b/i.test(q) ? '' : ', Bahia'
+      setResultados(await geocode(q + sufixo))
+    } catch (e) {
+      setResultados([])
+    } finally {
+      setBuscando(false)
+    }
+  }
+
+  const marcarPin = (p, label) => {
+    setPin(p)
+    if (label) { setPinLabel(label); revRef.current++; return }
+    // toque/arraste no mapa: descobre o endereço para a pessoa CONFERIR em
+    // texto que marcou o lugar certo — quem é ruim de mapa confere pelo nome
+    const seq = ++revRef.current
+    setPinLabel('…')
+    reverseGeocode(p.lat, p.lon).then((l) => {
+      if (seq === revRef.current) setPinLabel(l || '')
+    })
+  }
+
   const pedeDetalhe = DETALHE[tipo]
   const ok = central && medico.trim() && fone.replace(/\D/g, '').length >= 10 && tipo &&
-    (!pedeDetalhe || detalhe.trim())
+    (!pedeDetalhe || detalhe.trim()) && localTxt.trim()
 
   const waLink = (msg) => `https://wa.me/${WHATSAPP}?text=${encodeURIComponent(msg)}`
-  const waAcionar = () => waLink([
-    'ACIONAMENTO AEROMÉDICO — SkyRescue',
-    `Central: SAMU ${central}`,
-    `Médico(a): ${medico.trim()}`,
-    `Contato: ${fone.trim()}`,
-    `Tipo: ${tipo}${tipo === 'AVC' ? ` (ictus ${detalhe})` : pedeDetalhe ? ` — ${detalhe.trim()}` : ''}`,
-  ].join('\n'))
+  const waAcionar = () => {
+    const linhas = [
+      'ACIONAMENTO AEROMÉDICO — SkyRescue',
+      `Central: SAMU ${central}`,
+      `Médico(a): ${medico.trim()}`,
+      `Contato: ${fone.trim()}`,
+      `Tipo: ${tipo}${tipo === 'AVC' ? ` (ictus ${detalhe})` : pedeDetalhe ? ` — ${detalhe.trim()}` : ''}`,
+      `Local: ${localTxt.trim()}`,
+    ]
+    if (pin) {
+      if (pinLabel && pinLabel !== '…') linhas.push(`Ponto no mapa: ${pinLabel}`)
+      linhas.push(`Coordenadas: ${pin.lat.toFixed(5)}, ${pin.lon.toFixed(5)}`)
+      linhas.push(`https://maps.google.com/?q=${pin.lat.toFixed(5)},${pin.lon.toFixed(5)}`)
+    }
+    return waLink(linhas.join('\n'))
+  }
   const waAcompanhar = waLink('Olá! Gostaria de acompanhar um acionamento aeromédico já realizado.')
 
   const pick = (val, cur, set) => (
@@ -146,6 +268,51 @@ export default function Acionamento({ onLogin }) {
             />
           </div>
         )}
+
+        <div className="field">
+          <label>Local da ocorrência</label>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <input
+              type="text"
+              value={localTxt}
+              onChange={(e) => setLocalTxt(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); buscar() } }}
+              placeholder="endereço, rodovia + km ou referência"
+              style={{ flex: 1 }}
+            />
+            <button type="button" className="btn sec" onClick={buscar} disabled={buscando || !localTxt.trim()}>
+              {buscando ? <span className="spin" /> : 'Buscar'}
+            </button>
+          </div>
+          <div className="small" style={{ marginTop: 2 }}>
+            Escreva o que souber (ex.: “BR-324 km 520, perto do posto”). A busca
+            ajuda a achar no mapa — depois toque no ponto exato.
+          </div>
+        </div>
+
+        {resultados && (
+          <div className="field" style={{ gap: 6 }}>
+            {resultados.length === 0 && (
+              <div className="small">Nada encontrado — tente rua + cidade, ou toque direto no mapa abaixo.</div>
+            )}
+            {resultados.slice(0, 4).map((r, i) => (
+              <button key={i} type="button" className="btn sec"
+                style={{ justifyContent: 'flex-start', textAlign: 'left', fontSize: 13, whiteSpace: 'normal', lineHeight: 1.35 }}
+                onClick={() => { marcarPin({ lat: r.lat, lon: r.lon }, r.label); setResultados(null) }}>
+                📍 {r.label}
+              </button>
+            ))}
+          </div>
+        )}
+
+        <div className="field">
+          <MapaLocal pin={pin} onPin={marcarPin} />
+          <div className="small" style={{ marginTop: 4 }}>
+            {pin
+              ? <>Ponto marcado{pinLabel && pinLabel !== '…' ? <>: <strong>{pinLabel}</strong></> : ''}. Toque ou arraste o 📍 para ajustar.</>
+              : 'Opcional: toque no mapa no ponto exato da ocorrência (aproxime com dois dedos).'}
+          </div>
+        </div>
 
         <button className="btn" type="submit" disabled={!ok}
           style={{ width: '100%', justifyContent: 'center', marginTop: 4, minHeight: 48 }}>
