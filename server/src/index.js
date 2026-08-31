@@ -3,7 +3,7 @@ import cookieParser from 'cookie-parser'
 import { query, pool } from './db.js'
 import {
   hashPassword, verifyPassword, createSession, destroySession,
-  cookieOptions, authMiddleware, requireAuth, requireAdmin,
+  cookieOptions, authMiddleware, requireAuth, requireAdmin, allowService,
   COOKIE_NAME, startSessionGC,
 } from './auth.js'
 import { startBot, notifyMission, echoMilestones, MILESTONES } from './telegram.js'
@@ -107,7 +107,7 @@ const promote = (snapshot = {}) => ({
   notes: snapshot.notes || null,
 })
 
-app.get('/api/cases', requireAuth, async (_req, res) => {
+app.get('/api/cases', allowService, async (_req, res) => {
   const { rows } = await query(
     `SELECT c.id, c.case_ref, c.scene_label, c.scene_lat, c.scene_lon,
             c.score_total, c.score_band, c.recommendation, c.hospital_name,
@@ -720,7 +720,7 @@ app.post('/api/aircraft/position', requireAuth, async (req, res) => {
   }
 })
 
-app.get('/api/aircraft/position', requireAuth, async (_req, res) => {
+app.get('/api/aircraft/position', allowService, async (_req, res) => {
   const { rows } = await query(
     `SELECT a.lat, a.lon, a.gs_kmh, a.track, a.acc_m, a.reported_at,
             u.username AS reported_by_username, u.full_name AS reported_by_name

@@ -94,3 +94,24 @@ export function startSessionGC() {
   run()
   setInterval(run, 3600_000).unref()
 }
+
+// ---------- acesso de serviço (integrações servidor-a-servidor) ----------
+// O Kairós (kairos.mnrs.com.br) lê casos e posição da aeronave daqui sem ter
+// sessão de pessoa. Mesmo padrão do ESPERADOS_TOKEN do escala: token de
+// serviço em variável de ambiente, conferido por header. FALHA FECHADA: sem
+// SERVICO_TOKEN no ambiente, a rota responde 503 — esquecer a variável
+// derruba a integração (barulhento, conserta-se em um minuto) em vez de
+// abrir a rota para quem souber a URL (silencioso). Só entra em rotas de
+// LEITURA; escrita continua exigindo sessão.
+export function allowService(req, res, next) {
+  const dado = req.headers['x-servico-token']
+  if (!dado) return requireAuth(req, res, next)
+  const exigido = process.env.SERVICO_TOKEN
+  if (!exigido) return res.status(503).json({ error: 'integração de serviço não configurada' })
+  const a = Buffer.from(String(dado))
+  const b = Buffer.from(exigido)
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+    return res.status(401).json({ error: 'token de serviço inválido' })
+  }
+  next()
+}
