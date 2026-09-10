@@ -8,6 +8,7 @@ import {
 } from './auth.js'
 import { startBot, notifyMission, echoMilestones, MILESTONES } from './telegram.js'
 import { sanitizePatient } from './patient-fields.js'
+import * as wa from './whatsapp.js'
 
 const app = express()
 app.set('trust proxy', 1) // atrás do nginx/Cloudflare
@@ -43,6 +44,137 @@ app.get('/api/expand-url', requireAuth, async (req, res) => {
   } catch (e) {
     res.status(502).json({ error: 'falha ao expandir link: ' + e.message })
   }
+})
+
+// ---------- acionamento público (tela "Acionar GOA", sem login) ----------
+// Quem cai no site e pede o helicóptero não tem conta. O pedido é gravado e o
+// bot do WhatsApp (whatsapp.js) avisa o grupo e os plantonistas; a resposta
+// diz se o aviso chegou, para a tela oferecer o WhatsApp da própria pessoa
+// como plano B quando não chegou. Rota pública ⇒ limite por IP e global,
+// para ninguém inundar o grupo da regulação a partir de um script.
+const rl = { byIp: new Map(), global: [] }
+const RL_IP_MAX = 5, RL_IP_WINDOW_MS = 10 * 60_000
+const RL_GLOBAL_MAX = 40, RL_GLOBAL_WINDOW_MS = 60 * 60_000
+function rateLimitAcionamento(req, res, next) {
+  const now = Date.now()
+  const ip = clientIp(req)
+  const hits = (rl.byIp.get(ip) || []).filter((t) => now - t < RL_IP_WINDOW_MS)
+  rl.global = rl.global.filter((t) => now - t < RL_GLOBAL_WINDOW_MS)
+  if (hits.length >= RL_IP_MAX || rl.global.length >= RL_GLOBAL_MAX) {
+    return res.status(429).json({ error: 'muitos acionamentos em sequência — ligue para a regulação' })
+  }
+  hits.push(now); rl.byIp.set(ip, hits); rl.global.push(now)
+  if (rl.byIp.size > 5000) rl.byIp.clear()   // mapa não cresce sem limite
+  next()
+}
+
+const str = (v, max) => (v == null ? '' : String(v)).trim().slice(0, max)
+const CENTRAIS_OK = /^[\wÀ-ÿ .'-]{2,40}$/
+
+app.post('/api/acionamentos', rateLimitAcionamento, async (req, res) => {
+  const b = req.body || {}
+  const central = str(b.central, 40), medico = str(b.medico, 120), fone = str(b.fone, 30)
+  const tipo = str(b.tipo, 40), detalhe = str(b.detalhe, 300), localTxt = str(b.local, 300)
+  const pinLabel = str(b.pinLabel, 300)
+  if (!CENTRAIS_OK.test(central)) return res.status(400).json({ error: 'central inválida' })
+  if (medico.length < 2) return res.status(400).json({ error: 'nome do médico obrigatório' })
+  if (fone.replace(/\D/g, '').length < 10) return res.status(400).json({ error: 'telefone de contato inválido' })
+  if (!tipo) return res.status(400).json({ error: 'tipo de ocorrência obrigatório' })
+  if (!localTxt) return res.status(400).json({ error: 'local da ocorrência obrigatório' })
+  let lat = null, lon = null
+  if (b.lat != null || b.lon != null) {
+    lat = Number(b.lat); lon = Number(b.lon)
+    if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180)
+      return res.status(400).json({ error: 'coordenadas inválidas' })
+  }
+  try {
+    const { rows } = await query(
+      `INSERT INTO acionamento (central, medico, fone, tipo, detalhe, local_txt, lat, lon, pin_label, ip)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+      [central, medico, fone, tipo, detalhe || null, localTxt, lat, lon, pinLabel || null, clientIp(req)]
+    )
+    const row = rows[0]
+    // o aviso é a razão de ser da rota: espera por ele, mas com teto — o
+    // médico da rua não pode ficar olhando um spinner por causa do WhatsApp
+    let r
+    try {
+      r = await Promise.race([
+        wa.notifyAcionamento(row),
+        new Promise((resolve) => setTimeout(() => resolve({ status: 'pendente', detail: {} }), 25_000).unref?.()),
+      ])
+    } catch (e) {
+      console.error('acionamento: aviso whatsapp:', e.message)
+      r = { status: 'falhou', detail: { erro: e.message } }
+    }
+    const grupo = r.detail.group ?? null
+    const privados = Object.entries(r.detail).filter(([k]) => k !== 'group' && k !== 'motivo' && k !== 'erro')
+    res.status(201).json({
+      id: row.id,
+      createdAt: row.created_at,
+      whatsapp: r.status,   // 'ok' | 'parcial' | 'falhou' | 'desconectado' | 'desligado' | 'pendente'
+      grupo,
+      privados: { ok: privados.filter(([, v]) => v).length, total: privados.length },
+    })
+  } catch (e) {
+    console.error('acionamento:', e)
+    res.status(500).json({ error: 'erro ao registrar o acionamento' })
+  }
+})
+
+// a equipe logada vê o que chegou pelo site (auditoria do plantão)
+app.get('/api/acionamentos', requireAuth, async (_req, res) => {
+  const { rows } = await query(
+    `SELECT id, created_at, central, medico, fone, tipo, detalhe, local_txt, lat, lon, pin_label,
+            wa_status, wa_detail, wa_sent_at
+       FROM acionamento ORDER BY created_at DESC LIMIT 200`
+  )
+  res.json({ acionamentos: rows })
+})
+
+// ---------- bot do WhatsApp: painel do admin ----------
+app.get('/api/whatsapp/status', requireAdmin, async (_req, res) => {
+  res.json(await wa.getStatus())
+})
+
+// gera código de pareamento para o número do chip (sem número: QR)
+app.post('/api/whatsapp/pair', requireAdmin, async (req, res) => {
+  try { res.json(await wa.requestPairing(req.body?.phone)) }
+  catch (e) { res.status(409).json({ error: e.message }) }
+})
+
+app.post('/api/whatsapp/logout', requireAdmin, async (_req, res) => {
+  try { res.json(await wa.logout()) }
+  catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// manda uma mensagem de teste para o grupo e os destinatários
+app.post('/api/whatsapp/test', requireAdmin, async (req, res) => {
+  const who = req.user.full_name || req.user.username
+  const r = await wa.broadcast(`🧪 *SkyRescue — teste do bot*\nEnviado por ${who} em ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Bahia' })}. Se você leu, os avisos de acionamento vão chegar aqui.`)
+  res.json(r)
+})
+
+app.post('/api/whatsapp/recipients', requireAdmin, async (req, res) => {
+  try { res.status(201).json({ recipient: await wa.addRecipient(req.body?.phone, req.body?.name) }) }
+  catch (e) { res.status(400).json({ error: e.message }) }
+})
+
+app.patch('/api/whatsapp/recipients/:id', requireAdmin, async (req, res) => {
+  if (!/^\d{1,18}$/.test(req.params.id)) return res.status(404).json({ error: 'destinatário não encontrado' })
+  const r = await wa.setRecipientActive(req.params.id, req.body?.active)
+  if (!r) return res.status(404).json({ error: 'destinatário não encontrado' })
+  res.json({ recipient: r })
+})
+
+app.delete('/api/whatsapp/recipients/:id', requireAdmin, async (req, res) => {
+  if (!/^\d{1,18}$/.test(req.params.id) || !(await wa.removeRecipient(req.params.id)))
+    return res.status(404).json({ error: 'destinatário não encontrado' })
+  res.json({ ok: true })
+})
+
+app.delete('/api/whatsapp/group', requireAdmin, async (_req, res) => {
+  await wa.unbindGroup()
+  res.json({ ok: true })
 })
 
 // ---------- auth ----------
@@ -783,4 +915,5 @@ app.patch('/api/users/:id', requireAdmin, async (req, res) => {
 const PORT = Number(process.env.PORT || 3012)
 startSessionGC()
 startBot()
+wa.startWhatsApp()
 app.listen(PORT, '127.0.0.1', () => console.log(`skyrescue-api ouvindo em 127.0.0.1:${PORT}`))

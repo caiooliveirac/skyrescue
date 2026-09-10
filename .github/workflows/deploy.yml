@@ -79,9 +79,11 @@ jobs:
       # ---- backend primeiro: garante a API pronta antes do novo frontend ----
       - name: Deploy backend (skyrescue-api)
         run: |
-          # .env.production e node_modules ficam só no servidor (não sobrescreve)
+          # .env.production, node_modules e a sessão do WhatsApp (.wa-auth/, as
+          # chaves do chip pareado) ficam só no servidor (não sobrescreve)
           rsync -az --delete \
             --exclude 'node_modules/' --exclude '.env' --exclude '.env.production' --exclude '*.log' \
+            --exclude '.wa-auth/' \
             -e "ssh -o StrictHostKeyChecking=accept-new -i ~/.ssh/id_ed25519" \
             server/ ${{ env.REMOTE }}:${{ env.API_DIR }}/
           ssh -i ~/.ssh/id_ed25519 ${{ env.REMOTE }} bash -s << 'EOF'

@@ -88,7 +88,7 @@ SPA React + Vite + Leaflet, sem backend; APIs públicas chamadas do navegador; c
 4. Meteorologia oficial: REDEMET (API do DECEA) + minima operacional definida com o GOA.
 5. Roteamento com trânsito real (Google/TomTom) e AVL das ambulâncias quando houver integração.
 6. PWA mobile para a equipe da aeronave (acompanhamento em voo, offline-first).
-7. Notificações (WhatsApp/Telegram) para acionar o GOA com o resumo padrão.
+7. Notificações (WhatsApp/Telegram) para acionar o GOA com o resumo padrão. — feito: bot do Telegram (missão) e bot do WhatsApp (acionamento pelo site, `server/src/whatsapp.js`).
 8. Painel de indicadores: tempo-resposta, taxa de acionamento por faixa de score, overtriage/undertriage.
 9. Formalização: transformar o score calibrado em protocolo institucional SAMU/SESAB/CBMBA (nota técnica), citando referências (NAEMSP, ACS-COT, Portaria GM/MS 2048).
 

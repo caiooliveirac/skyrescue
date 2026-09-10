@@ -152,6 +152,62 @@ CREATE TABLE IF NOT EXISTS mission_chat (
   near_alerted     BOOLEAN NOT NULL DEFAULT FALSE
 );
 
+-- ---------- acionamento público (tela "Acionar GOA") ----------
+-- Pedido feito por quem cai no site SEM login (médico de outra central, equipe
+-- da rua). Antes o formulário só abria o WhatsApp da pessoa com o texto pronto
+-- — nada ficava registrado e o aviso ia para UM celular. Agora o pedido é
+-- gravado aqui e o bot do WhatsApp (src/whatsapp.js) avisa o grupo e os
+-- plantonistas. Sem dado de paciente: só a central, o médico que pede, o
+-- contato dele e o local.
+CREATE TABLE IF NOT EXISTS acionamento (
+  id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  central    TEXT NOT NULL,
+  medico     TEXT NOT NULL,
+  fone       TEXT NOT NULL,
+  tipo       TEXT NOT NULL,
+  detalhe    TEXT,                          -- subtipo do trauma / hora do ictus / texto livre
+  local_txt  TEXT NOT NULL,
+  lat        DOUBLE PRECISION,
+  lon        DOUBLE PRECISION,
+  pin_label  TEXT,                          -- endereço aproximado do pino no mapa
+  ip         TEXT,
+  -- resultado do aviso: 'ok' | 'parcial' | 'falhou' | 'desligado', e o
+  -- detalhe por destinatário ({"group": true, "5571…": false, …})
+  wa_status  TEXT,
+  wa_detail  JSONB,
+  wa_sent_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS acionamento_created_idx ON acionamento (created_at DESC);
+
+-- ---------- bot do WhatsApp (chip da regulação) ----------
+-- O chip fica pareado ao servidor como "dispositivo conectado" (a sessão em
+-- si fica em disco, WA_AUTH_DIR — não no banco). Aqui mora só o que a equipe
+-- configura: o grupo vinculado (linha única, como bot_chat do Telegram) e os
+-- números que recebem o aviso no privado.
+CREATE TABLE IF NOT EXISTS wa_chat (
+  id        SMALLINT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  jid       TEXT NOT NULL,                  -- 1203…@g.us
+  title     TEXT,
+  linked_by TEXT,                           -- quem mandou o /vincular
+  linked_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS wa_recipient (
+  id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  phone      TEXT NOT NULL UNIQUE,          -- só dígitos, com DDI: 5571981619480
+  name       TEXT,
+  active     BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- plantonistas que recebem o aviso no privado desde o primeiro deploy. Só
+-- quando a tabela está vazia: a lista é editável em Config → WhatsApp, e um
+-- número removido pelo admin não pode voltar no deploy seguinte.
+INSERT INTO wa_recipient (phone, name)
+SELECT v.phone, v.name
+  FROM (VALUES ('5571981619480', 'Caio'), ('5571988161438', 'Felipe Carneiro')) AS v(phone, name)
+ WHERE NOT EXISTS (SELECT 1 FROM wa_recipient);
+
 -- ---------- ficha do paciente (prontuário) ----------
 -- DADO IDENTIFICÁVEL DE PACIENTE. Fica em tabela PRÓPRIA, e não em `cases`
 -- nem dentro de `cases.snapshot`, por um motivo concreto: o snapshot é copiado

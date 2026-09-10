@@ -4,17 +4,22 @@ import 'leaflet/dist/leaflet.css'
 import GoogleMutant from 'leaflet.gridlayer.googlemutant'
 import { IconHeli } from './Icons.jsx'
 import { geocode, reverseGeocode } from '../lib/api.js'
+import { api } from '../lib/backend.js'
 import { loadGoogleMaps, googleAuthFailed, watchMutant } from '../lib/gmaps.js'
 
 // Tela pública: é o que qualquer pessoa vê ao cair no site, antes de login.
 // Dois caminhos — acionar o GOA (formulário) ou acompanhar um acionamento já
-// feito. O envio de fato acontece pelo WhatsApp: o botão abre a conversa com
-// a mensagem já montada. Login da equipe fica num botão discreto no canto.
+// feito. "Acionar" grava o pedido no servidor (POST /api/acionamentos) e o
+// bot do WhatsApp da regulação avisa o grupo e os plantonistas na hora. Se o
+// aviso não puder ser confirmado (bot fora, servidor fora), a tela devolve o
+// plano B de sempre: abrir o WhatsApp da própria pessoa com o texto pronto
+// para o número da regulação. Login da equipe fica num botão discreto no canto.
 
 // edite aqui a lista de centrais (botões, na ordem)
 const CENTRAIS = ['Salvador', 'Feira de Santana', 'Alagoinhas', 'SAJ', 'Itabuna', 'Camaçari']
 const TIPOS = ['Trauma', 'AVC', 'IAM', 'Outro']
-const WHATSAPP = '5571988161438' // +55 71 98816-1438
+// plano B (e "acompanhar"): WhatsApp pessoal da regulação — +55 71 98816-1438
+const WHATSAPP = '5571988161438'
 
 // pergunta extra de cada tipo: [rótulo, tipo de input, placeholder] — IAM não pede nada
 const DETALHE = {
@@ -127,6 +132,9 @@ export default function Acionamento({ onLogin }) {
   const [trauma, setTrauma] = useState('') // botão escolhido quando tipo = Trauma
   const [detalhe, setDetalhe] = useState('')
   const [done, setDone] = useState(false)
+  const [sending, setSending] = useState(false)
+  // resposta do servidor: { id, whatsapp: 'ok'|'parcial'|…, hora } ou { error }
+  const [result, setResult] = useState(null)
 
   // local da ocorrência: texto livre (obrigatório) + pino no mapa (refinamento)
   const [localTxt, setLocalTxt] = useState('')
@@ -168,27 +176,52 @@ export default function Acionamento({ onLogin }) {
   const ok = central && medico.trim() && fone.replace(/\D/g, '').length >= 10 && tipo &&
     (!pedeDetalhe || detalhe.trim()) && traumaOk && localTxt.trim()
 
+  // o detalhe do tipo como vai no aviso: subtipo do trauma, hora do ictus ou texto livre
+  const detalheTxt = tipo === 'Trauma' ? (trauma === 'Outro' ? detalhe.trim() : trauma)
+    : tipo === 'AVC' ? (detalhe ? `ictus ${detalhe}` : '')
+    : pedeDetalhe ? detalhe.trim() : ''
+  const pinOk = pin && pinLabel !== '…' ? pinLabel : ''
+
   const waLink = (msg) => `https://wa.me/${WHATSAPP}?text=${encodeURIComponent(msg)}`
   const waAcionar = () => {
     const linhas = [
       'ACIONAMENTO AEROMÉDICO — SkyRescue',
+      result?.id ? `Pedido #${result.id} (registrado no site)` : null,
       `Central: SAMU ${central}`,
       `Médico(a): ${medico.trim()}`,
       `Contato: ${fone.trim()}`,
-      `Tipo: ${tipo}${
-        tipo === 'Trauma' ? ` — ${trauma === 'Outro' ? detalhe.trim() : trauma}`
-        : tipo === 'AVC' ? ` (ictus ${detalhe})`
-        : pedeDetalhe ? ` — ${detalhe.trim()}` : ''}`,
+      `Tipo: ${tipo}${detalheTxt ? ` — ${detalheTxt}` : ''}`,
       `Local: ${localTxt.trim()}`,
-    ]
+    ].filter(Boolean)
     if (pin) {
-      if (pinLabel && pinLabel !== '…') linhas.push(`Ponto no mapa: ${pinLabel}`)
+      if (pinOk) linhas.push(`Ponto no mapa: ${pinOk}`)
       linhas.push(`Coordenadas: ${pin.lat.toFixed(5)}, ${pin.lon.toFixed(5)}`)
       linhas.push(`https://maps.google.com/?q=${pin.lat.toFixed(5)},${pin.lon.toFixed(5)}`)
     }
     return waLink(linhas.join('\n'))
   }
   const waAcompanhar = waLink('Olá! Gostaria de acompanhar um acionamento aeromédico já realizado.')
+
+  // "Acionar": o servidor grava e o bot avisa. Qualquer falha vira o plano B
+  // (WhatsApp da pessoa) no modal — nunca uma tela de erro sem saída.
+  const acionar = async () => {
+    if (!ok || sending) return
+    setSending(true)
+    setResult(null)
+    setDone(true)
+    try {
+      const r = await api.acionar({
+        central, medico: medico.trim(), fone: fone.trim(), tipo, detalhe: detalheTxt,
+        local: localTxt.trim(), lat: pin?.lat, lon: pin?.lon, pinLabel: pinOk,
+      })
+      setResult({ ...r, hora: new Date(r.createdAt || Date.now()).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) })
+    } catch (e) {
+      setResult({ error: e.message || 'falha de rede' })
+    } finally {
+      setSending(false)
+    }
+  }
+  const entregue = result && !result.error && (result.whatsapp === 'ok' || result.whatsapp === 'parcial')
 
   const pick = (val, cur, set) => (
     <button
@@ -236,7 +269,7 @@ export default function Acionamento({ onLogin }) {
 
   return (
     <div className="login-bg">
-      <form className="login-card" onSubmit={(e) => { e.preventDefault(); if (ok) setDone(true) }}>
+      <form className="login-card" onSubmit={(e) => { e.preventDefault(); acionar() }}>
         {brand}
 
         <div className="login-title">Acionar o GOA</div>
@@ -353,9 +386,9 @@ export default function Acionamento({ onLogin }) {
           </div>
         </div>
 
-        <button className="btn" type="submit" disabled={!ok}
+        <button className="btn" type="submit" disabled={!ok || sending}
           style={{ width: '100%', justifyContent: 'center', marginTop: 4, minHeight: 48 }}>
-          Acionar
+          {sending ? <span className="spin" /> : 'Acionar'}
         </button>
 
         <div className="small" style={{ marginTop: 12, textAlign: 'center' }}>
@@ -364,22 +397,66 @@ export default function Acionamento({ onLogin }) {
       </form>
 
       {done && (
-        <div className="modal-bg" onClick={() => setDone(false)}>
+        <div className="modal-bg" onClick={() => { if (!sending) setDone(false) }}>
           <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 380 }}>
-            <h3>Acionamento pronto</h3>
-            <p style={{ margin: '0 0 12px', lineHeight: 1.5 }}>
-              Toque no botão abaixo para enviar o acionamento pelo WhatsApp e{' '}
-              <strong>fique atento ao telefone informado</strong> — a regulação
-              entrará em contato.
-            </p>
-            <a className="btn" href={waAcionar()} target="_blank" rel="noopener noreferrer"
-              style={{ width: '100%', justifyContent: 'center', minHeight: 52, gap: 10, background: '#25D366', color: '#fff', border: 'none' }}>
-              <IconWhats size={22} /> Enviar pelo WhatsApp
-            </a>
-            <button className="btn sec" type="button" onClick={() => setDone(false)}
-              style={{ width: '100%', justifyContent: 'center', marginTop: 8 }}>
-              Voltar
-            </button>
+            {sending && (
+              <>
+                <h3>Enviando acionamento…</h3>
+                <p style={{ margin: '0 0 12px', lineHeight: 1.5, display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <span className="spin" /> Avisando a regulação pelo WhatsApp.
+                </p>
+              </>
+            )}
+
+            {!sending && entregue && (
+              <>
+                <h3>✅ Acionamento enviado</h3>
+                <p style={{ margin: '0 0 12px', lineHeight: 1.5 }}>
+                  Pedido <strong>#{result.id}</strong> avisado à regulação pelo WhatsApp às{' '}
+                  <strong>{result.hora}</strong>
+                  {result.grupo === false || (result.privados?.total && result.privados.ok < result.privados.total)
+                    ? ' (parte dos destinatários não confirmou)' : ''}.{' '}
+                  <strong>Fique atento ao telefone informado</strong> — a regulação vai ligar.
+                </p>
+                <button className="btn" type="button" onClick={() => setDone(false)}
+                  style={{ width: '100%', justifyContent: 'center', minHeight: 48 }}>
+                  OK
+                </button>
+                <a className="btn sec" href={waAcionar()} target="_blank" rel="noopener noreferrer"
+                  style={{ width: '100%', justifyContent: 'center', marginTop: 8, gap: 8 }}>
+                  <IconWhats size={16} /> Reforçar pelo meu WhatsApp
+                </a>
+              </>
+            )}
+
+            {!sending && !entregue && (
+              <>
+                <h3>Envie pelo WhatsApp</h3>
+                <p style={{ margin: '0 0 12px', lineHeight: 1.5 }}>
+                  {result?.error
+                    ? <>Não foi possível registrar o pedido no servidor ({result.error}). </>
+                    : <>O pedido <strong>#{result?.id}</strong> foi registrado, mas o aviso automático
+                        não pôde ser confirmado. </>}
+                  Toque no botão abaixo para enviar o acionamento pelo WhatsApp e{' '}
+                  <strong>fique atento ao telefone informado</strong> — a regulação
+                  entrará em contato.
+                </p>
+                <a className="btn" href={waAcionar()} target="_blank" rel="noopener noreferrer"
+                  style={{ width: '100%', justifyContent: 'center', minHeight: 52, gap: 10, background: '#25D366', color: '#fff', border: 'none' }}>
+                  <IconWhats size={22} /> Enviar pelo WhatsApp
+                </a>
+                {result?.error && (
+                  <button className="btn sec" type="button" onClick={acionar}
+                    style={{ width: '100%', justifyContent: 'center', marginTop: 8 }}>
+                    Tentar de novo
+                  </button>
+                )}
+                <button className="btn sec" type="button" onClick={() => setDone(false)}
+                  style={{ width: '100%', justifyContent: 'center', marginTop: 8 }}>
+                  Voltar
+                </button>
+              </>
+            )}
           </div>
         </div>
       )}

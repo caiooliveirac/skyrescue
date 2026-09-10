@@ -69,4 +69,17 @@ export const api = {
   listUsers: () => req('GET', '/users'),
   createUser: (u) => req('POST', '/users', u),
   updateUser: (id, patch) => req('PATCH', `/users/${id}`, patch),
+  // acionamento público (tela "Acionar GOA", sem login): o servidor grava e o
+  // bot do WhatsApp avisa o grupo e os plantonistas
+  acionar: (a) => req('POST', '/acionamentos', a),
+  listAcionamentos: () => req('GET', '/acionamentos'),
+  // bot do WhatsApp (admin): pareamento do chip, grupo e destinatários
+  waStatus: () => req('GET', '/whatsapp/status'),
+  waPair: (phone) => req('POST', '/whatsapp/pair', { phone }),
+  waLogout: () => req('POST', '/whatsapp/logout'),
+  waTest: () => req('POST', '/whatsapp/test'),
+  waAddRecipient: (phone, name) => req('POST', '/whatsapp/recipients', { phone, name }),
+  waSetRecipient: (id, active) => req('PATCH', `/whatsapp/recipients/${id}`, { active }),
+  waRemoveRecipient: (id) => req('DELETE', `/whatsapp/recipients/${id}`),
+  waUnbindGroup: () => req('DELETE', '/whatsapp/group'),
 }
