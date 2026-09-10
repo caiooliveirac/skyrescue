@@ -1,4 +1,6 @@
 node_modules/
+# sessão do WhatsApp pareado (chaves do chip) — só no servidor
+.wa-auth/
 dist/
 .env
 .env.*

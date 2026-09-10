@@ -78,6 +78,26 @@ Sem missão ativa todos respondem que não há missão em vez de inventar dados 
 
 Ainda há um teto de **250 km** entre a aeronave e o ponto de encontro: mais que isso não é esta missão e o ETE não sai. Regressão coberta por `node server/scripts/test-missao.js` (roda contra o banco de dev, em dry-run).
 
+## Acionamento pelo site → aviso no WhatsApp (bot do chip da regulação)
+
+Quem cai em **goa.mnrs.com.br** sem login vê a tela **Acionar GOA** (central, médico, contato, tipo, local, pino no mapa). Ao tocar em **Acionar**, o pedido é gravado no servidor (`POST /api/acionamentos`, tabela `acionamento`) e o **chip da regulação**, pareado ao servidor como dispositivo conectado do WhatsApp, avisa na hora:
+
+- o **grupo vinculado** (regulação + GOA), e
+- os **plantonistas no privado** (lista editável no painel; na primeira instalação já vem com Caio e Felipe Carneiro).
+
+O aviso traz número do pedido, hora, central, médico com o telefone em link `wa.me`, tipo (com subtipo/ictus), local e link do Maps quando há pino. **Sem dado de paciente.** A tela mostra se o aviso chegou; se o bot estiver fora do ar (ou o servidor), ela devolve o plano B de sempre: abrir o WhatsApp da própria pessoa com o texto pronto para o número da regulação. Rota pública com limite por IP e global (5 por 10 min / 40 por hora) para ninguém inundar o grupo. A equipe logada lista o histórico em `GET /api/acionamentos`.
+
+> Antes, "Acionar" só abria o WhatsApp de quem preenchia, com o texto pronto para **um** número (o de Felipe) — era por isso que o aviso chegava só no privado dele, enviado do celular do solicitante, e nada ficava registrado.
+
+**Setup (uma vez, pelo admin, em Config → WhatsApp):**
+
+1. Digite o número do chip e toque em **gerar código** (ou **QR code**). No celular do chip: WhatsApp → **Dispositivos conectados** → **Conectar dispositivo** → **Conectar com número de telefone** → digite o código. O painel passa a "Conectado" sozinho.
+2. Adicione o chip ao grupo da regulação e qualquer pessoa manda no grupo: **`/vincular <código>`** (o código é o `BOT_LINK_CODE` do servidor, o mesmo do Telegram; o painel mostra a mensagem pronta com botão copiar). O bot responde "✅ Grupo ligado ao SkyRescue".
+3. Plantonistas: inclua/remova pelo painel, ou a própria pessoa manda `/vincular <código>` no privado do chip e entra sozinha.
+4. **Enviar mensagem de teste** confirma que chega a todos.
+
+A sessão fica em `server/.wa-auth/` (ou `WA_AUTH_DIR`), fora do git e do `rsync --delete` do deploy, então sobrevive a deploy e restart. `WHATSAPP_DISABLED=1` desliga o bot (dev). O celular do chip precisa continuar ligado, com internet e WhatsApp instalado — o servidor é um "WhatsApp Web" dele. **Uma sessão por chip**: outro servidor pareado no mesmo chip derruba este (o painel acusa "outra instância assumiu"). Usa a biblioteca Baileys (WhatsApp Web não oficial): vale para o volume de um plantão; não use o chip para disparo em massa, que é o que leva a bloqueio. Testes sem chip: `node server/scripts/test-whatsapp.js` (socket falso, banco de dev).
+
 ## Pontos de pouso da comunidade
 
 Usuários logados podem sugerir locais onde a equipe já pousou (campo de futebol, praça, pátio de prefeitura…) pelo botão **Comunidade** no mapa: clica-se no local (coordenadas ajustáveis à mão no formulário) e a sugestão aparece para todos como um **H âmbar tracejado** — deixando claro que foi adicionada por usuário e ainda não validada. Quando um **admin valida**, o ponto assume a cor padrão da base, passa a integrar o ranking de **áreas de pouso** perto da ocorrência (badge "Validada — pouso de rotina") e leva junto a observação operacional de quem sugeriu. Pontos rejeitados saem do mapa (o autor e o admin ainda os veem na lista). Cada ponto aceita **fotos do local** (seção seguinte). Não são helipontos homologados: reconhecimento visual pelo piloto continua obrigatório.

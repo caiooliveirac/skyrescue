@@ -4,6 +4,7 @@ import { geocode, parseMapsLink, reverseGeocode } from '../lib/api.js'
 import { api } from '../lib/backend.js'
 import { IconSettings, IconX, IconSearch } from './Icons.jsx'
 import { MapaLocal } from './Acionamento.jsx'
+import WhatsAppPanel from './WhatsAppPanel.jsx'
 
 // input numérico bufferizado: aceita estados intermediários ("", "-", "-12.")
 // sem converter em 0; só propaga quando o texto é um número válido.
@@ -35,7 +36,7 @@ function Num({ label, value, onChange, step = 1, suffix }) {
   )
 }
 
-export default function ConfigModal({ cfg, onSave, onClose }) {
+export default function ConfigModal({ cfg, user, onSave, onClose }) {
   const [c, setC] = useState(() => JSON.parse(JSON.stringify(cfg)))
   const [busyGeo, setBusyGeo] = useState(null)
   const [mapsLink, setMapsLink] = useState('')
@@ -232,6 +233,17 @@ export default function ConfigModal({ cfg, onSave, onClose }) {
             Nível gratuito: 10 mil carregamentos/mês. A chave fica salva só neste navegador.
           </div>
         </div>
+
+        {user?.role === 'admin' && (
+          <>
+            <h4>WhatsApp — bot do acionamento</h4>
+            <div className="small" style={{ marginBottom: 8 }}>
+              Cada acionamento feito na tela pública do site é avisado pelo chip da regulação no grupo vinculado e no privado dos plantonistas.
+              Configuração do servidor (vale para todos), não deste navegador.
+            </div>
+            <WhatsAppPanel />
+          </>
+        )}
 
         <h4>Hospitais de referência</h4>
         <div className="small" style={{ marginBottom: 8 }}>
