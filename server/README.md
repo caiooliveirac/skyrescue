@@ -6,7 +6,7 @@ API de **autenticação** e **registro de casos** do SkyRescue. Node + Express +
 
 - **Auth:** senha com `crypto.scrypt` (nativo, sem dependência C), sessão em cookie httpOnly (`sky_sess`) com token cujo hash SHA-256 fica na tabela `sessions`. TTL padrão 12h.
 - **Casos:** registro compartilhado — todo usuário autenticado vê todos os casos, cada um com autoria (`created_by`) e trilha em `case_audit`. O snapshot completo do app vai em `cases.snapshot` (jsonb); colunas promovidas (score, local, tempos…) servem à listagem/relatório.
-- **Perfis:** `admin` (gerencia usuários), `regulador`, `operador`.
+- **Perfis:** `admin` (gerencia usuários e o WhatsApp), `gestor` (conta interna de configuração: valida pontos de pouso e mantém os contatos das centrais SAMU — sem usuários nem WhatsApp), `regulador`, `operador`.
 
 ## Variáveis de ambiente (`server/.env`, só no servidor)
 

@@ -18,11 +18,12 @@ import { sendEvent, pendingEvents } from './lib/eventQueue.js'
 import { makeDraftSaver, readDraft, draftWorthKeeping } from './lib/draft.js'
 import { emptyPatient, readPatient, savePatient, clearPatient, movePatient, migrateLegacyPatient, openProntuario, PATIENT_KEYS, patientWorthKeeping } from './lib/patient.js'
 import ConfigModal from './components/ConfigModal.jsx'
+import SamuContactsModal from './components/SamuContacts.jsx'
 import { DecisionStrip, TimePanel, WeatherPanel, LZPanel, AlertsPanel, GatesPanel, CoordReadout } from './components/Results.jsx'
 import {
   IconHeli, IconPlus, IconFolder, IconPrint, IconSettings, IconSearch, IconPin,
   IconTarget, IconZap, IconCopy, IconSave, IconDownload, IconHelipadH,
-  IconClock, IconCloud, IconAlert, IconRoute, IconX, IconUsers, IconLayers,
+  IconClock, IconCloud, IconAlert, IconRoute, IconX, IconUsers, IconLayers, IconAmbulance,
 } from './components/Icons.jsx'
 
 // Telas do caso. No celular (cabine) o app mostra UMA por vez, escolhida no
@@ -74,6 +75,7 @@ const go = (v) => { location.hash = v }
 export default function App({ user, onLogout }) {
   const [cfg, setCfg] = useState(loadCfg)
   const [showCfg, setShowCfg] = useState(false)
+  const [showSamus, setShowSamus] = useState(false)
   const [showCases, setShowCases] = useState(false)
 
   // navegação por tela (celular) x tela única (central)
@@ -1260,6 +1262,7 @@ export default function App({ user, onLogout }) {
         <button className="tbtn" onClick={() => window.print()} title="Imprimir registro do caso">
           <IconPrint size={14} /> <span className="tlabel">Registro</span>
         </button>
+        <button className="tbtn" onClick={() => setShowSamus(true)} title="Contatos das centrais SAMU"><IconAmbulance size={14} /> <span className="tlabel">SAMUs</span></button>
         <button className="tbtn" onClick={() => setShowCfg(true)} title="Configuração"><IconSettings size={14} /> <span className="tlabel">Config</span></button>
         {user && <span className="who" title={user.role}>{user.full_name || user.username}</span>}
         <button className="tbtn" onClick={doLogout} title="Encerrar sessão"><IconX size={14} /> <span className="tlabel">Sair</span></button>
@@ -1654,6 +1657,7 @@ export default function App({ user, onLogout }) {
         <b>SkyRescue β</b> — ferramenta de apoio à decisão em fase piloto. Não substitui o julgamento do médico regulador, os protocolos do SAMU 192 / SESAB, nem a decisão final do comandante da aeronave (GOA/CBMBA). Meteorologia (Open-Meteo) e áreas de pouso (OpenStreetMap) são indicativas e exigem confirmação operacional. Rotas terrestres via OSRM, sem trânsito em tempo real. Os casos são registrados no servidor do GOA com controle de acesso e autoria. Dados pessoais de paciente só na <b>Ficha do paciente</b>, que é restrita à equipe autorizada e tem todo acesso registrado — fora dela (identificador do caso, observações) não escreva dado identificável.
       </div>
 
+      {showSamus && <SamuContactsModal user={user} onClose={() => setShowSamus(false)} />}
       {showCfg && <ConfigModal cfg={cfg} user={user} onClose={() => setShowCfg(false)} onSave={(c) => { setCfg(c); saveCfg(c); setShowCfg(false) }} />}
 
       {view === 'nav' && (

@@ -10,11 +10,17 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash TEXT        NOT NULL,            -- formato scrypt: N:r:p:salt:hash (hex)
   full_name     TEXT,
   role          TEXT        NOT NULL DEFAULT 'regulador'
-                            CHECK (role IN ('admin', 'regulador', 'operador')),
+                            CHECK (role IN ('admin', 'gestor', 'regulador', 'operador')),
   active        BOOLEAN     NOT NULL DEFAULT TRUE,
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   last_login_at TIMESTAMPTZ
 );
+
+-- 'gestor': conta interna de configuração — valida pontos de pouso e mantém
+-- os contatos das centrais SAMU, mas NÃO mexe em usuários nem no WhatsApp.
+ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
+ALTER TABLE users ADD CONSTRAINT users_role_check
+  CHECK (role IN ('admin', 'gestor', 'regulador', 'operador'));
 
 -- ---------- sessões ----------
 CREATE TABLE IF NOT EXISTS sessions (
@@ -240,3 +246,16 @@ CREATE TABLE IF NOT EXISTS case_audit (
   case_ref TEXT
 );
 CREATE INDEX IF NOT EXISTS case_audit_case_idx ON case_audit (case_id);
+
+-- ---------- contatos das centrais SAMU ----------
+-- Agenda de acionamento: qual central, quem atende e o telefone. Qualquer
+-- pessoa logada consulta; admin e gestor mantêm.
+CREATE TABLE IF NOT EXISTS samu_contact (
+  id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  samu       TEXT NOT NULL,                 -- ex.: 'SAMU Feira de Santana'
+  person     TEXT,                          -- nome de quem atende
+  phone      TEXT NOT NULL,
+  created_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);

@@ -14,7 +14,7 @@ const STATUS_BADGE = {
 // equipe já pousou (campo, praça…); fica âmbar no mapa até um admin
 // validar — só então entra na base com a cor padrão e no ranking de LZ.
 export default function CommunityModal({ user, points, draft, onDraftDone, onClose, onPickOnMap, refresh, onFocus }) {
-  const isAdmin = user?.role === 'admin'
+  const isAdmin = user?.role === 'admin' || user?.role === 'gestor' // gestor valida também
   const [name, setName] = useState('')
   const [municipio, setMunicipio] = useState('')
   const [description, setDescription] = useState('')

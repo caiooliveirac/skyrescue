@@ -63,7 +63,7 @@ export function LzPhotoStrip({ point, user, onChanged, autoLoad = true }) {
     catch (e) { setErr(e.message || 'falha ao excluir') }
   }
 
-  const canDelete = (p) => user?.role === 'admin' || p.created_by === user?.id
+  const canDelete = (p) => user?.role === 'admin' || user?.role === 'gestor' || p.created_by === user?.id
 
   return (
     <div className="lzphotos">

@@ -1,6 +1,6 @@
 // CLI para cadastrar/atualizar usuário:
 //   node scripts/create-user.js <username> <senha> [role] ["Nome completo"]
-// role: admin | regulador | operador  (padrão: regulador)
+// role: admin | gestor | regulador | operador  (padrão: regulador)
 // Se o usuário já existir, atualiza a senha (e role/nome se informados).
 import { query, pool } from '../src/db.js'
 import { hashPassword } from '../src/auth.js'
@@ -11,8 +11,8 @@ async function main() {
     console.error('uso: node scripts/create-user.js <username> <senha> [role] ["Nome"]')
     process.exit(1)
   }
-  if (!['admin', 'regulador', 'operador'].includes(role)) {
-    console.error(`role inválido: ${role} (use admin|regulador|operador)`); process.exit(1)
+  if (!['admin', 'gestor', 'regulador', 'operador'].includes(role)) {
+    console.error(`role inválido: ${role} (use admin|gestor|regulador|operador)`); process.exit(1)
   }
   const hash = hashPassword(password)
   const { rows } = await query(

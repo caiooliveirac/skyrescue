@@ -3,7 +3,7 @@ import cookieParser from 'cookie-parser'
 import { query, pool } from './db.js'
 import {
   hashPassword, verifyPassword, createSession, destroySession,
-  cookieOptions, authMiddleware, requireAuth, requireAdmin, allowService,
+  cookieOptions, authMiddleware, requireAuth, requireAdmin, requireStaff, isStaff, allowService,
   COOKIE_NAME, startSessionGC,
 } from './auth.js'
 import { startBot, notifyMission, echoMilestones, MILESTONES } from './telegram.js'
@@ -677,8 +677,8 @@ app.post('/api/community-lz', requireAuth, async (req, res) => {
   }
 })
 
-// validação/rejeição e ajuste fino (nome/coordenadas) — só admin
-app.patch('/api/community-lz/:id', requireAdmin, async (req, res) => {
+// validação/rejeição e ajuste fino (nome/coordenadas) — admin ou gestor
+app.patch('/api/community-lz/:id', requireStaff, async (req, res) => {
   const { status, review_note, name, description, municipio, lat, lon } = req.body || {}
   const sets = [], vals = []
   const add = (col, v) => { vals.push(v); sets.push(`${col} = $${vals.length}`) }
@@ -717,7 +717,7 @@ app.delete('/api/community-lz/:id', requireAuth, async (req, res) => {
   const { rows } = await query('SELECT created_by, status FROM community_lz WHERE id = $1', [req.params.id])
   if (!rows[0]) return res.status(404).json({ error: 'ponto não encontrado' })
   const own = rows[0].created_by === req.user.id
-  if (req.user.role !== 'admin' && !(own && rows[0].status === 'pendente'))
+  if (!isStaff(req.user) && !(own && rows[0].status === 'pendente'))
     return res.status(403).json({ error: 'apenas o admin (ou o autor, enquanto pendente) pode excluir' })
   await query('DELETE FROM community_lz WHERE id = $1', [req.params.id])
   res.json({ ok: true })
@@ -821,7 +821,7 @@ app.post('/api/lz-photos', requireAuth, async (req, res) => {
 app.delete('/api/lz-photos/:pid', requireAuth, async (req, res) => {
   const { rows } = await query('SELECT created_by FROM lz_photo WHERE id = $1', [req.params.pid])
   if (!rows[0]) return res.status(404).json({ error: 'foto não encontrada' })
-  if (req.user.role !== 'admin' && rows[0].created_by !== req.user.id)
+  if (!isStaff(req.user) && rows[0].created_by !== req.user.id)
     return res.status(403).json({ error: 'apenas quem enviou (ou o admin) pode excluir a foto' })
   await query('DELETE FROM lz_photo WHERE id = $1', [req.params.pid])
   res.json({ ok: true })
@@ -863,6 +863,44 @@ app.get('/api/aircraft/position', allowService, async (_req, res) => {
   res.json({ position: rows[0] || null })
 })
 
+// ---------- contatos das centrais SAMU ----------
+app.get('/api/samu-contacts', requireAuth, async (_req, res) => {
+  const { rows } = await query('SELECT id, samu, person, phone FROM samu_contact ORDER BY lower(samu), lower(coalesce(person, \'\'))')
+  res.json({ contacts: rows })
+})
+
+const cleanContact = (b = {}) => ({
+  samu: String(b.samu || '').trim().slice(0, 120),
+  person: String(b.person || '').trim().slice(0, 120) || null,
+  phone: String(b.phone || '').trim().slice(0, 40),
+})
+
+app.post('/api/samu-contacts', requireStaff, async (req, res) => {
+  const c = cleanContact(req.body)
+  if (!c.samu || !c.phone) return res.status(400).json({ error: 'SAMU e telefone são obrigatórios' })
+  const { rows } = await query(
+    `INSERT INTO samu_contact (samu, person, phone, created_by) VALUES ($1,$2,$3,$4)
+     RETURNING id, samu, person, phone`, [c.samu, c.person, c.phone, req.user.id]
+  )
+  res.status(201).json({ contact: rows[0] })
+})
+
+app.put('/api/samu-contacts/:id', requireStaff, async (req, res) => {
+  const c = cleanContact(req.body)
+  if (!c.samu || !c.phone) return res.status(400).json({ error: 'SAMU e telefone são obrigatórios' })
+  const { rows } = await query(
+    `UPDATE samu_contact SET samu = $1, person = $2, phone = $3, updated_at = now()
+      WHERE id = $4 RETURNING id, samu, person, phone`, [c.samu, c.person, c.phone, req.params.id]
+  )
+  if (!rows[0]) return res.status(404).json({ error: 'contato não encontrado' })
+  res.json({ contact: rows[0] })
+})
+
+app.delete('/api/samu-contacts/:id', requireStaff, async (req, res) => {
+  await query('DELETE FROM samu_contact WHERE id = $1', [req.params.id])
+  res.json({ ok: true })
+})
+
 // ---------- admin de usuários ----------
 app.get('/api/users', requireAdmin, async (_req, res) => {
   const { rows } = await query(
@@ -875,7 +913,7 @@ app.post('/api/users', requireAdmin, async (req, res) => {
   const { username, password, full_name, role } = req.body || {}
   if (!username || !password) return res.status(400).json({ error: 'usuário e senha obrigatórios' })
   if (String(password).length < 6) return res.status(400).json({ error: 'senha deve ter ao menos 6 caracteres' })
-  const r = ['admin', 'regulador', 'operador'].includes(role) ? role : 'regulador'
+  const r = ['admin', 'gestor', 'regulador', 'operador'].includes(role) ? role : 'regulador'
   try {
     const { rows } = await query(
       `INSERT INTO users (username, password_hash, full_name, role)
@@ -894,7 +932,7 @@ app.patch('/api/users/:id', requireAdmin, async (req, res) => {
   const { active, role, password, full_name } = req.body || {}
   const sets = [], vals = []
   if (active !== undefined) { vals.push(active); sets.push(`active = $${vals.length}`) }
-  if (role && ['admin', 'regulador', 'operador'].includes(role)) { vals.push(role); sets.push(`role = $${vals.length}`) }
+  if (role && ['admin', 'gestor', 'regulador', 'operador'].includes(role)) { vals.push(role); sets.push(`role = $${vals.length}`) }
   if (full_name !== undefined) { vals.push(full_name); sets.push(`full_name = $${vals.length}`) }
   if (password) {
     if (String(password).length < 6) return res.status(400).json({ error: 'senha deve ter ao menos 6 caracteres' })

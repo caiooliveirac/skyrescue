@@ -65,6 +65,11 @@ export const api = {
   // rastreamento da aeronave
   reportAircraft: (p) => req('POST', '/aircraft/position', p),
   getAircraft: () => req('GET', '/aircraft/position'),
+  // contatos das centrais SAMU (leitura: qualquer login; escrita: admin/gestor)
+  listSamuContacts: () => req('GET', '/samu-contacts'),
+  createSamuContact: (c) => req('POST', '/samu-contacts', c),
+  updateSamuContact: (id, c) => req('PUT', `/samu-contacts/${id}`, c),
+  deleteSamuContact: (id) => req('DELETE', `/samu-contacts/${id}`),
   // admin
   listUsers: () => req('GET', '/users'),
   createUser: (u) => req('POST', '/users', u),

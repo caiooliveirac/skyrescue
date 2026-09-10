@@ -88,6 +88,14 @@ export function requireAdmin(req, res, next) {
   next()
 }
 
+// admin ou gestor: valida pontos de pouso e mantém contatos SAMU
+export const isStaff = (u) => u && (u.role === 'admin' || u.role === 'gestor')
+export function requireStaff(req, res, next) {
+  if (!req.user) return res.status(401).json({ error: 'não autenticado' })
+  if (!isStaff(req.user)) return res.status(403).json({ error: 'requer perfil admin ou gestor' })
+  next()
+}
+
 // limpeza periódica de sessões vencidas
 export function startSessionGC() {
   const run = () => query('DELETE FROM sessions WHERE expires_at < now()').catch(() => {})
