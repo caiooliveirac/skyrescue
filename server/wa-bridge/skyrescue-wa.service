@@ -1,0 +1,14 @@
+# /etc/systemd/system/skyrescue-wa.service — ponte WhatsApp do SkyRescue (LIVE)
+# Lê o mesmo .env da API (WA_SECRET, WA_HTTP_ADDR, WA_WEBHOOK, WA_DB, WA_PAIR_PHONE).
+[Unit]
+Description=SkyRescue WhatsApp bridge (whatsmeow)
+After=network.target
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/skyrescue/server/wa-bridge
+EnvironmentFile=/home/ubuntu/skyrescue/server/.env
+ExecStart=/home/ubuntu/skyrescue/server/wa-bridge/wa-bridge
+Restart=always
+RestartSec=5
+[Install]
+WantedBy=multi-user.target

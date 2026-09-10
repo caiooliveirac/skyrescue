@@ -36,8 +36,8 @@ async function mkCase(ref, s) {
 }
 
 async function main() {
-  await query(`INSERT INTO bot_chat (id, chat_id, title) VALUES (1, -1, 'grupo de teste')
-               ON CONFLICT (id) DO UPDATE SET chat_id = -1`)
+  await query(`INSERT INTO bot_chat (id, chat_id, title) VALUES (1, '-1', 'grupo de teste')
+               ON CONFLICT (id) DO UPDATE SET chat_id = '-1'`)
   await query(`UPDATE mission_chat SET status = 'encerrada'`)
   // O banco de dev é compartilhado com os testes de navegador: qualquer caso
   // que tenha sobrado com 'decisao' marcado e sem missão seria ADOTADO como
@@ -119,8 +119,8 @@ async function main() {
 
   // limpeza (inclusive o vínculo derrubado no último cenário)
   await query(`DELETE FROM cases WHERE case_ref LIKE 'teste-acion-%'`)
-  await query(`INSERT INTO bot_chat (id, chat_id, title) VALUES (1, -1, 'grupo de teste')
-               ON CONFLICT (id) DO UPDATE SET chat_id = -1`)
+  await query(`INSERT INTO bot_chat (id, chat_id, title) VALUES (1, '-1', 'grupo de teste')
+               ON CONFLICT (id) DO UPDATE SET chat_id = '-1'`)
   console.log(falhas ? `\n${falhas} FALHA(S)` : '\nTudo certo.')
   await pool.end()
   process.exit(falhas ? 1 : 0)

@@ -22,8 +22,8 @@ async function mkCase(ref, snap) {
 }
 
 async function main() {
-  await query(`INSERT INTO bot_chat (id, chat_id, title) VALUES (1, -1, 'grupo de teste')
-               ON CONFLICT (id) DO UPDATE SET chat_id = -1`)
+  await query(`INSERT INTO bot_chat (id, chat_id, title) VALUES (1, '-1', 'grupo de teste')
+               ON CONFLICT (id) DO UPDATE SET chat_id = '-1'`)
 
   const antigo = await mkCase('teste-antigo', { id: 'teste-antigo', scene: CENA, sceneLabel: 'cena antiga' })
   const novo = await mkCase('teste-novo', { id: 'teste-novo', scene: CENA, sceneLabel: 'cena de agora' })

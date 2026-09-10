@@ -10,9 +10,9 @@
 // (código em BOT_LINK_CODE). Uma vinculação por instalação.
 
 import { query } from './db.js'
+import { waSend, boundWa } from './whatsapp.js'
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN || ''
-const LINK_CODE = process.env.BOT_LINK_CODE || ''
 const API = `https://api.telegram.org/bot${TOKEN}`
 const TZ = 'America/Bahia'
 
@@ -62,6 +62,17 @@ async function tg(method, payload) {
 
 const send = (chatId, html, extra = {}) =>
   tg('sendMessage', { chat_id: chatId, text: html, parse_mode: 'HTML', disable_web_page_preview: true, ...extra })
+export const tgSend = send
+
+// fala da missão vai para TODOS os canais vinculados: grupo do Telegram e
+// grupo/número do WhatsApp. Um canal fora do ar não cala o outro.
+async function broadcast(tgChatId, html, extra = {}) {
+  const wa = await boundWa()
+  await Promise.allSettled([
+    tgChatId ? send(tgChatId, html, extra) : null,
+    wa ? waSend(wa, html) : null,
+  ]).then((r) => r.forEach((x) => x.status === 'rejected' && console.error('[bot] broadcast:', x.reason?.message)))
+}
 
 // ---------- vinculação do grupo ----------
 export async function boundChat() {
@@ -128,7 +139,7 @@ export async function currentMission() {
 // 'decisao' dentro do TTL e sem 'Aeronave liberada'.
 async function adotarAcionamentoOrfao() {
   const chatId = await boundChat()
-  if (!chatId) return null
+  if (!chatId && !(await boundWa())) return null
   const { rows } = await query(
     `SELECT c.id, c.snapshot
        FROM cases c LEFT JOIN mission_chat m ON m.case_id = c.id
@@ -144,7 +155,7 @@ async function adotarAcionamentoOrfao() {
   if (!c) return null
   await query(
     `INSERT INTO mission_chat (case_id, chat_id) VALUES ($1,$2) ON CONFLICT (case_id) DO NOTHING`,
-    [c.id, chatId]
+    [c.id, chatId || 0]
   )
   console.log(`[bot] acionamento órfão adotado: caso ${c.id} virou a missão corrente`)
   return { id: c.id, snapshot: c.snapshot, case_id: c.id, chat_id: chatId, last_pos_post_at: null, near_alerted: false }
@@ -220,7 +231,7 @@ const HANDOVER_HTML = [
 // aciona o grupo: briefing + preparação da LZ + cobrança da passagem
 export async function notifyMission(caseRow, snap, user) {
   const chatId = await boundChat()
-  if (!chatId) throw new Error('grupo não vinculado — adicione o bot ao grupo e envie /vincular <código>')
+  if (!chatId && !(await boundWa())) throw new Error('nenhum grupo vinculado — adicione o bot ao grupo (Telegram ou WhatsApp) e envie /vincular <código>')
   // o GOA é uma aeronave só: abrir uma missão fecha qualquer outra ainda
   // aberta, para o rastreamento nunca mirar o ponto de encontro errado
   await query(`UPDATE mission_chat SET status = 'encerrada' WHERE status = 'ativa' AND case_id <> $1`, [caseRow.id])
@@ -229,23 +240,23 @@ export async function notifyMission(caseRow, snap, user) {
      ON CONFLICT (case_id) DO UPDATE SET
        status = 'ativa', chat_id = EXCLUDED.chat_id, created_at = now(),
        last_pos_post_at = NULL, near_alerted = FALSE`,
-    [caseRow.id, chatId, user?.id || null]
+    [caseRow.id, chatId || 0, user?.id || null]
   )
   // o briefing já vem com o menu: é a primeira mensagem da missão e onde a
   // equipe olha primeiro
-  await send(chatId, briefingHtml(caseRow, snap), { reply_markup: MENU_KEYBOARD })
+  await broadcast(chatId, briefingHtml(caseRow, snap), { reply_markup: MENU_KEYBOARD })
   if (meetPoint(snap)) {
-    await send(chatId, LZ_PREP_HTML, {
+    await broadcast(chatId, LZ_PREP_HTML, {
       reply_markup: { inline_keyboard: [[{ text: '✅ LZ SEGURA', callback_data: `lz:${caseRow.id}` }]] },
     })
   }
-  await send(chatId, HANDOVER_HTML, {
+  await broadcast(chatId, HANDOVER_HTML, {
     reply_markup: { inline_keyboard: [[{ text: '✅ Passagem feita', callback_data: `pass:${caseRow.id}` }]] },
   })
   // horários já marcados antes do acionamento do grupo entram no briefing
   const marked = MILESTONES.filter((m) => snap.events?.[m.id])
   if (marked.length) {
-    await send(chatId, marked.map((m) => `🕐 <b>${m.label}</b> — ${hhmm(snap.events[m.id])}`).join('\n'))
+    await broadcast(chatId, marked.map((m) => `🕐 <b>${m.label}</b> — ${hhmm(snap.events[m.id])}`).join('\n'))
   }
 }
 
@@ -256,7 +267,7 @@ export async function postMilestones(caseId, changed, byName) {
   if (!mc || mc.status !== 'ativa') return
   for (const { id, ts, edited } of changed) {
     const label = MILESTONE_BY_ID[id] || id
-    await send(mc.chat_id, `🕐 <b>${label}</b> — ${hhmm(ts)}${edited ? ' (corrigido)' : ''}${byName ? ` · por ${esc(byName)}` : ''}`)
+    await broadcast(mc.chat_id, `🕐 <b>${label}</b> — ${hhmm(ts)}${edited ? ' (corrigido)' : ''}${byName ? ` · por ${esc(byName)}` : ''}`)
   }
   // aeronave liberada encerra a missão no grupo com o resumo dos tempos
   if (changed.some((c) => c.id === 'livre')) await closeMission(caseId)
@@ -297,7 +308,7 @@ async function closeMission(caseId) {
   if (!rows[0]) return
   const snap = rows[0].snapshot || {}
   const lines = MILESTONES.filter((m) => snap.events?.[m.id]).map((m) => `• ${m.label}: <b>${hhmm(snap.events[m.id])}</b>`)
-  await send(rows[0].chat_id, `✅ <b>Missão encerrada — Caso ${esc(snap.id || caseId)}</b>\n${lines.join('\n')}`)
+  await broadcast(rows[0].chat_id, `✅ <b>Missão encerrada — Caso ${esc(snap.id || caseId)}</b>\n${lines.join('\n')}`)
   await query(`UPDATE mission_chat SET status = 'encerrada' WHERE case_id = $1`, [caseId])
 }
 
@@ -327,10 +338,10 @@ export async function enrouteTick() {
     const near = eteMin <= 2 || distKm <= 4
 
     if (near && !m.near_alerted) {
-      await send(m.chat_id, `🚁 <b>GOA a ~${Math.max(1, Math.round(eteMin))} min do ponto de encontro</b> — LZ pronta e isolada?`)
+      await broadcast(m.chat_id, `🚁 <b>GOA a ~${Math.max(1, Math.round(eteMin))} min do ponto de encontro</b> — LZ pronta e isolada?`)
       await query(`UPDATE mission_chat SET near_alerted = TRUE, last_pos_post_at = now() WHERE case_id = $1`, [m.case_id])
     } else if (!near && (!m.last_pos_post_at || Date.now() - new Date(m.last_pos_post_at).getTime() > POS_CADENCE_MS)) {
-      await send(m.chat_id, `🚁 GOA em deslocamento — ${distKm < 10 ? distKm.toFixed(1) : Math.round(distKm)} km do encontro, ETE ~${Math.max(1, Math.round(eteMin))} min`)
+      await broadcast(m.chat_id, `🚁 GOA em deslocamento — ${distKm < 10 ? distKm.toFixed(1) : Math.round(distKm)} km do encontro, ETE ~${Math.max(1, Math.round(eteMin))} min`)
       await query(`UPDATE mission_chat SET last_pos_post_at = now() WHERE case_id = $1`, [m.case_id])
     }
   } catch (e) {
@@ -413,44 +424,70 @@ async function goaHtml(m) {
   return L.join('\n')
 }
 
-// um handler por comando: usado tanto pelo texto "/x" quanto pelos botões do
-// menu, para os dois caminhos nunca divergirem
+// um handler por comando: usado pelo texto "/x", pelos botões do menu e pelo
+// WhatsApp, para os caminhos nunca divergirem. `reply(html, extra)` é quem
+// entrega no canal certo (Telegram: send; WhatsApp: waSend, sem os botões).
 export const HANDLERS = {
-  ajuda: async (chatId) => { await send(chatId, AJUDA_HTML, { reply_markup: MENU_KEYBOARD }) },
+  ajuda: async (reply) => { await reply(AJUDA_HTML, { reply_markup: MENU_KEYBOARD }) },
 
-  caso: async (chatId) => {
+  caso: async (reply) => {
     const m = await currentMission()
-    await send(chatId, m ? briefingHtml(m, m.snapshot || {}) : SEM_MISSAO)
+    await reply(m ? briefingHtml(m, m.snapshot || {}) : SEM_MISSAO)
   },
 
-  tempos: async (chatId) => {
+  tempos: async (reply) => {
     const m = await currentMission()
-    await send(chatId, m ? temposHtml(m.snapshot, m.case_id) : SEM_MISSAO)
+    await reply(m ? temposHtml(m.snapshot, m.case_id) : SEM_MISSAO)
   },
 
-  goa: async (chatId) => {
-    await send(chatId, await goaHtml(await currentMission()))
+  goa: async (reply) => {
+    await reply(await goaHtml(await currentMission()))
   },
 
-  lz: async (chatId) => {
+  lz: async (reply) => {
     const m = await currentMission()
-    if (!m) return void (await send(chatId, SEM_MISSAO))
+    if (!m) return void (await reply(SEM_MISSAO))
     const mp = meetPoint(m.snapshot)
     const extra = mp
       ? `\n\n🤝 <b>${esc(mp.name)}</b> — <a href="${mapsLink(mp)}">Maps</a>\n✈️ <code>${fmtDDM(mp)}</code>`
       : ''
-    await send(chatId, LZ_PREP_HTML + extra, {
+    await reply(LZ_PREP_HTML + extra, {
       reply_markup: { inline_keyboard: [[{ text: '✅ LZ SEGURA', callback_data: `lz:${m.case_id}` }]] },
     })
   },
 
-  passagem: async (chatId) => {
+  passagem: async (reply) => {
     const m = await currentMission()
-    if (!m) return void (await send(chatId, SEM_MISSAO))
-    await send(chatId, HANDOVER_HTML, {
+    if (!m) return void (await reply(SEM_MISSAO))
+    await reply(HANDOVER_HTML, {
       reply_markup: { inline_keyboard: [[{ text: '✅ Passagem feita', callback_data: `pass:${m.case_id}` }]] },
     })
   },
+}
+
+// confirmação de "LZ segura" / "passagem feita" (botão no Telegram, palavra
+// no WhatsApp). Devolve o HTML do eco, ou null se o tipo não existe.
+export async function confirmMission(kind, caseId, who) {
+  const col = kind === 'pass' ? 'handover' : kind === 'lz' ? 'lz_ready' : null
+  if (!col) return null
+  await query(`UPDATE mission_chat SET ${col}_at = now(), ${col}_by = $2 WHERE case_id = $1`, [caseId, who])
+  const label = kind === 'pass' ? 'Passagem do caso confirmada' : 'LZ segura confirmada'
+  return `✅ <b>${label}</b> — por ${esc(who)} às ${hhmm(Date.now())}`
+}
+
+// vínculo de grupo (Telegram id=1, WhatsApp id=2): mesmo código para os dois
+export async function linkChat(id, chatId, title) {
+  await query(
+    `INSERT INTO bot_chat (id, chat_id, title) VALUES ($1, $2, $3)
+     ON CONFLICT (id) DO UPDATE SET chat_id = EXCLUDED.chat_id, title = EXCLUDED.title, linked_at = now()`,
+    [id, String(chatId), title || null]
+  )
+}
+// lido na hora (não no boot): o código pode ser trocado só reiniciando o Node,
+// e os testes o definem depois do import
+export const linkCodeOk = (arg) => {
+  const code = process.env.BOT_LINK_CODE || ''
+  return Boolean(code) && arg === code
 }
 
 // ---------- comandos e botões no grupo (long polling) ----------
@@ -460,21 +497,17 @@ async function onUpdate(u) {
     const [cmd, arg] = msg.text.trim().split(/\s+/)
     const bare = cmd.split('@')[0].replace(/^\//, '') // /vincular@NomeDoBot
     if (bare === 'vincular') {
-      if (!LINK_CODE || arg !== LINK_CODE) {
+      if (!linkCodeOk(arg)) {
         await send(msg.chat.id, '❌ Código inválido. Use <code>/vincular &lt;código&gt;</code> (o código está no servidor, BOT_LINK_CODE).')
         return
       }
-      await query(
-        `INSERT INTO bot_chat (id, chat_id, title) VALUES (1, $1, $2)
-         ON CONFLICT (id) DO UPDATE SET chat_id = EXCLUDED.chat_id, title = EXCLUDED.title, linked_at = now()`,
-        [msg.chat.id, msg.chat.title || null]
-      )
+      await linkChat(1, msg.chat.id, msg.chat.title)
       await send(msg.chat.id, '✅ Grupo vinculado ao SkyRescue. Os briefings de missão chegam aqui.', { reply_markup: MENU_KEYBOARD })
       return
     }
     // /start abre o menu (é o que todo bot faz e o que o usuário espera)
     const handler = HANDLERS[bare === 'start' ? 'ajuda' : bare]
-    if (handler) await handler(msg.chat.id)
+    if (handler) await handler((h, e) => send(msg.chat.id, h, e))
     return
   }
   const cb = u.callback_query
@@ -482,14 +515,11 @@ async function onUpdate(u) {
     const [kind, arg] = cb.data.split(':')
     const who = [cb.from?.first_name, cb.from?.last_name].filter(Boolean).join(' ') || cb.from?.username || 'alguém'
     if (kind === 'menu') {
-      await HANDLERS[arg]?.(cb.message.chat.id)
+      await HANDLERS[arg]?.((h, e) => send(cb.message.chat.id, h, e))
     } else {
-      const col = kind === 'pass' ? 'handover' : kind === 'lz' ? 'lz_ready' : null
-      if (col) {
-        await query(`UPDATE mission_chat SET ${col}_at = now(), ${col}_by = $2 WHERE case_id = $1`, [arg, who])
-        const label = kind === 'pass' ? 'Passagem do caso confirmada' : 'LZ segura confirmada'
-        await send(cb.message.chat.id, `✅ <b>${label}</b> — por ${esc(who)} às ${hhmm(Date.now())}`)
-      }
+      const html = await confirmMission(kind, arg, who)
+      // a confirmação interessa aos dois grupos (quem está na cena e os pilotos)
+      if (html) await broadcast(cb.message.chat.id, html)
     }
     await tg('answerCallbackQuery', { callback_query_id: cb.id })
   }

@@ -69,6 +69,15 @@ jobs:
           name: dist
           path: dist
 
+      # ponte WhatsApp (Go, sem cgo): o binário vai junto no rsync do server/
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/wa-bridge/go.mod
+          cache-dependency-path: server/wa-bridge/go.sum
+      - name: Build wa-bridge
+        working-directory: server/wa-bridge
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o wa-bridge .
+
       - name: Setup SSH
         run: |
           mkdir -p ~/.ssh
@@ -82,6 +91,7 @@ jobs:
           # .env.production e node_modules ficam só no servidor (não sobrescreve)
           rsync -az --delete \
             --exclude 'node_modules/' --exclude '.env' --exclude '.env.production' --exclude '*.log' \
+            --exclude 'wa-bridge/*.db*' \
             -e "ssh -o StrictHostKeyChecking=accept-new -i ~/.ssh/id_ed25519" \
             server/ ${{ env.REMOTE }}:${{ env.API_DIR }}/
           ssh -i ~/.ssh/id_ed25519 ${{ env.REMOTE }} bash -s << 'EOF'
@@ -91,6 +101,8 @@ jobs:
             set -a; . ./.env; set +a
             node scripts/migrate.js          # idempotente (schema IF NOT EXISTS)
             sudo -n systemctl restart skyrescue-api
+            # ponte WhatsApp: só existe depois de instalar a unit (wa-bridge/README.md)
+            systemctl is-enabled skyrescue-wa >/dev/null 2>&1 && sudo -n systemctl restart skyrescue-wa || true
           EOF
 
       - name: Healthcheck da API

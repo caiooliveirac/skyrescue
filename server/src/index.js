@@ -7,6 +7,7 @@ import {
   COOKIE_NAME, startSessionGC,
 } from './auth.js'
 import { startBot, notifyMission, echoMilestones, MILESTONES } from './telegram.js'
+import { onWaMessage } from './whatsapp.js'
 import { sanitizePatient } from './patient-fields.js'
 
 const app = express()
@@ -501,6 +502,13 @@ app.post('/api/cases/:id/notify', requireAuth, async (req, res) => {
     console.error('notify mission:', e.message)
     res.status(409).json({ error: e.message })
   }
+})
+
+// mensagem recebida no WhatsApp (via wa-bridge, processo local com segredo)
+app.post('/api/wa/inbound', async (req, res) => {
+  if (!process.env.WA_SECRET || req.headers['x-wa-secret'] !== process.env.WA_SECRET) return res.sendStatus(403)
+  res.json({ ok: true }) // responde já: a resposta ao usuário vai pelo bridge
+  onWaMessage(req.body || {}).catch((e) => console.error('[wa] inbound:', e.message))
 })
 
 // ---------- pontos de pouso da comunidade ----------

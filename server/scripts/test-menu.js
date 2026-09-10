@@ -2,7 +2,7 @@
 // ativa e não quebrar (nem inventar dados) sem missão — que é como o grupo
 // passa a maior parte do tempo. Roda contra skyrescue_dev em dry-run.
 import { query, pool } from '../src/db.js'
-import { HANDLERS, CMDS_GRUPO, notifyMission } from '../src/telegram.js'
+import { HANDLERS, CMDS_GRUPO, notifyMission, tgSend } from '../src/telegram.js'
 
 let falhas = 0
 const ok = (nome, cond, detalhe = '') => {
@@ -20,15 +20,15 @@ function capturar() {
 
 async function rodar(cmd) {
   const cap = capturar()
-  try { await HANDLERS[cmd](-1) } finally { cap.parar() }
+  try { await HANDLERS[cmd]((h, e) => tgSend(-1, h, e)) } finally { cap.parar() }
   return cap.msgs.join('\n')
 }
 
 const CENA = { lat: -12.9714, lon: -38.5014 }
 
 async function main() {
-  await query(`INSERT INTO bot_chat (id, chat_id, title) VALUES (1, -1, 'grupo de teste')
-               ON CONFLICT (id) DO UPDATE SET chat_id = -1`)
+  await query(`INSERT INTO bot_chat (id, chat_id, title) VALUES (1, '-1', 'grupo de teste')
+               ON CONFLICT (id) DO UPDATE SET chat_id = '-1'`)
 
   console.log('=== todo comando do menu tem handler ===')
   for (const c of CMDS_GRUPO) {
@@ -86,7 +86,7 @@ async function main() {
 
   await query(`DELETE FROM cases WHERE id = $1`, [caseId])
   await query(`DELETE FROM aircraft_position WHERE aircraft_id = 'goa'`)
-  await query(`DELETE FROM bot_chat WHERE chat_id = -1`)
+  await query(`DELETE FROM bot_chat WHERE chat_id = '-1'`)
   await pool.end()
 
   console.log(`\n${falhas === 0 ? 'TODOS OS TESTES PASSARAM' : `${falhas} TESTE(S) FALHARAM`}`)

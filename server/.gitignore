@@ -7,3 +7,7 @@ node_modules/
 # o template abaixo NÃO tem segredos e deve ser versionado
 # (re-inclui apesar do `.env.*` do .gitignore raiz)
 !.env.example
+
+# wa-bridge: binário e sessão do WhatsApp ficam fora do repo
+wa-bridge/wa-bridge
+wa-bridge/*.db*

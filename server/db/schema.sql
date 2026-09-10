@@ -132,11 +132,15 @@ CREATE TABLE IF NOT EXISTS aircraft_position (
 -- caso acionado no grupo, com controle das confirmações e da cadência
 -- dos avisos de posição.
 CREATE TABLE IF NOT EXISTS bot_chat (
-  id        SMALLINT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
-  chat_id   BIGINT NOT NULL,
+  id        SMALLINT PRIMARY KEY DEFAULT 1 CHECK (id IN (1, 2)),  -- 1 Telegram, 2 WhatsApp
+  chat_id   TEXT NOT NULL,   -- id numérico (Telegram) ou JID (WhatsApp)
   title     TEXT,
   linked_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- instalações anteriores a 2026-09 (só Telegram): abre espaço para o WhatsApp
+ALTER TABLE bot_chat DROP CONSTRAINT IF EXISTS bot_chat_id_check;
+ALTER TABLE bot_chat ADD CONSTRAINT bot_chat_id_check CHECK (id IN (1, 2));
+ALTER TABLE bot_chat ALTER COLUMN chat_id TYPE TEXT;
 
 CREATE TABLE IF NOT EXISTS mission_chat (
   case_id          BIGINT PRIMARY KEY REFERENCES cases(id) ON DELETE CASCADE,
