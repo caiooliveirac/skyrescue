@@ -891,8 +891,28 @@ app.get('/api/aircraft/position', allowService, async (_req, res) => {
 })
 
 // ---------- IA: sugestão de critérios a partir da história ----------
+// Cada chamada custa dinheiro e uma ocorrência precisa de uma ou duas: limite
+// conservador por usuário e no total, para clique nervoso não virar conta.
+const rlIa = { byUser: new Map(), global: [] }
+const IA_USER_MAX = 3, IA_USER_WINDOW_MS = 5 * 60_000      // 3 por usuário a cada 5 min
+const IA_USER_HORA_MAX = 10                                // e 10 por usuário por hora
+const IA_GLOBAL_MAX = 30, IA_GLOBAL_WINDOW_MS = 60 * 60_000 // 30 no total por hora
+function rateLimitIa(req, res, next) {
+  const now = Date.now()
+  const k = req.user.id
+  const hits = (rlIa.byUser.get(k) || []).filter((t) => now - t < IA_GLOBAL_WINDOW_MS)
+  const recentes = hits.filter((t) => now - t < IA_USER_WINDOW_MS)
+  rlIa.global = rlIa.global.filter((t) => now - t < IA_GLOBAL_WINDOW_MS)
+  if (recentes.length >= IA_USER_MAX || hits.length >= IA_USER_HORA_MAX || rlIa.global.length >= IA_GLOBAL_MAX) {
+    const esperaMs = recentes.length >= IA_USER_MAX ? IA_USER_WINDOW_MS - (now - recentes[0]) : IA_GLOBAL_WINDOW_MS - (now - (hits[0] ?? rlIa.global[0]))
+    res.set('Retry-After', String(Math.ceil(esperaMs / 1000)))
+    return res.status(429).json({ error: `limite de sugestões atingido — tente de novo em ${Math.ceil(esperaMs / 60000)} min` })
+  }
+  hits.push(now); rlIa.byUser.set(k, hits); rlIa.global.push(now)
+  next()
+}
 app.get('/api/ia/status', requireAuth, (_req, res) => res.json({ disponivel: iaDisponivel() }))
-app.post('/api/ia/criterios', requireAuth, async (req, res) => {
+app.post('/api/ia/criterios', requireAuth, rateLimitIa, async (req, res) => {
   const historia = String(req.body?.historia || '').trim().slice(0, 4000)
   const opcoes = Array.isArray(req.body?.opcoes) ? req.body.opcoes.slice(0, 60) : []
   if (historia.length < 15) return res.status(400).json({ error: 'história curta demais para sugerir critérios' })
