@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { loadCfg, saveCfg, TAG_LABELS, hospitalHelipads, landingPoints } from './config.js'
 import { api } from './lib/backend.js'
-import { geocode, reverseGeocode, fetchWeather, fetchMetar, groundRoute, overpass, lzQuery, obstacleQuery, heliRadius } from './lib/api.js'
+import { geocode, reversePlace, placeShort, fetchWeather, fetchMetar, groundRoute, overpass, lzQuery, obstacleQuery, heliRadius } from './lib/api.js'
 import { catalogNear } from './data/helipads-catalog.js'
 import { haversineKm, fmtMin, fmtClock, fmtCoords, fmtCoordsDMS, fmtCoordsDDM, gmapsLink } from './lib/geo.js'
 import { computeMission, autoChecks, daylightCheck, rangeCheck, combinedWeatherStatus, classifyWeather } from './lib/mission.js'
-import { computeScore, recommendation, evaluateGates, ITEM_BY_ID } from './lib/score.js'
+import { computeScore, caseTag, recommendation, evaluateGates, ITEM_BY_ID } from './lib/score.js'
 import { rankLZ, parseObstacles } from './lib/lz.js'
 import MapView from './components/MapView.jsx'
 import NavMode from './components/NavMode.jsx'
@@ -19,7 +19,7 @@ import { makeDraftSaver, readDraft, draftWorthKeeping } from './lib/draft.js'
 import { emptyPatient, readPatient, savePatient, clearPatient, movePatient, migrateLegacyPatient, openProntuario, PATIENT_KEYS, patientWorthKeeping } from './lib/patient.js'
 import ConfigModal from './components/ConfigModal.jsx'
 import SamuContactsModal from './components/SamuContacts.jsx'
-import { DecisionStrip, TimePanel, WeatherPanel, LZPanel, AlertsPanel, GatesPanel, CoordReadout } from './components/Results.jsx'
+import { DecisionStrip, wxHora, TimePanel, WeatherPanel, LZPanel, AlertsPanel, GatesPanel, CoordReadout } from './components/Results.jsx'
 import {
   IconHeli, IconPlus, IconFolder, IconPrint, IconSettings, IconSearch, IconPin,
   IconTarget, IconZap, IconCopy, IconSave, IconDownload, IconHelipadH,
@@ -86,6 +86,9 @@ export default function App({ user, onLogout }) {
   // ocorrência
   const [scene, setScene] = useState(null)
   const [sceneLabel, setSceneLabel] = useState('')
+  const [scenePlace, setScenePlace] = useState(null) // {bairro, cidade} curtos p/ lista e cabeçalho
+  // local fixado: clique acidental no mapa não move a cena (só a busca move)
+  const [sceneLock, setSceneLock] = useState(false)
   const [q, setQ] = useState('')
   const [geoResults, setGeoResults] = useState(null)
   const [geoBusy, setGeoBusy] = useState(false)
@@ -99,6 +102,7 @@ export default function App({ user, onLogout }) {
   // checklist
   const [manualChecked, setManualChecked] = useState({})
   const [autoOverrides, setAutoOverrides] = useState({})
+  const [critTexts, setCritTexts] = useState({}) // texto dos critérios livres ("Outro")
   const [gateManual, setGateManual] = useState({})
   const [gateOverrides, setGateOverrides] = useState({})
 
@@ -312,14 +316,16 @@ export default function App({ user, onLogout }) {
   useEffect(() => {
     setAmbSug(null)
     if (!scene || !cfg.ambBases?.length) return
-    const nearest = cfg.ambBases
+    // todas as bases, da mais próxima à mais distante: o regulador marca a USA
+    // que vai mandar num toque. ponytail: 10 rotas por cena (Google c/ trânsito
+    // ou OSRM); se a conta pesar, rota só para as 4 primeiras e haversine no resto.
+    const bases = cfg.ambBases
       .map((b) => ({ ...b, dKm: haversineKm(b, scene) }))
       .sort((a, b) => a.dKm - b.dKm)
-      .slice(0, 3)
     Promise.all(
-      nearest.map((b) =>
+      bases.map((b) =>
         groundRoute(b, scene, cfg.map?.googleKey)
-          .then((r) => ({ name: b.name, min: Math.round(r.durMin * (r.traffic ? 1 : cfg.ground.trafficFactor)) }))
+          .then((r) => ({ id: b.id, code: b.id.toUpperCase(), name: b.name, min: Math.round(r.durMin * (r.traffic ? 1 : cfg.ground.trafficFactor)) }))
           .catch(() => null)
       )
     ).then((rs) => setAmbSug(rs.filter(Boolean).sort((a, b) => a.min - b.min)))
@@ -361,7 +367,10 @@ export default function App({ user, onLogout }) {
   }
   const resetAuto = (id) => setAutoOverrides((p) => { const n = { ...p }; delete n[id]; return n })
 
-  const score = useMemo(() => computeScore(isChecked), [manualChecked, autoOverrides, autos]) // eslint-disable-line
+  const score = useMemo(() => computeScore(isChecked, critTexts), [manualChecked, autoOverrides, autos, critTexts]) // eslint-disable-line
+  // "TCE grave · Pituba, Salvador": identifica o caso no cabeçalho e na lista
+  const tag = useMemo(() => caseTag(isChecked, critTexts), [manualChecked, autoOverrides, autos, critTexts]) // eslint-disable-line
+  const tagFull = [tag, placeShort(scenePlace)].filter(Boolean).join(' · ')
 
   // Hora de referência da avaliação. Enquanto o caso está sendo avaliado ao
   // vivo acompanha o relógio (tick de 30 s); quando o acionamento é autorizado,
@@ -480,11 +489,14 @@ export default function App({ user, onLogout }) {
   }
 
   const selectPlace = (r) => {
-    revGeoRef.current++
+    const seq = ++revGeoRef.current
     setScene({ lat: r.lat, lon: r.lon })
     setSceneLabel(r.label)
+    setScenePlace(r.place || null)
     setGeoResults(null)
     setManualLz(null)
+    // coordenadas digitadas não trazem bairro/cidade: busca no reverso
+    if (!r.place) reversePlace(r.lat, r.lon).then((p) => { if (seq === revGeoRef.current && p.place) setScenePlace(p.place) })
   }
 
   const onMapClick = async (lat, lon, mode) => {
@@ -498,13 +510,17 @@ export default function App({ user, onLogout }) {
       setLzSelId(null)
       setMapMode('scene')
     } else {
+      if (sceneLock && scene) return // local fixado: clique no mapa não move a cena
       const seq = ++revGeoRef.current
       setScene({ lat, lon })
       setSceneLabel('Ponto marcado no mapa')
+      setScenePlace(null)
       setManualLz(null)
       setGeoResults(null)
-      const lbl = await reverseGeocode(lat, lon)
-      if (lbl && seq === revGeoRef.current) setSceneLabel(lbl)
+      const r = await reversePlace(lat, lon)
+      if (seq !== revGeoRef.current) return
+      if (r.label) setSceneLabel(r.label)
+      setScenePlace(r.place)
     }
   }
 
@@ -582,13 +598,13 @@ export default function App({ user, onLogout }) {
   // na comparação, duas telas com Config diferente se regravariam em ping-pong
   // para sempre. Eles vão junto na gravação; só não mandam nela.
   const CAMPOS_VIVOS = [
-    'id', 'scene', 'sceneLabel', 'notes', 'hospitalId', 'landingSel', 'ambEta',
-    'manualChecked', 'autoOverrides', 'gateManual', 'gateOverrides', 'lzSelId', 'manualLz',
+    'id', 'scene', 'sceneLabel', 'scenePlace', 'notes', 'hospitalId', 'landingSel', 'ambEta',
+    'manualChecked', 'autoOverrides', 'critTexts', 'gateManual', 'gateOverrides', 'lzSelId', 'manualLz',
   ]
   // calculados por cada tela a partir da SUA Config; viajam junto na gravação
   // (alimentam a lista de casos e o relatório) mas nunca disparam gravação
   const DERIVADOS = ['ts', 'hospitalName', 'lzPoint', 'landingName', 'scoreTotal',
-    'band', 'recommendation', 'gatesOk', 'mission']
+    'band', 'recommendation', 'gatesOk', 'mission', 'caseTag']
   const mesmo = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null)
   // assinatura do que é AUTORAL no caso — muda => há o que gravar
   const assinaturaViva = (s) =>
@@ -596,24 +612,24 @@ export default function App({ user, onLogout }) {
 
   // aplica no formulário um campo que veio de outra tela
   const SETTERS = {
-    id: setCaseId, scene: setScene, sceneLabel: setSceneLabel, notes: setNotes,
+    id: setCaseId, scene: setScene, sceneLabel: setSceneLabel, scenePlace: setScenePlace, notes: setNotes,
     hospitalId: setHospitalId, landingSel: setLandingSel, ambEta: setAmbEta,
-    manualChecked: setManualChecked, autoOverrides: setAutoOverrides,
+    manualChecked: setManualChecked, autoOverrides: setAutoOverrides, critTexts: setCritTexts,
     gateManual: setGateManual, gateOverrides: setGateOverrides,
     lzSelId: setLzSelId, manualLz: setManualLz,
   }
   const ROTULOS = {
-    id: 'identificador', scene: 'local da ocorrência', sceneLabel: 'local da ocorrência',
+    id: 'identificador', scene: 'local da ocorrência', sceneLabel: 'local da ocorrência', scenePlace: 'local da ocorrência',
     notes: 'observações', hospitalId: 'hospital de destino', landingSel: 'ponto de desembarque',
-    ambEta: 'tempo da ambulância', manualChecked: 'pontuação', autoOverrides: 'pontuação',
+    ambEta: 'tempo da ambulância', manualChecked: 'pontuação', autoOverrides: 'pontuação', critTexts: 'pontuação',
     gateManual: 'condições operacionais', gateOverrides: 'condições operacionais',
     lzSelId: 'LZ escolhida', manualLz: 'LZ escolhida',
   }
   // vazio de cada campo: input controlado do React não aceita null
   const VAZIO = {
-    id: '', sceneLabel: '', notes: '', ambEta: '', landingSel: 'auto',
+    id: '', sceneLabel: '', scenePlace: null, notes: '', ambEta: '', landingSel: 'auto',
     hospitalId: cfg.hospitals[0]?.id || '', scene: null, lzSelId: null, manualLz: null,
-    manualChecked: {}, autoOverrides: {}, gateManual: {}, gateOverrides: {},
+    manualChecked: {}, autoOverrides: {}, critTexts: {}, gateManual: {}, gateOverrides: {},
   }
   const clientIdRef = useRef(Math.random().toString(36).slice(2, 10) + Date.now().toString(36))
   const ultimoSalvoRef = useRef(null)   // assinatura viva que já está no servidor
@@ -719,6 +735,7 @@ export default function App({ user, onLogout }) {
     const L = []
     L.push('SKYRESCUE — RESUMO DE ACIONAMENTO')
     L.push(`${new Date().toLocaleString('pt-BR')}  ${caseId ? '· Caso ' + caseId : ''}`)
+    if (tagFull) L.push(tagFull)
     if (scene) {
       L.push(`Local: ${sceneLabel || '—'}`)
       L.push(`Coords (DDM): ${fmtCoordsDDM(scene)}  |  dec ${fmtCoords(scene)}`)
@@ -734,7 +751,7 @@ export default function App({ user, onLogout }) {
     if (lzPoint) L.push(`LZ: ${manualLz ? 'manual' : `${lzPoint.letter} — ${lzPoint.name}`} — ${fmtCoordsDDM(lzPoint)} (dec ${fmtCoords(lzPoint)})${lzPoint.obstFlag ? ' ⚠ obstáculo próximo' : ''}`)
     if (wxScene) {
       const c = classifyWeather(wxScene)
-      L.push(`Meteo cena: ${c.level === 'ok' ? 'favorável' : c.level === 'warn' ? 'MARGINAL' : 'DESFAVORÁVEL'} — vento ${Math.round(wxScene.windKmh || 0)} km/h, vis ${wxScene.visM != null ? (wxScene.visM / 1000).toFixed(1) + ' km' : 's/ dado'}`)
+      L.push(`Meteo cena${wxScene.at ? ` (aferida ${wxHora(wxScene)})` : ''}: ${c.level === 'ok' ? 'favorável' : c.level === 'warn' ? 'MARGINAL' : 'DESFAVORÁVEL'} — vento ${Math.round(wxScene.windKmh || 0)} km/h, vis ${wxScene.visM != null ? (wxScene.visM / 1000).toFixed(1) + ' km' : 's/ dado'}`)
     }
     if (wxScene?.sunset) L.push(`Pôr do sol: ${new Date(wxScene.sunset).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`)
     return L.join('\n')
@@ -752,15 +769,17 @@ export default function App({ user, onLogout }) {
 
   const snapshot = () => ({
     v: 2,
-    id: caseId || 'caso-' + new Date().toISOString().slice(0, 19).replace('T', '-').replace(/:/g, ''),
+    // sem identificador digitado o servidor gera o sequencial do dia
+    // (AAAA-MMDD-NNNN) ao criar o caso e o devolve na resposta
+    id: caseId || null,
     ts: Date.now(),
     // hora de referência da avaliação + pôr do sol daquele dia: sem isso, ao
     // reabrir/reimprimir o caso a janela diurna seria recalculada com a hora
     // atual e um caso viável apareceria como inviável
     refAt: refMs,
     sunsetISO: sunsetISO || null,
-    scene, sceneLabel, hospitalId, hospitalName: hospital?.name || null, landingSel, ambEta, notes,
-    manualChecked, autoOverrides, gateManual, gateOverrides,
+    scene, sceneLabel, scenePlace, hospitalId, hospitalName: hospital?.name || null, landingSel, ambEta, notes,
+    manualChecked, autoOverrides, critTexts, gateManual, gateOverrides, caseTag: tag,
     lzSelId, manualLz, events,
     // ponto de encontro nomeado p/ o bot da missão (lzSelId sozinho não
     // resolve fora do app: o candidato vem do Overpass e não fica no snapshot)
@@ -1055,12 +1074,12 @@ export default function App({ user, onLogout }) {
     setSaving(true)
     setSaveErr('')
     const snap = snapshot()
-    if (!caseId) setCaseId(snap.id)
     try {
       if (dbId != null) {
         await api.updateCase(dbId, snap, { clientId: clientIdRef.current })
       } else {
-        const { id } = await api.createCase(snap, clientIdRef.current)
+        const { id, case_ref } = await api.createCase(snap, clientIdRef.current)
+        if (case_ref) { snap.id = case_ref; setCaseId(case_ref) }
         // a ficha digitada antes do caso existir no servidor vai junto: no
         // espelho local (muda de gaveta) e no servidor, que passa a ser a
         // fonte da verdade dela a partir daqui
@@ -1094,13 +1113,13 @@ export default function App({ user, onLogout }) {
     setNotifyMsg(null)
     try {
       const snap = snapshot()
-      if (!caseId) setCaseId(snap.id)
       let id = dbId
       if (id != null) {
         await api.updateCase(id, snap, { clientId: clientIdRef.current })
       } else {
         const r = await api.createCase(snap, clientIdRef.current)
         id = r.id
+        if (r.case_ref) { snap.id = r.case_ref; setCaseId(r.case_ref) }
         movePatient(user?.id, null, id) // ver saveCase
         await subirFicha(id, patient).catch((e) => console.warn('ficha não subiu:', e?.message || e))
         setDbId(id)
@@ -1133,11 +1152,12 @@ export default function App({ user, onLogout }) {
     // e não precisa ser regravado
     sinceRef.current = null; setLiveMsg(null); setAutoSave(null)
     baseRef.current = c; ultimoSalvoRef.current = assinaturaViva(c)
-    setCaseId(c.id || ''); setSceneLabel(c.sceneLabel || ''); setScene(c.scene)
+    setCaseId(c.id || ''); setSceneLabel(c.sceneLabel || ''); setScene(c.scene); setScenePlace(c.scenePlace || null)
+    setSceneLock(false)
     const hospOk = cfg.hospitals.some((h) => h.id === c.hospitalId)
     setHospitalId(hospOk ? c.hospitalId : cfg.hospitals[0]?.id || '')
     setLandingSel(c.landingSel || 'auto'); setAmbEta(c.ambEta || ''); setNotes(c.notes || '')
-    setManualChecked(c.manualChecked || {}); setAutoOverrides(c.autoOverrides || {})
+    setManualChecked(c.manualChecked || {}); setAutoOverrides(c.autoOverrides || {}); setCritTexts(c.critTexts || {})
     setGateManual(c.gateManual || {}); setGateOverrides(c.gateOverrides || {})
     setLzSelId(c.lzSelId || null); setManualLz(c.manualLz || null); setEvents(c.events || {})
     // congela a avaliação na hora original do caso (casos antigos, sem refAt,
@@ -1231,8 +1251,8 @@ export default function App({ user, onLogout }) {
     setMissionOpen(null); setNotifyMsg(null)
     sinceRef.current = null; baseRef.current = null; ultimoSalvoRef.current = null
     setLiveMsg(null); setAutoSave(null)
-    setScene(null); setSceneLabel(''); setQ(''); setCaseId(''); setNotes(''); setGeoResults(null)
-    setManualChecked({}); setAutoOverrides({}); setGateManual({}); setGateOverrides({})
+    setScene(null); setSceneLabel(''); setScenePlace(null); setSceneLock(false); setQ(''); setCaseId(''); setNotes(''); setGeoResults(null)
+    setManualChecked({}); setAutoOverrides({}); setCritTexts({}); setGateManual({}); setGateOverrides({})
     setAmbEta(''); setLzSelId(null); setManualLz(null); setEvents({}); setLandingSel('auto')
     setCaseRefAt(null); setRefSunset(null); setNowTick(Date.now())
     setHospitalId(cfg.hospitals[0]?.id || '')
@@ -1270,7 +1290,7 @@ export default function App({ user, onLogout }) {
 
       {/* faixa de decisão só na central: no celular o score já está no hub e no
           card "Pontuação de elegibilidade", e a faixa custava uma tela inteira */}
-      {wide && <DecisionStrip scene={scene} score={score} gates={gates} rec={rec} onCopy={copyResumo} />}
+      {wide && <DecisionStrip scene={scene} score={score} gates={gates} rec={rec} onCopy={copyResumo} tag={tagFull} />}
 
       {restored && (
         <div className="notice notice-draft">
@@ -1288,7 +1308,7 @@ export default function App({ user, onLogout }) {
             <span className="t">Caso</span>
             <span className="d">local · pontuação · destino</span>
             <span className={'badge ' + (score.total >= 9 ? 'fail' : score.total >= 5 ? 'warn' : score.total > 0 ? 'ok' : '')}>
-              {score.total} pts{rec ? ` · ${score.band.label}` : ''}
+              {score.total} pts{tag ? ` · ${tag}` : rec ? ` · ${score.band.label}` : ''}
             </span>
           </button>
 
@@ -1374,7 +1394,13 @@ export default function App({ user, onLogout }) {
             {scene && (
               <div style={{ marginTop: 10 }}>
                 <div style={{ fontWeight: 700, fontSize: 13.5, display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <IconPin size={14} style={{ color: 'var(--fail)' }} /> {sceneLabel || 'Ponto marcado'}
+                  <IconPin size={14} style={{ color: 'var(--fail)' }} /> <span style={{ flex: 1 }}>{sceneLabel || 'Ponto marcado'}</span>
+                  <button
+                    className={'btn xs' + (sceneLock ? '' : ' sec')} onClick={() => setSceneLock((v) => !v)}
+                    title={sceneLock ? 'Clique no mapa não move a cena. Toque para liberar.' : 'Fixar: clique acidental no mapa deixa de mover a cena'}
+                  >
+                    {sceneLock ? '🔒 fixado' : 'fixar local'}
+                  </button>
                 </div>
                 <CoordReadout point={scene} label="Coordenadas" />
                 <div className="mono small" style={{ marginTop: 3 }}>{fmtCoordsDMS(scene)}</div>
@@ -1382,7 +1408,7 @@ export default function App({ user, onLogout }) {
             )}
             <div className="field" style={{ marginTop: 10, marginBottom: 0 }}>
               <label>Identificador do caso (não usar dados pessoais do paciente)</label>
-              <input type="text" value={caseId} onChange={(e) => setCaseId(e.target.value)} placeholder="ex.: 2026-0707-014" />
+              <input type="text" value={caseId} onChange={(e) => setCaseId(e.target.value)} placeholder="em branco: gerado ao salvar (AAAA-MMDD-NNNN)" />
             </div>
           </div>
           )}
@@ -1399,7 +1425,17 @@ export default function App({ user, onLogout }) {
           </div>
           )}
           {show('caso') && (
-          <Checklist isChecked={isChecked} isOverridden={isOverridden} onToggle={toggleItem} onReset={resetAuto} score={score} />
+          <Checklist isChecked={isChecked} isOverridden={isOverridden} onToggle={toggleItem} onReset={resetAuto} score={score}
+            texts={critTexts} onText={(id, v) => setCritTexts((p) => ({ ...p, [id]: v }))} />
+          )}
+
+          {/* fluxo da comunicação: solicitante passa o paciente, depois o comandante
+              avalia as condições de voo — a ficha vem antes dos gates */}
+          {show('paciente') && (
+          <PatientForm
+            patient={patient} onChange={updatePatient}
+            sync={patientSync} soLocal={fichaSoLocal} enviando={enviandoFicha}
+            onEnviar={enviarFichaLocal} />
           )}
 
           {show('fatores') && (
@@ -1416,12 +1452,6 @@ export default function App({ user, onLogout }) {
           </div>
           )}
 
-          {show('paciente') && (
-          <PatientForm
-            patient={patient} onChange={updatePatient}
-            sync={patientSync} soLocal={fichaSoLocal} enviando={enviandoFicha}
-            onEnviar={enviarFichaLocal} />
-          )}
         </div>
         )}
 
@@ -1502,17 +1532,18 @@ export default function App({ user, onLogout }) {
               <label>ETA da ambulância mais próxima até a cena (min)</label>
               <input
                 type="number" min="0" value={ambEta} onChange={(e) => setAmbEta(e.target.value)}
-                placeholder={ambAuto ? `${ambAuto.min} — rota ${ambAuto.name}` : 'informe o tempo estimado'}
+                placeholder={ambAuto ? `${ambAuto.min} — rota ${ambAuto.code} ${ambAuto.name}` : 'informe o tempo estimado'}
               />
               {ambAuto && (
                 <div className="small">
-                  Usando automaticamente a rota terrestre {ambAuto.name} → cena ({ambAuto.min} min) — digite um valor para substituir.
+                  Usando automaticamente a rota terrestre {ambAuto.code} ({ambAuto.name}) → cena ({ambAuto.min} min) — toque numa USA ou digite para substituir.
                 </div>
               )}
               {ambSug && ambSug.length > 0 && (
-                <div className="row">
-                  {ambSug.map((s, i) => (
-                    <button key={i} className="btn xs sec" onClick={() => setAmbEta(String(s.min))}>usar {s.name}: {s.min} min</button>
+                <div className="row" style={{ flexWrap: 'wrap', gap: 5, marginTop: 6 }}>
+                  {ambSug.map((s) => (
+                    <button key={s.id} className={'btn xs' + (String(s.min) === ambEta ? '' : ' sec')} title={`${s.name}: ${s.min} min de rota até a cena`}
+                      onClick={() => setAmbEta(String(s.min))}><b>{s.code}</b> {s.min}′</button>
                   ))}
                 </div>
               )}
@@ -1706,7 +1737,11 @@ export default function App({ user, onLogout }) {
             {cases.map((c) => (
               <div key={c.id} className="lzrow" style={{ cursor: 'default' }}>
                 <div className="lzmain">
-                  <div className="n">{c.case_ref || `#${c.id}`} <span className="type">{new Date(c.updated_at).toLocaleString('pt-BR')}</span></div>
+                  <div className="n">
+                    {c.case_ref || `#${c.id}`}
+                    {(c.case_tag || c.scene_place) && <span style={{ color: 'var(--accent)' }}> · {[c.case_tag, placeShort(c.scene_place)].filter(Boolean).join(' · ')}</span>}
+                    {' '}<span className="type">{new Date(c.updated_at).toLocaleString('pt-BR')}</span>
+                  </div>
                   <div className="m">
                     {c.scene_label || '—'} · score {c.score_total ?? '—'}{c.score_band ? ` (${c.score_band})` : ''}
                     {c.created_by_name || c.created_by_username ? ` · por ${c.created_by_name || c.created_by_username}` : ''}
@@ -1721,7 +1756,7 @@ export default function App({ user, onLogout }) {
       )}
 
       <PrintSheet
-        caseId={caseId} scene={scene} sceneLabel={sceneLabel} score={score} gates={gates} rec={rec}
+        caseId={caseId} tag={tagFull} scene={scene} sceneLabel={sceneLabel} score={score} gates={gates} rec={rec}
         mission={mission} hospital={hospital} landingHelipad={landingHelipad} lzPoint={lzPoint} manualLz={manualLz} wxScene={wxScene}
         metar={metar} events={events} notes={notes} daylight={daylight} destinoLabel={destinoLabel()}
         refMs={refMs} refFrozen={refAt != null}
@@ -1730,7 +1765,7 @@ export default function App({ user, onLogout }) {
   )
 }
 
-function PrintSheet({ caseId, scene, sceneLabel, score, gates, rec, mission, hospital, landingHelipad, lzPoint, manualLz, wxScene, metar, events, notes, daylight, destinoLabel, refMs, refFrozen }) {
+function PrintSheet({ caseId, tag, scene, sceneLabel, score, gates, rec, mission, hospital, landingHelipad, lzPoint, manualLz, wxScene, metar, events, notes, daylight, destinoLabel, refMs, refFrozen }) {
   const hits = Object.values(score.perSection).flatMap((s) => s.hits)
   const printedAt = new Date()
   const assessedAt = new Date(refMs)
@@ -1739,7 +1774,7 @@ function PrintSheet({ caseId, scene, sceneLabel, score, gates, rec, mission, hos
       <h1>SkyRescue — Registro de avaliação para acionamento aeromédico</h1>
       {/* a avaliação vale para a hora do acionamento; a hora da impressão vai
           separada para o documento não se contradizer quando reimpresso */}
-      <div>SAMU 192 Salvador × GOA/CBMBA · Avaliação: {assessedAt.toLocaleString('pt-BR')} {caseId ? `· Caso ${caseId}` : ''}</div>
+      <div>SAMU 192 Salvador × GOA/CBMBA · Avaliação: {assessedAt.toLocaleString('pt-BR')} {caseId ? `· Caso ${caseId}` : ''}{tag ? ` · ${tag}` : ''}</div>
       <div style={{ fontSize: 10, color: '#666' }}>
         Impresso em {printedAt.toLocaleString('pt-BR')}. Todos os critérios abaixo — inclusive a janela diurna — referem-se à hora da avaliação{refFrozen ? '' : ' (avaliação em curso)'}.
       </div>
@@ -1770,7 +1805,7 @@ function PrintSheet({ caseId, scene, sceneLabel, score, gates, rec, mission, hos
 
       <h2>Condições</h2>
       <table><tbody>
-        <tr><th>Meteorologia (cena)</th><td>{wxScene ? `vento ${Math.round(wxScene.windKmh || 0)} km/h · rajadas ${Math.round(wxScene.gustKmh || 0)} km/h · vis ${wxScene.visM != null ? (wxScene.visM / 1000).toFixed(1) + ' km' : 's/ dado'} · precip ${wxScene.precip ?? '—'} mm/h` : 'sem dados'}</td></tr>
+        <tr><th>Meteorologia (cena){wxScene?.at ? ` · aferida ${wxHora(wxScene)}` : ''}</th><td>{wxScene ? `vento ${Math.round(wxScene.windKmh || 0)} km/h · rajadas ${Math.round(wxScene.gustKmh || 0)} km/h · vis ${wxScene.visM != null ? (wxScene.visM / 1000).toFixed(1) + ' km' : 's/ dado'} · precip ${wxScene.precip ?? '—'} mm/h` : 'sem dados'}</td></tr>
         {metar && <tr><th>METAR SBSV</th><td>{metar}</td></tr>}
         <tr><th>Janela diurna</th><td>{daylight?.note || '—'}</td></tr>
         <tr><th>Gates</th><td>{gates.rows.map((g) => `${g.label}: ${g.effective.toUpperCase()}`).join(' · ')}</td></tr>

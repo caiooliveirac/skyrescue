@@ -8,8 +8,13 @@ const MAX_SCORE = 18
 
 const BAND_RING = { green: 'var(--ok)', yellow: 'var(--warn)', red: 'var(--fail)' }
 
+// hora da aferição meteorológica (Open-Meteo devolve "AAAA-MM-DDTHH:MM" local)
+export const wxHora = (w) => (w?.at ? String(w.at).slice(11, 16) : '')
+
 // Faixa sticky com score, recomendação e estado dos gates — sempre visível.
-export function DecisionStrip({ scene, score, gates, rec, onCopy }) {
+// `tag` = do que se trata o caso ("TCE grave · Pituba, Salvador"): em plantão
+// com vários casos abertos é o que diz em qual estamos.
+export function DecisionStrip({ scene, score, gates, rec, onCopy, tag }) {
   const pct = Math.min(score.total, MAX_SCORE) / MAX_SCORE * 100
   const ring = rec && rec.key === 'blocked' ? 'var(--fail)' : BAND_RING[score.band.key] || 'var(--faint)'
   return (
@@ -20,6 +25,7 @@ export function DecisionStrip({ scene, score, gates, rec, onCopy }) {
         </div>
         {scene && rec ? (
           <div className="decision-main">
+            {tag && <div className="decision-tag">{tag}</div>}
             <div className={'decision-title ' + rec.key}>{rec.title}</div>
             <div className="decision-sub">{rec.detail}</div>
           </div>
@@ -115,7 +121,7 @@ function WxCard({ title, w, err }) {
   const badge = c.level === 'ok' ? <span className="badge ok">FAVORÁVEL</span> : c.level === 'warn' ? <span className="badge warn">MARGINAL</span> : <span className="badge fail">DESFAVORÁVEL</span>
   return (
     <div className="wxcard">
-      <div className="where">{title} {badge}</div>
+      <div className="where">{title} {badge}{w.at && <span className="small" style={{ marginLeft: 6 }}>aferido {wxHora(w)}</span>}</div>
       <div className="main">{WMO_LABEL[w.code] || `Código ${w.code}`}{w.temp != null ? ` · ${Math.round(w.temp)}°C` : ''}</div>
       <ul>
         <li>Vento {w.windKmh != null ? Math.round(w.windKmh) : '—'} km/h ({w.windKmh != null ? Math.round(w.windKmh / 1.852) : '—'} kt) · rajadas {w.gustKmh != null ? Math.round(w.gustKmh) : '—'} km/h</li>

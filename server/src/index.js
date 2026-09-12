@@ -239,12 +239,27 @@ const promote = (snapshot = {}) => ({
   notes: snapshot.notes || null,
 })
 
+// Identificador do caso quando o regulador não digita um: AAAA-MMDD-NNNN,
+// sequencial do dia (hora de Salvador). ponytail: count() dentro da transação
+// — duas criações no mesmo instante podem repetir o número; se acontecer,
+// trocar por UNIQUE(case_ref) + retry.
+async function nextCaseRef(client) {
+  const { rows } = await client.query(
+    `SELECT to_char(now() AT TIME ZONE 'America/Bahia', 'YYYY-MMDD') AS dia,
+            count(*) AS n
+       FROM cases
+      WHERE (created_at AT TIME ZONE 'America/Bahia')::date = (now() AT TIME ZONE 'America/Bahia')::date`
+  )
+  return `${rows[0].dia}-${String(Number(rows[0].n) + 1).padStart(4, '0')}`
+}
+
 app.get('/api/cases', allowService, async (_req, res) => {
   const { rows } = await query(
     `SELECT c.id, c.case_ref, c.scene_label, c.scene_lat, c.scene_lon,
             c.score_total, c.score_band, c.recommendation, c.hospital_name,
             c.air_total_min, c.ground_total_min, c.delta_min, c.gates_ok,
             c.created_at, c.updated_at,
+            c.snapshot->>'caseTag' AS case_tag, c.snapshot->'scenePlace' AS scene_place,
             cu.username AS created_by_username, cu.full_name AS created_by_name
        FROM cases c
        LEFT JOIN users cu ON cu.id = c.created_by
@@ -371,10 +386,11 @@ app.post('/api/cases', requireAuth, async (req, res) => {
   const snapshot = req.body?.snapshot
   if (!snapshot || typeof snapshot !== 'object')
     return res.status(400).json({ error: 'snapshot obrigatório' })
-  const p = promote(snapshot)
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
+    if (!snapshot.id) snapshot.id = await nextCaseRef(client)
+    const p = promote(snapshot)
     const { rows } = await client.query(
       `INSERT INTO cases
          (case_ref, created_by, updated_by, scene_label, scene_lat, scene_lon,
@@ -393,7 +409,7 @@ app.post('/api/cases', requireAuth, async (req, res) => {
       [rows[0].id, req.user.id, 'create', p.case_ref]
     )
     await client.query('COMMIT')
-    res.status(201).json({ id: rows[0].id, created_at: rows[0].created_at })
+    res.status(201).json({ id: rows[0].id, created_at: rows[0].created_at, case_ref: p.case_ref })
 
     // caso que JÁ nasce com o acionamento autorizado: o médico marcou o marco
     // antes de salvar (com o caso ainda só local, o marco não vai ao servidor).

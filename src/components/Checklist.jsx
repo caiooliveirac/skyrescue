@@ -1,10 +1,10 @@
 import { SECTIONS } from '../lib/score.js'
 
-function Item({ it, effective, overridden, onToggle, onReset }) {
+function Item({ it, effective, overridden, onToggle, onReset, text, onText }) {
   return (
     <div className={'chk' + (effective ? ' checked' : '')} onClick={() => onToggle(it.id)}>
       <input type="checkbox" checked={!!effective} readOnly />
-      <div>
+      <div style={{ flex: 1 }}>
         {it.label}{' '}
         {it.auto && <span className="auto-tag">AUTO</span>}{' '}
         {it.auto && overridden && (
@@ -12,13 +12,24 @@ function Item({ it, effective, overridden, onToggle, onReset }) {
             voltar ao automático
           </button>
         )}
+        {it.text && effective && (
+          <input
+            type="text" value={text || ''} placeholder="qual? (ex.: hemoptise maciça)"
+            onClick={(e) => e.stopPropagation()} onChange={(e) => onText(it.id, e.target.value)}
+            style={{ display: 'block', width: '100%', marginTop: 5, padding: '4px 8px', fontSize: 13 }}
+          />
+        )}
       </div>
       <span className="pts">+{it.pts}</span>
     </div>
   )
 }
 
-export default function Checklist({ isChecked, isOverridden, onToggle, onReset, score }) {
+export default function Checklist({ isChecked, isOverridden, onToggle, onReset, score, texts = {}, onText }) {
+  const item = (it) => (
+    <Item key={it.id} it={it} effective={isChecked(it.id)} overridden={isOverridden(it.id)}
+      onToggle={onToggle} onReset={onReset} text={texts[it.id]} onText={onText} />
+  )
   return (
     <div>
       {SECTIONS.map((s) => {
@@ -32,17 +43,12 @@ export default function Checklist({ isChecked, isOverridden, onToggle, onReset, 
               </span>
             </h2>
             {s.capNote && <div className="small" style={{ marginTop: -6, marginBottom: 6 }}>{s.capNote}</div>}
-            {s.items &&
-              s.items.map((it) => (
-                <Item key={it.id} it={it} effective={isChecked(it.id)} overridden={isOverridden(it.id)} onToggle={onToggle} onReset={onReset} />
-              ))}
+            {s.items && s.items.map(item)}
             {s.groups &&
               s.groups.map((g) => (
                 <div key={g.name}>
                   <div className="groupname">{g.name}</div>
-                  {g.items.map((it) => (
-                    <Item key={it.id} it={it} effective={isChecked(it.id)} overridden={isOverridden(it.id)} onToggle={onToggle} onReset={onReset} />
-                  ))}
+                  {g.items.map(item)}
                 </div>
               ))}
           </div>

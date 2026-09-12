@@ -352,27 +352,33 @@ export default function MapView({
     const hosp = cfg.hospitals.find((h) => h.id === hospitalId)
     // ponto onde a aeronave pousa no destino
     const landPt = hosp ? (hosp.heliponto ? hosp : landingHelipad || hosp) : null
+    // tooltip em cada linha: passar o mouse (ou tocar, no celular) explica
+    // o que é o traço — as rotas se cruzam e a cor sozinha não conta
+    const tip = { sticky: true }
     if (airPt) {
       const pickup = cfg.ops.pickupEnabled ? cfg.hospitals.find((h) => h.id === cfg.ops.pickupHospitalId && h.heliponto) : null
       const pts = [[cfg.base.lat, cfg.base.lon]]
       if (pickup) pts.push([pickup.lat, pickup.lon])
       pts.push([airPt.lat, airPt.lon])
       L.polyline(pts, { color: '#22d3ee', weight: 7, opacity: 0.15 }).addTo(lay)
-      L.polyline(pts, { color: '#22d3ee', weight: 2.5, opacity: 0.9 }).addTo(lay)
+      L.polyline(pts, { color: '#22d3ee', weight: 2.5, opacity: 0.9 })
+        .bindTooltip(pickup ? 'Voo: base → embarque da equipe → cena/LZ' : 'Voo: base → cena/LZ', tip).addTo(lay)
       if (landPt) {
         const leg2 = [[airPt.lat, airPt.lon], [landPt.lat, landPt.lon]]
         L.polyline(leg2, { color: '#22d3ee', weight: 7, opacity: 0.12 }).addTo(lay)
-        L.polyline(leg2, { color: '#22d3ee', weight: 2.5, opacity: 0.9, dashArray: '9 7' }).addTo(lay)
+        L.polyline(leg2, { color: '#22d3ee', weight: 2.5, opacity: 0.9, dashArray: '9 7' })
+          .bindTooltip('Voo: cena/LZ → ponto de pouso no destino', tip).addTo(lay)
       }
       // transbordo: heliponto de apoio -> hospital
       if (hosp && landPt && landPt !== hosp) {
         L.polyline([[landPt.lat, landPt.lon], [hosp.lat, hosp.lon]], {
           color: '#fb923c', weight: 2.5, opacity: 0.9, dashArray: '2 7',
-        }).bindTooltip('Transbordo de ambulância até o hospital').addTo(lay)
+        }).bindTooltip('Transbordo de ambulância: heliponto → hospital', tip).addTo(lay)
       }
     }
     if (route && route.geo) {
-      L.polyline(route.geo, { color: '#fb923c', weight: 3, opacity: 0.55 }).addTo(lay)
+      L.polyline(route.geo, { color: '#fb923c', weight: 3, opacity: 0.55 })
+        .bindTooltip('Rota terrestre da ambulância: cena → hospital', tip).addTo(lay)
     }
 
     // enquadrar quando a cena muda
@@ -402,6 +408,10 @@ export default function MapView({
         <span><b className="lg-pad comm">H</b> sugestão da comunidade (a validar)</span>
         <span><b className="lg-samu">S</b> base SAMU (ambulância)</span>
         <span><b className="lg-acft">➤</b> GOA em voo (ao vivo)</span>
+        <span><i className="lg-line air" /> voo base → cena</span>
+        <span><i className="lg-line air dash" /> voo cena → destino</span>
+        <span><i className="lg-line gnd" /> ambulância cena → hospital</span>
+        <span><i className="lg-line gnd dot" /> transbordo heliponto → hospital</span>
       </div>
     </>
   )

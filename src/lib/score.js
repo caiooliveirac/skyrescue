@@ -88,6 +88,13 @@ export const SECTIONS = [
           { id: 'g_ob_emergencia', label: 'Emergência materna tempo-dependente', pts: 3 },
         ],
       },
+      {
+        name: 'Outro',
+        items: [
+          // critério fora da lista: pontua igual e leva o texto digitado
+          { id: 'g_outro', label: 'Outro critério de gravidade', pts: 3, text: true },
+        ],
+      },
     ],
   },
   {
@@ -119,8 +126,27 @@ export function allItems() {
 const ITEMS = allItems()
 export const ITEM_BY_ID = Object.fromEntries(ITEMS.map((i) => [i.id, i]))
 
+// rótulo curto de um critério para cabeçalho/lista: "TCE grave (GCS ≤ 8)" → "TCE grave"
+export function shortLabel(it, texts = {}) {
+  if (it.text && texts[it.id]) return texts[it.id].trim().slice(0, 40)
+  return it.label.replace(/\s*\(.*?\)\s*/g, ' ').replace(/\s+\/.*$/, '').trim()
+}
+
+// "do que se trata" o caso: o primeiro critério de gravidade marcado; sem
+// gravidade, o centro especializado pedido. null se nada marcado.
+export function caseTag(checkedFn, texts = {}) {
+  for (const sid of ['grav', 'centro']) {
+    const s = SECTIONS.find((x) => x.id === sid)
+    const items = s.items || s.groups.flatMap((g) => g.items)
+    const hit = items.find((it) => checkedFn(it.id))
+    if (hit) return shortLabel(hit, texts)
+  }
+  return null
+}
+
 // checkedFn(id) -> boolean efetivo (inclui autos e overrides)
-export function computeScore(checkedFn) {
+// texts: {itemId: 'texto livre'} dos itens `text:true`
+export function computeScore(checkedFn, texts = {}) {
   const perSection = {}
   let total = 0
   for (const s of SECTIONS) {
@@ -130,7 +156,7 @@ export function computeScore(checkedFn) {
     for (const it of items) {
       if (checkedFn(it.id)) {
         raw += it.pts
-        hits.push(it.label)
+        hits.push(it.text && texts[it.id] ? `${it.label}: ${texts[it.id].trim()}` : it.label)
       }
     }
     const capped = s.cap != null ? Math.min(raw, s.cap) : raw

@@ -17,12 +17,40 @@ async function getJSON(url, ms = 20000) {
   return r.json()
 }
 
+// bairro/cidade curtos a partir do `address` do Nominatim — é o que a lista
+// de casos e o cabeçalho mostram para se achar entre muitas ocorrências
+export function placeOf(address) {
+  if (!address) return null
+  const bairro = address.suburb || address.neighbourhood || address.quarter || address.city_district || address.village || null
+  const cidade = address.city || address.town || address.municipality || address.county || null
+  if (!bairro && !cidade) return null
+  return { bairro, cidade }
+}
+
+export function placeShort(p) {
+  if (!p) return ''
+  return [p.bairro, p.cidade].filter(Boolean).join(', ')
+}
+
 export async function geocode(q) {
-  const u = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=6&countrycodes=br&accept-language=pt-BR&q=${encodeURIComponent(q)}`
+  const u = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=6&countrycodes=br&accept-language=pt-BR&addressdetails=1&q=${encodeURIComponent(q)}`
   const j = await getJSON(u)
   return j
-    .map((r) => ({ lat: +r.lat, lon: +r.lon, label: r.display_name }))
+    .map((r) => ({ lat: +r.lat, lon: +r.lon, label: r.display_name, place: placeOf(r.address) }))
     .sort((a, b) => (b.label.includes('Bahia') ? 1 : 0) - (a.label.includes('Bahia') ? 1 : 0))
+}
+
+// reverso com bairro/cidade separados (reverseGeocode abaixo segue devolvendo
+// só o texto, para quem não precisa do detalhe)
+export async function reversePlace(lat, lon) {
+  try {
+    const j = await getJSON(
+      `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}&accept-language=pt-BR&addressdetails=1`
+    )
+    return { label: j.display_name || null, place: placeOf(j.address) }
+  } catch (e) {
+    return { label: null, place: null }
+  }
 }
 
 // Extrai coordenadas (e nome, se houver) de um link do Google Maps ou de um
@@ -78,6 +106,9 @@ export async function fetchWeather(lat, lon) {
     gustKmh: cur.wind_gusts_10m,
     visM: vis,
     isDay: cur.is_day,
+    // hora da aferição (Open-Meteo, hora local de Salvador) — vai no resumo
+    // para o registro não ficar sem "quando" quando o tempo mudar depois
+    at: cur.time || null,
     sunrise: j.daily?.sunrise?.[0] || null,
     sunset: j.daily?.sunset?.[0] || null,
   }

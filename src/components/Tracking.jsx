@@ -57,16 +57,38 @@ export function MilestoneQuick({ events, onMark, onUndo, className = '' }) {
   )
 }
 
+// mm:ss (ou h:mm:ss) decorridos — o cronômetro entre um marco e o próximo
+function fmtElapsed(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000))
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60
+  return (h ? h + ':' : '') + String(m).padStart(2, '0') + ':' + String(r).padStart(2, '0')
+}
+
 export default function Tracking({ events, onMark, onEdit, mission }) {
   const nextIdx = MILESTONES.findIndex((m) => !events[m.id])
+  // último marco batido: o relógio corre a partir dele até o próximo toque
+  const lastTs = Math.max(0, ...MILESTONES.map((m) => events[m.id] || 0))
+  const running = lastTs > 0 && nextIdx >= 0
+  const [now, setNow] = useState(Date.now())
+  useEffect(() => {
+    if (!running) return
+    const id = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [running])
   return (
     <div className="tl">
       {MILESTONES.map((m, i) => {
         const done = !!events[m.id]
+        const prevTs = i > 0 ? events[MILESTONES[i - 1].id] : null
         return (
           <div className={'tlrow' + (done ? ' done' : '') + (i === nextIdx ? ' next' : '')} key={m.id}>
             <div className="dot" />
-            <div className="tlabel">{m.label}</div>
+            <div className="tlabel">
+              {m.label}
+              {done && prevTs && events[m.id] >= prevTs && (
+                <span className="small mono" style={{ marginLeft: 6 }}>+{fmtElapsed(events[m.id] - prevTs)}</span>
+              )}
+            </div>
             {done ? (
               <>
                 <input
@@ -76,9 +98,16 @@ export default function Tracking({ events, onMark, onEdit, mission }) {
                 />
               </>
             ) : (
-              <button className={'btn xs' + (i === nextIdx ? '' : ' sec')} disabled={i !== nextIdx} onClick={() => onMark(m.id)}>
-                marcar agora
-              </button>
+              <>
+                {i === nextIdx && running && (
+                  <span className="mono" style={{ fontSize: 13, color: 'var(--accent)' }} title="desde o último marco">
+                    {fmtElapsed(now - lastTs)}
+                  </span>
+                )}
+                <button className={'btn xs' + (i === nextIdx ? '' : ' sec')} disabled={i !== nextIdx} onClick={() => onMark(m.id)}>
+                  marcar agora
+                </button>
+              </>
             )}
           </div>
         )
