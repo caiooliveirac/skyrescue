@@ -44,7 +44,8 @@ const PIN = L.divIcon({
 })
 
 const ESRI_IMAGERY = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
-const CARTO_LABELS = 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager_only_labels/{z}/{x}/{y}{r}.png'
+// rótulos sem chave (CARTO passou a exigir API key) — ver MapView.jsx
+const ESRI_LABELS = 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}'
 
 // Mapa de apontar o local, satélite com rótulos por padrão — o que mais ajuda
 // quem reconhece o posto/o galpão mas não sabe o nome da rua. Mesmo padrão da
@@ -76,7 +77,7 @@ export function MapaLocal({ pin, onPin }) {
     // senão (BillingNotEnabled etc.) o Esri simplesmente fica.
     let esriLayers = [
       L.tileLayer(ESRI_IMAGERY, { maxZoom: 19, attribution: 'Imagens © Esri, Maxar' }).addTo(map),
-      L.tileLayer(CARTO_LABELS, { maxZoom: 20, subdomains: 'abcd', attribution: '© OSM © CARTO' }).addTo(map),
+      L.tileLayer(ESRI_LABELS, { maxZoom: 20, maxNativeZoom: 16, attribution: 'Esri, HERE, Garmin, &copy; OpenStreetMap' }).addTo(map),
     ]
     const key = import.meta.env.VITE_GMAPS_KEY
     if (key && !googleAuthFailed()) {

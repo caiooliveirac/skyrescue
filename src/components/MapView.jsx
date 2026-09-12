@@ -7,9 +7,13 @@ import { HELIPAD_CATALOG } from '../data/helipads-catalog.js'
 import { haversineKm } from '../lib/geo.js'
 
 // camadas base disponíveis
-const CARTO_DARK = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
+// CARTO passou a exigir chave de API nos basemaps (tiles vêm com "API KEY
+// REQUIRED" estampado) — o escuro e os rótulos agora são o Dark Gray da Esri,
+// sem chave; tiles nativos até z16, o Leaflet amplia dali para cima
+const ESRI_DARK = 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}'
 const ESRI_IMAGERY = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
-const CARTO_LABELS = 'https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png'
+const ESRI_DARK_LABELS = 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}'
+const ESRI_ATTR = 'Esri, HERE, Garmin, &copy; OpenStreetMap'
 
 // ---- ícones SVG dos marcadores (html puro p/ L.divIcon) ----
 const heliSvg =
@@ -120,8 +124,8 @@ export default function MapView({
         attribution: 'Imagens &copy; Esri, Maxar, Earthstar Geographics',
       }).addTo(m)
       if (hybrid) {
-        labelsRef.current = L.tileLayer(CARTO_LABELS, {
-          maxZoom: 20, subdomains: 'abcd', attribution: '&copy; OpenStreetMap &copy; CARTO',
+        labelsRef.current = L.tileLayer(ESRI_DARK_LABELS, {
+          maxZoom: 20, maxNativeZoom: 16, attribution: ESRI_ATTR,
         }).addTo(m)
       }
     }
@@ -134,8 +138,8 @@ export default function MapView({
 
     if (baseLayer === 'dark') {
       clearBase()
-      tileRef.current = L.tileLayer(CARTO_DARK, {
-        maxZoom: 20, subdomains: 'abcd', attribution: '&copy; OpenStreetMap &copy; CARTO',
+      tileRef.current = L.tileLayer(ESRI_DARK, {
+        maxZoom: 20, maxNativeZoom: 16, attribution: ESRI_ATTR,
       }).addTo(m)
     } else {
       // Esri entra JÁ — sem tela vazia esperando o Google; a camada Google

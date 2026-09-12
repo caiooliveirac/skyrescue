@@ -9,7 +9,8 @@ import { api } from '../lib/backend.js'
 import { IconX, IconTarget, IconAlert } from './Icons.jsx'
 import { MilestoneQuick } from './Tracking.jsx'
 
-const CARTO_DARK = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
+// escuro sem chave (CARTO passou a exigir API key) — ver MapView.jsx
+const ESRI_DARK = 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}'
 const ESRI_IMAGERY = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
 
 // seta de posição própria (estilo GPS): aponta para o rumo atual
@@ -85,7 +86,7 @@ export default function NavMode({ cfg, scene, lzPoint, hospital, landingHelipad,
     if (tileRef.current) m.removeLayer(tileRef.current)
     tileRef.current = (layer === 'sat'
       ? L.tileLayer(ESRI_IMAGERY, { maxZoom: 19 })
-      : L.tileLayer(CARTO_DARK, { maxZoom: 20, subdomains: 'abcd' })
+      : L.tileLayer(ESRI_DARK, { maxZoom: 20, maxNativeZoom: 16, attribution: 'Esri, HERE, Garmin, &copy; OpenStreetMap' })
     ).addTo(m)
   }, [layer])
 
