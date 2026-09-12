@@ -9,9 +9,58 @@ export const MILESTONES = [
   { id: 'paciente', label: 'Contato com o paciente' },
   { id: 'decolagem2', label: 'Decolagem para o destino' },
   { id: 'pouso_destino', label: 'Pouso no destino' },
-  { id: 'entrega', label: 'Paciente entregue na unidade' },
-  { id: 'livre', label: 'Aeronave liberada' },
+  // "Paciente acolhido" encerra a ocorrência (e a missão no grupo); o antigo
+  // marco "Aeronave liberada" saiu — casos velhos com `livre` seguem válidos
+  { id: 'entrega', label: 'Paciente acolhido na unidade' },
 ]
+
+// id do último marco batido (null antes do acionamento) — é a "fase" em que
+// uma intercorrência é registrada
+export const ultimoMarco = (events) => {
+  let best = null
+  for (const m of MILESTONES) if (events[m.id] && (!best || events[m.id] >= events[best])) best = m.id
+  return best
+}
+
+// Intercorrências em texto livre, presas à fase da missão em que aconteceram.
+// ponytail: só texto + fase; `tipo` fica null até existirem botões
+// parametrizados (que aí alimentam estatística).
+export function Intercorrencias({ lista, events, onAdd, onRemove }) {
+  const [aberto, setAberto] = useState(false)
+  const [texto, setTexto] = useState('')
+  const fase = ultimoMarco(events)
+  const faseLabel = (id) => (id ? MILESTONES.find((m) => m.id === id)?.label || id : 'antes do acionamento')
+  const salvar = () => {
+    const t = texto.trim()
+    if (!t) return
+    onAdd(t); setTexto(''); setAberto(false)
+  }
+  return (
+    <div className="interc">
+      {lista.map((i, k) => (
+        <div className="interc-row" key={k}>
+          <span className="mono small">{toTimeStr(i.at)}</span>
+          <span className="small" style={{ color: 'var(--muted)' }}>{i.fase ? `após ${faseLabel(i.fase)}` : faseLabel(null)}</span>
+          <span style={{ flex: 1 }}>{i.texto}</span>
+          <button className="reset" onClick={() => onRemove(k)} title="remover">✕</button>
+        </div>
+      ))}
+      {aberto ? (
+        <div style={{ marginTop: 6 }}>
+          <textarea rows={2} value={texto} onChange={(e) => setTexto(e.target.value)} autoFocus
+            placeholder={`O que houve? (registra como: ${fase ? 'após ' + faseLabel(fase) : faseLabel(null)})`} style={{ width: '100%' }}
+            onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) salvar() }} />
+          <div className="row" style={{ marginTop: 4 }}>
+            <button className="btn xs" onClick={salvar} disabled={!texto.trim()}>registrar</button>
+            <button className="btn xs sec" onClick={() => { setAberto(false); setTexto('') }}>cancelar</button>
+          </div>
+        </div>
+      ) : (
+        <button className="btn xs sec" style={{ marginTop: 6 }} onClick={() => setAberto(true)}>+ Intercorrência</button>
+      )}
+    </div>
+  )
+}
 
 function toTimeStr(ts) {
   if (!ts) return ''

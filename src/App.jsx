@@ -13,7 +13,7 @@ import CommunityModal from './components/Community.jsx'
 import { LzPhotoModal } from './components/LzPhotos.jsx'
 import Checklist from './components/Checklist.jsx'
 import PatientForm from './components/PatientForm.jsx'
-import Tracking, { MILESTONES, MilestoneQuick } from './components/Tracking.jsx'
+import Tracking, { MILESTONES, MilestoneQuick, Intercorrencias, ultimoMarco } from './components/Tracking.jsx'
 import { sendEvent, pendingEvents } from './lib/eventQueue.js'
 import { makeDraftSaver, readDraft, draftWorthKeeping } from './lib/draft.js'
 import { emptyPatient, readPatient, savePatient, clearPatient, movePatient, migrateLegacyPatient, openProntuario, PATIENT_KEYS, patientWorthKeeping } from './lib/patient.js'
@@ -72,6 +72,9 @@ function useWide() {
 
 const go = (v) => { location.hash = v }
 
+// nome da faixa meteo no aviso de mudança
+const WX_NOME = { ok: 'favorável', warn: 'marginal', fail: 'desfavorável', unknown: 'sem dado' }
+
 export default function App({ user, onLogout }) {
   const [cfg, setCfg] = useState(loadCfg)
   const [showCfg, setShowCfg] = useState(false)
@@ -122,6 +125,7 @@ export default function App({ user, onLogout }) {
   const [lzLoading, setLzLoading] = useState(false)
   const [obstacles, setObstacles] = useState(null)
   const [route, setRoute] = useState(null)
+  const [xferRoute, setXferRoute] = useState(null) // heliponto de desembarque → hospital
   const [routeErr, setRouteErr] = useState(null)
 
   const [lzSelId, setLzSelId] = useState(null)
@@ -139,6 +143,10 @@ export default function App({ user, onLogout }) {
   }
 
   const [events, setEvents] = useState({})
+  // intercorrências registradas em texto, cada uma presa à fase em que ocorreu
+  // ({at, fase: id do último marco batido ou null, texto, tipo: null por ora})
+  const [intercorrencias, setIntercorrencias] = useState([])
+  const [wxChange, setWxChange] = useState(null) // {where, from, to, at, reasons} — meteo mudou de faixa após o acionamento
   const [cases, setCases] = useState([])
   const [casesErr, setCasesErr] = useState('')
   const [dbId, setDbId] = useState(null) // id do caso no banco (null = ainda não salvo)
@@ -312,6 +320,48 @@ export default function App({ user, onLogout }) {
       .catch((e) => seq === routeSeqRef.current && setRouteErr(e.message || String(e)))
   }, [scene, hospitalId, hospital?.lat, hospital?.lon, cfg.map?.googleKey]) // eslint-disable-line
 
+  // Meteo reavaliada a cada 10 min enquanto a missão está em curso (do
+  // acionamento autorizado até o paciente acolhido). Mudança de FAIXA
+  // (favorável / marginal / desfavorável) na cena ou na base vira aviso em
+  // destaque, para o interno avisar o comandante antes de ele descobrir no ar.
+  const WX_REPOLL_MS = 10 * 60_000
+  const missionEmCurso = !!events.decisao && !events.entrega
+  const wxRef = useRef({ scene: null, base: null })
+  wxRef.current = { scene: wxScene, base: wxBase }
+  useEffect(() => {
+    if (!scene || !missionEmCurso) return
+    const rank = { ok: 0, warn: 1, fail: 2 }
+    const check = async (where, lat, lon, setter) => {
+      const w = await fetchWeather(lat, lon).catch(() => null)
+      if (!w) return
+      const prev = wxRef.current[where]
+      setter(w)
+      if (!prev) return
+      const a = classifyWeather(prev), b = classifyWeather(w)
+      if (a.level !== b.level && rank[b.level] != null) {
+        setWxChange({ where, from: a.level, to: b.level, worse: rank[b.level] > (rank[a.level] ?? 0), at: w.at, reasons: b.reasons })
+      }
+    }
+    const tick = () => {
+      check('scene', scene.lat, scene.lon, setWxScene)
+      check('base', cfg.base.lat, cfg.base.lon, setWxBase)
+    }
+    const id = setInterval(tick, WX_REPOLL_MS)
+    return () => clearInterval(id)
+  }, [scene, missionEmCurso, cfg.base.lat, cfg.base.lon]) // eslint-disable-line
+
+  // rota do transbordo: heliponto de desembarque → hospital sem heliponto
+  // (o tempo do transbordo deixa de ser constante e segue o fluxo terrestre)
+  const xferSeqRef = useRef(0)
+  useEffect(() => {
+    setXferRoute(null)
+    if (!hospital || hospital.heliponto || !landingHelipad) return
+    const seq = ++xferSeqRef.current
+    groundRoute(landingHelipad, hospital, cfg.map?.googleKey)
+      .then((r) => seq === xferSeqRef.current && setXferRoute(r))
+      .catch(() => {})
+  }, [hospital?.id, hospital?.heliponto, landingHelipad?.id, cfg.map?.googleKey]) // eslint-disable-line
+
   // sugestão de ETA de ambulância a partir das bases cadastradas
   useEffect(() => {
     setAmbSug(null)
@@ -345,9 +395,10 @@ export default function App({ user, onLogout }) {
         lzPoint: lzPoint ? { lat: lzPoint.lat, lon: lzPoint.lon } : null,
         landingHelipad,
         groundRoute: route,
+        transferRoute: xferRoute,
         ambulanceEtaMin: ambEta !== '' ? Number(ambEta) : ambAuto ? ambAuto.min : null,
       }),
-    [cfg, scene, hospital, lzPoint, landingHelipad, route, ambEta, ambAuto]
+    [cfg, scene, hospital, lzPoint, landingHelipad, route, xferRoute, ambEta, ambAuto]
   )
   const autos = useMemo(() => autoChecks(mission), [mission])
 
@@ -449,7 +500,7 @@ export default function App({ user, onLogout }) {
     if (hospital && !hospital.verified) out.push({ level: 'info', text: `Posição de ${hospital.name} é aproximada — ajuste em Config.` })
     if (hospital && !hospital.heliponto) {
       if (landingHelipad) {
-        out.push({ level: 'info', text: `${hospital.name} sem heliponto próprio: desembarque no ${landingHelipad.name} + transbordo de ambulância (+${cfg.times.transbordoMin} min).${landingHelipad.kind === 'privado' ? ' Heliponto da rede privada — coordenar previamente o uso.' : ''}` })
+        out.push({ level: 'info', text: `${hospital.name} sem heliponto próprio: desembarque no ${landingHelipad.name} + transbordo de ambulância (+${Math.round(mission?.finalMin ?? cfg.times.transbordoMin)} min${xferRoute ? `, rota ${xferRoute.traffic ? 'com trânsito' : 'OSRM'}` : ', estimativa fixa'}).${landingHelipad.kind === 'privado' ? ' Heliponto da rede privada — coordenar previamente o uso.' : ''}` })
       } else {
         out.push({ level: 'info', text: `${hospital.name} sem heliponto operacional: previsto pouso em LZ + transbordo (+${cfg.times.transbordoMin} min).` })
       }
@@ -467,7 +518,7 @@ export default function App({ user, onLogout }) {
     if (mission && mission.delta != null && mission.delta <= 0) out.push({ level: 'info', text: 'Neste cenário a via terrestre chega antes — o aéreo tende a não compensar.' })
     if (rangeCheck(mission?.missionKm, cfg.aircraft).status === 'fail') out.push({ level: 'fail', text: rangeCheck(mission.missionKm, cfg.aircraft).note })
     return out
-  }, [cfg, hospital, landingHelipad, lzPoint, scene, daylight, autoStatus.weather, routeErr, mission])
+  }, [cfg, hospital, landingHelipad, lzPoint, scene, daylight, autoStatus.weather, routeErr, mission, xferRoute])
 
   // ---------- ações ----------
   const doSearch = async () => {
@@ -600,6 +651,7 @@ export default function App({ user, onLogout }) {
   const CAMPOS_VIVOS = [
     'id', 'scene', 'sceneLabel', 'scenePlace', 'notes', 'hospitalId', 'landingSel', 'ambEta',
     'manualChecked', 'autoOverrides', 'critTexts', 'gateManual', 'gateOverrides', 'lzSelId', 'manualLz',
+    'intercorrencias',
   ]
   // calculados por cada tela a partir da SUA Config; viajam junto na gravação
   // (alimentam a lista de casos e o relatório) mas nunca disparam gravação
@@ -616,20 +668,20 @@ export default function App({ user, onLogout }) {
     hospitalId: setHospitalId, landingSel: setLandingSel, ambEta: setAmbEta,
     manualChecked: setManualChecked, autoOverrides: setAutoOverrides, critTexts: setCritTexts,
     gateManual: setGateManual, gateOverrides: setGateOverrides,
-    lzSelId: setLzSelId, manualLz: setManualLz,
+    lzSelId: setLzSelId, manualLz: setManualLz, intercorrencias: setIntercorrencias,
   }
   const ROTULOS = {
     id: 'identificador', scene: 'local da ocorrência', sceneLabel: 'local da ocorrência', scenePlace: 'local da ocorrência',
     notes: 'observações', hospitalId: 'hospital de destino', landingSel: 'ponto de desembarque',
     ambEta: 'tempo da ambulância', manualChecked: 'pontuação', autoOverrides: 'pontuação', critTexts: 'pontuação',
     gateManual: 'condições operacionais', gateOverrides: 'condições operacionais',
-    lzSelId: 'LZ escolhida', manualLz: 'LZ escolhida',
+    lzSelId: 'LZ escolhida', manualLz: 'LZ escolhida', intercorrencias: 'intercorrências',
   }
   // vazio de cada campo: input controlado do React não aceita null
   const VAZIO = {
     id: '', sceneLabel: '', scenePlace: null, notes: '', ambEta: '', landingSel: 'auto',
     hospitalId: cfg.hospitals[0]?.id || '', scene: null, lzSelId: null, manualLz: null,
-    manualChecked: {}, autoOverrides: {}, critTexts: {}, gateManual: {}, gateOverrides: {},
+    manualChecked: {}, autoOverrides: {}, critTexts: {}, gateManual: {}, gateOverrides: {}, intercorrencias: [],
   }
   const clientIdRef = useRef(Math.random().toString(36).slice(2, 10) + Date.now().toString(36))
   const ultimoSalvoRef = useRef(null)   // assinatura viva que já está no servidor
@@ -754,6 +806,7 @@ export default function App({ user, onLogout }) {
       L.push(`Meteo cena${wxScene.at ? ` (aferida ${wxHora(wxScene)})` : ''}: ${c.level === 'ok' ? 'favorável' : c.level === 'warn' ? 'MARGINAL' : 'DESFAVORÁVEL'} — vento ${Math.round(wxScene.windKmh || 0)} km/h, vis ${wxScene.visM != null ? (wxScene.visM / 1000).toFixed(1) + ' km' : 's/ dado'}`)
     }
     if (wxScene?.sunset) L.push(`Pôr do sol: ${new Date(wxScene.sunset).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`)
+    for (const i of intercorrencias) L.push(`Intercorrência ${fmtClock(i.at)}${i.fase ? ` (após ${MILESTONES.find((m) => m.id === i.fase)?.label || i.fase})` : ''}: ${i.texto}`)
     return L.join('\n')
   }
 
@@ -780,7 +833,7 @@ export default function App({ user, onLogout }) {
     sunsetISO: sunsetISO || null,
     scene, sceneLabel, scenePlace, hospitalId, hospitalName: hospital?.name || null, landingSel, ambEta, notes,
     manualChecked, autoOverrides, critTexts, gateManual, gateOverrides, caseTag: tag,
-    lzSelId, manualLz, events,
+    lzSelId, manualLz, events, intercorrencias,
     // ponto de encontro nomeado p/ o bot da missão (lzSelId sozinho não
     // resolve fora do app: o candidato vem do Overpass e não fica no snapshot)
     lzPoint: lzPoint ? { name: manualLz ? 'LZ manual' : lzPoint.name || 'LZ', lat: lzPoint.lat, lon: lzPoint.lon } : null,
@@ -1160,6 +1213,7 @@ export default function App({ user, onLogout }) {
     setManualChecked(c.manualChecked || {}); setAutoOverrides(c.autoOverrides || {}); setCritTexts(c.critTexts || {})
     setGateManual(c.gateManual || {}); setGateOverrides(c.gateOverrides || {})
     setLzSelId(c.lzSelId || null); setManualLz(c.manualLz || null); setEvents(c.events || {})
+    setIntercorrencias(Array.isArray(c.intercorrencias) ? c.intercorrencias : []); setWxChange(null)
     // congela a avaliação na hora original do caso (casos antigos, sem refAt,
     // caem no ts da gravação)
     setCaseRefAt(c.refAt || c.ts || null); setRefSunset(c.sunsetISO || null)
@@ -1253,7 +1307,7 @@ export default function App({ user, onLogout }) {
     setLiveMsg(null); setAutoSave(null)
     setScene(null); setSceneLabel(''); setScenePlace(null); setSceneLock(false); setQ(''); setCaseId(''); setNotes(''); setGeoResults(null)
     setManualChecked({}); setAutoOverrides({}); setCritTexts({}); setGateManual({}); setGateOverrides({})
-    setAmbEta(''); setLzSelId(null); setManualLz(null); setEvents({}); setLandingSel('auto')
+    setAmbEta(''); setLzSelId(null); setManualLz(null); setEvents({}); setLandingSel('auto'); setIntercorrencias([]); setWxChange(null)
     setCaseRefAt(null); setRefSunset(null); setNowTick(Date.now())
     setHospitalId(cfg.hospitals[0]?.id || '')
     setWxScene(null); setWxBase(null); setMetar(null); setLzList(null); setObstacles(null); setRoute(null)
@@ -1472,7 +1526,7 @@ export default function App({ user, onLogout }) {
             <MapView
               cfg={cfg} scene={scene} hospitalId={hospitalId} landingHelipad={landingHelipad}
               lz={lzList} lzSelId={lzSelId} manualLz={manualLz}
-              obstacles={obstacles} route={route} mode={mapMode} showObs={showObs} showPads={showPads}
+              obstacles={obstacles} route={route} transferRoute={xferRoute} mode={mapMode} showObs={showObs} showPads={showPads}
               communityLz={communityLz} aircraft={acft}
               focus={focus}
               baseLayer={baseLayer} googleKey={cfg.map?.googleKey || ''}
@@ -1591,6 +1645,9 @@ export default function App({ user, onLogout }) {
             <div className="card">
               <h2><IconRoute size={14} /> Acompanhamento da missão</h2>
               <Tracking events={events} onMark={markEvent} onEdit={editEvent} mission={mission} />
+              <Intercorrencias lista={intercorrencias} events={events}
+                onAdd={(texto) => setIntercorrencias((p) => [...p, { at: Date.now(), fase: ultimoMarco(events), texto, tipo: null }])}
+                onRemove={(i) => setIntercorrencias((p) => p.filter((_, k) => k !== i))} />
               {dbId == null ? (
                 <div className="small" style={{ marginTop: 8 }}>
                   <b>Salve o caso</b> para que os horários — e o acionamento do grupo — cheguem ao servidor.
@@ -1728,6 +1785,20 @@ export default function App({ user, onLogout }) {
         />
       )}
 
+      {wxChange && (
+        <div className="modal-bg" onClick={() => setWxChange(null)}>
+          <div className={'modal wxchange ' + (wxChange.worse ? 'fail' : 'ok')} onClick={(e) => e.stopPropagation()}>
+            <h3><IconAlert size={18} /> Meteorologia {wxChange.worse ? 'PIOROU' : 'melhorou'} {wxChange.where === 'base' ? 'na base' : 'na cena'}</h3>
+            <div style={{ fontSize: 15, margin: '8px 0' }}>
+              {WX_NOME[wxChange.from]} → <b>{WX_NOME[wxChange.to]}</b>{wxChange.at ? <span className="small"> · aferido {String(wxChange.at).slice(11, 16)}</span> : null}
+            </div>
+            {wxChange.reasons?.length > 0 && <ul className="small" style={{ margin: '0 0 10px 18px' }}>{wxChange.reasons.map((r, i) => <li key={i}>{r}</li>)}</ul>}
+            <div className="small">Avise o comandante da aeronave. Decisão final é dele, com fontes oficiais (REDEMET).</div>
+            <div className="row" style={{ marginTop: 12 }}><button className="btn" onClick={() => setWxChange(null)}>Ciente</button></div>
+          </div>
+        </div>
+      )}
+
       {showCases && (
         <div className="modal-bg" onClick={() => setShowCases(false)}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
@@ -1758,14 +1829,14 @@ export default function App({ user, onLogout }) {
       <PrintSheet
         caseId={caseId} tag={tagFull} scene={scene} sceneLabel={sceneLabel} score={score} gates={gates} rec={rec}
         mission={mission} hospital={hospital} landingHelipad={landingHelipad} lzPoint={lzPoint} manualLz={manualLz} wxScene={wxScene}
-        metar={metar} events={events} notes={notes} daylight={daylight} destinoLabel={destinoLabel()}
+        metar={metar} events={events} intercorrencias={intercorrencias} notes={notes} daylight={daylight} destinoLabel={destinoLabel()}
         refMs={refMs} refFrozen={refAt != null}
       />
     </>
   )
 }
 
-function PrintSheet({ caseId, tag, scene, sceneLabel, score, gates, rec, mission, hospital, landingHelipad, lzPoint, manualLz, wxScene, metar, events, notes, daylight, destinoLabel, refMs, refFrozen }) {
+function PrintSheet({ caseId, tag, scene, sceneLabel, score, gates, rec, mission, hospital, landingHelipad, lzPoint, manualLz, wxScene, metar, events, intercorrencias, notes, daylight, destinoLabel, refMs, refFrozen }) {
   const hits = Object.values(score.perSection).flatMap((s) => s.hits)
   const printedAt = new Date()
   const assessedAt = new Date(refMs)
@@ -1817,6 +1888,14 @@ function PrintSheet({ caseId, tag, scene, sceneLabel, score, gates, rec, mission
           <tr key={m.id}><th>{m.label}</th><td>{events[m.id] ? new Date(events[m.id]).toLocaleTimeString('pt-BR') : '—'}</td></tr>
         ))}
       </tbody></table>
+      {intercorrencias?.length > 0 && (<>
+        <h2>Intercorrências</h2>
+        <table><tbody>
+          {intercorrencias.map((i, k) => (
+            <tr key={k}><th>{fmtClock(i.at)}{i.fase ? ` · após ${MILESTONES.find((m) => m.id === i.fase)?.label || i.fase}` : ''}</th><td>{i.texto}</td></tr>
+          ))}
+        </tbody></table>
+      </>)}
 
       {notes && (<><h2>Observações</h2><div>{notes}</div></>)}
 

@@ -51,7 +51,7 @@ Botão **Grupo da missão** no card Registro: salva o caso e o bot posta no grup
 - **Cobrança da passagem do caso** entre médicos (peso, IOT, acessos, medicações) com botão "✅ Passagem feita";
 - **Eco de cada horário** marcado no acompanhamento da missão (com autor; correções saem como "(corrigido)");
 - **Avisos de deslocamento** alimentados pelo rastreamento: a cada 5 min em voo ("X km do encontro, ETE ~Y min") e um único alerta de **~2 min** ("LZ pronta e isolada?");
-- **Encerramento** com a cronologia completa quando o comandante marca "Aeronave liberada".
+- **Encerramento** com a cronologia completa quando alguém marca "Paciente acolhido na unidade".
 
 Setup: criar o bot no @BotFather, definir `TELEGRAM_BOT_TOKEN` e `BOT_LINK_CODE` no `.env.production` do servidor, adicionar o bot ao grupo e enviar `/vincular <código>`. Sem token, o servidor roda em **dry-run** (mensagens só no log). Comando `/caso` no grupo repete o briefing da missão ativa.
 
@@ -70,7 +70,7 @@ Sem missão ativa todos respondem que não há missão em vez de inventar dados 
 
 **Uma instância por token.** Dois servidores rodando a API com o mesmo `TELEGRAM_BOT_TOKEN` derrubam o long polling um do outro (`409 Conflict`) e o bot fica mudo. Ao migrar de servidor, desative o serviço antigo e remova o token do `.env` dele antes de subir o novo.
 
-**Missão fantasma — o bot nunca fala de um caso velho.** A missão só sairia de "ativa" quando alguém marca *Aeronave liberada*, e no plantão isso falha (fim de turno, aba fechada, missão abortada): a missão ficava ativa para sempre e dias depois o bot voltava a falar dela. Três defesas independentes, em `server/src/telegram.js`:
+**Missão fantasma — o bot nunca fala de um caso velho.** A missão só sairia de "ativa" quando alguém marca o último marco (hoje *Paciente acolhido*; antes *Aeronave liberada*), e no plantão isso falha (fim de turno, aba fechada, missão abortada): a missão ficava ativa para sempre e dias depois o bot voltava a falar dela. Três defesas independentes, em `server/src/telegram.js`:
 
 1. **TTL na consulta** — fora da janela (`MISSION_TTL_HOURS`, padrão 12 h) o bot se cala, mesmo que nenhuma varredura tenha rodado;
 2. **varredura** a cada 15 min (e no boot, e no `migrate.js`) encerra em silêncio as missões órfãs, para não persistirem;

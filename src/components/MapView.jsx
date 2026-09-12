@@ -73,7 +73,7 @@ const lzIcon = (letter, suitKey, sel, isHeli) =>
   })
 
 export default function MapView({
-  cfg, scene, hospitalId, landingHelipad, lz, lzSelId, manualLz, obstacles, route,
+  cfg, scene, hospitalId, landingHelipad, lz, lzSelId, manualLz, obstacles, route, transferRoute,
   mode, showObs, showPads = true, communityLz, aircraft, focus, baseLayer = 'dark', googleKey = '',
   onPointClick, photoCounts,
   onMapClick,
@@ -375,7 +375,8 @@ export default function MapView({
       }
       // transbordo: heliponto de apoio -> hospital
       if (hosp && landPt && landPt !== hosp) {
-        L.polyline([[landPt.lat, landPt.lon], [hosp.lat, hosp.lon]], {
+        const xfer = transferRoute?.geo || [[landPt.lat, landPt.lon], [hosp.lat, hosp.lon]]
+        L.polyline(xfer, {
           color: '#fb923c', weight: 2.5, opacity: 0.9, dashArray: '2 7',
         }).bindTooltip('Transbordo de ambulância: heliponto → hospital', tip).addTo(lay)
       }
@@ -396,7 +397,7 @@ export default function MapView({
         m.fitBounds(b.pad(0.18))
       }
     }
-  }, [cfg, scene, hospitalId, landingHelipad, lz, lzSelId, manualLz, obstacles, route, showObs, showPads, communityLz, aircraft, photoCounts])
+  }, [cfg, scene, hospitalId, landingHelipad, lz, lzSelId, manualLz, obstacles, route, transferRoute, showObs, showPads, communityLz, aircraft, photoCounts])
 
   return (
     <>

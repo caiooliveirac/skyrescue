@@ -77,8 +77,10 @@ export const MILESTONES = [
   { id: 'paciente', label: 'Contato com o paciente' },
   { id: 'decolagem2', label: 'Decolagem para o destino' },
   { id: 'pouso_destino', label: 'Pouso no destino' },
-  { id: 'entrega', label: 'Paciente entregue na unidade' },
-  { id: 'livre', label: 'Aeronave liberada' },
+  { id: 'entrega', label: 'Paciente acolhido na unidade' },
+  // 'livre' ("Aeronave liberada") saiu do fluxo em 2026-09-12: o paciente
+  // acolhido encerra a ocorrência. Fica aceito só para casos antigos.
+  { id: 'livre', label: 'Aeronave liberada', legado: true },
 ]
 const MILESTONE_BY_ID = Object.fromEntries(MILESTONES.map((m) => [m.id, m.label]))
 
@@ -135,6 +137,7 @@ async function adotarAcionamentoOrfao() {
       WHERE m.case_id IS NULL
         AND c.snapshot->'events'->>'decisao' IS NOT NULL
         AND c.snapshot->'events'->>'livre' IS NULL
+        AND c.snapshot->'events'->>'entrega' IS NULL
         AND to_timestamp((c.snapshot->'events'->>'decisao')::bigint / 1000.0)
               > now() - make_interval(hours => $1)
       ORDER BY (c.snapshot->'events'->>'decisao')::bigint DESC LIMIT 1`,
@@ -258,8 +261,9 @@ export async function postMilestones(caseId, changed, byName) {
     const label = MILESTONE_BY_ID[id] || id
     await send(mc.chat_id, `🕐 <b>${label}</b> — ${hhmm(ts)}${edited ? ' (corrigido)' : ''}${byName ? ` · por ${esc(byName)}` : ''}`)
   }
-  // aeronave liberada encerra a missão no grupo com o resumo dos tempos
-  if (changed.some((c) => c.id === 'livre')) await closeMission(caseId)
+  // paciente acolhido encerra a missão no grupo com o resumo dos tempos
+  // ('livre' segue encerrando, para caso antigo que ainda tenha o marco)
+  if (changed.some((c) => c.id === 'entrega' || c.id === 'livre')) await closeMission(caseId)
 }
 
 // Marcar "Acionamento do GOA autorizado" É acionar o GOA: se o grupo da missão

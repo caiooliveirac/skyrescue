@@ -5,7 +5,9 @@ import { haversineKm } from './geo.js'
 //          + voo(cena→ponto de pouso) + desembarque (heliponto próprio)
 //          OU transbordo (heliponto de apoio / LZ → ambulância → hospital)
 // TERRESTRE = ETA ambulância→cena + atendimento na cena + rota(cena→hospital)×fator trânsito
-export function computeMission({ cfg, scene, hospital, lzPoint, landingHelipad, groundRoute, ambulanceEtaMin }) {
+// transferRoute: rota terrestre heliponto de desembarque → hospital (quando o
+// hospital não tem heliponto). Sem ela, vale o transbordoMin fixo da Config.
+export function computeMission({ cfg, scene, hospital, lzPoint, landingHelipad, groundRoute, transferRoute, ambulanceEtaMin }) {
   if (!scene) return null
   const { base, aircraft: ac, times: t, ground, ops } = cfg
   const p1 = lzPoint || scene
@@ -37,7 +39,13 @@ export function computeMission({ cfg, scene, hospital, lzPoint, landingHelipad, 
 
   const dSH = landing ? haversineKm(p1, landing) * ac.routeFactor : null
   const flightBackMin = dSH != null ? (dSH / ac.cruiseKmh) * 60 : null
-  const finalMin = hospital ? (hospital.heliponto ? t.desembarqueMin : t.transbordoMin) : null
+  // transbordo = desembarque no heliponto + ambulância até o hospital pela rota
+  // real (o traço reto subestimava: IML → HGE não é linha reta). Sem rota
+  // (OSRM fora, LZ genérica) cai no transbordoMin fixo.
+  const xferMin = transferRoute
+    ? t.desembarqueMin + transferRoute.durMin * (transferRoute.traffic ? 1 : ground.trafficFactor)
+    : null
+  const finalMin = hospital ? (hospital.heliponto ? t.desembarqueMin : xferMin ?? t.transbordoMin) : null
 
   const airTotal =
     hospital != null && flightBackMin != null
@@ -57,9 +65,10 @@ export function computeMission({ cfg, scene, hospital, lzPoint, landingHelipad, 
       label: hospital.heliponto
         ? 'Desembarque no heliponto do hospital'
         : landingHelipad
-          ? `Transbordo ${landingHelipad.name} → ${hospital.name}`
+          ? `Transbordo ${landingHelipad.name} → ${hospital.name}${transferRoute ? ` (${transferRoute.distKm != null ? transferRoute.distKm.toFixed(1) + ' km, ' : ''}rota ${transferRoute.traffic ? 'c/ trânsito' : 'OSRM'})` : ' (estimativa fixa)'}`
           : 'Pouso em LZ + transbordo terrestre até o hospital',
       min: finalMin,
+      km: transferRoute?.distKm ?? undefined,
     })
   }
 
@@ -88,6 +97,7 @@ export function computeMission({ cfg, scene, hospital, lzPoint, landingHelipad, 
     landing: landing ? { lat: landing.lat, lon: landing.lon, name: landing.name, isHelipad: !!(hospital?.heliponto || landingHelipad) } : null,
     landingHelipad: landingHelipad || null,
     ground: { etaMin: eta, cenaMin: t.cenaMin, toHospMin: gToHospMin, total: gTotal, partial: gPartial, distKm: groundRoute?.distKm ?? null, traffic: !!groundRoute?.traffic },
+    finalMin,
     delta,
     missionKm,
     dOut,

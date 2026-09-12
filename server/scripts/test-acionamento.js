@@ -81,9 +81,9 @@ async function main() {
   ok('a missão velha continua encerrada', (await missionStatus(c1)) === 'encerrada')
   ok('e o bot não falou dela', !d.out.includes('teste-acion-1'), d.out.slice(0, 80))
 
-  console.log('\n=== "Aeronave liberada" encerra, como antes ===')
-  const e = await marcar(c2, [{ id: 'livre', ts: ts + 3600000, edited: false }])
-  ok('livre encerra a missão', (await missionStatus(c2)) === 'encerrada', `retorno=${e.r}`)
+  console.log('\n=== "Paciente acolhido" encerra a missão ===')
+  const e = await marcar(c2, [{ id: 'entrega', ts: ts + 3600000, edited: false }])
+  ok('entrega encerra a missão', (await missionStatus(c2)) === 'encerrada', `retorno=${e.r}`)
   ok('encerramento sai com a cronologia', e.out.includes('Missão encerrada'))
 
   console.log('\n=== /caso acha o acionamento órfão (o "absurdo" de 24/07) ===')
@@ -102,8 +102,8 @@ async function main() {
   await query(`UPDATE mission_chat SET status='encerrada'`)
   const velho = await mkCase('teste-acion-velho', snap('teste-acion-velho', { events: { decisao: Date.now() - 30 * 3600000 } }))
   ok('acionamento fora do TTL não é adotado', (await currentMission()) === null)
-  const livre = await mkCase('teste-acion-livre', snap('teste-acion-livre', { events: { decisao: Date.now() - 60000, livre: Date.now() } }))
-  ok('missão já liberada não é adotada', (await currentMission()) === null)
+  const livre = await mkCase('teste-acion-livre', snap('teste-acion-livre', { events: { decisao: Date.now() - 60000, entrega: Date.now() } }))
+  ok('missão já encerrada (paciente acolhido) não é adotada', (await currentMission()) === null)
   const semMarco = await mkCase('teste-acion-semmarco', snap('teste-acion-semmarco', { events: {} }))
   ok('caso sem acionamento autorizado não é adotado', (await currentMission()) === null)
   ok('nenhum dos três ganhou mission_chat',

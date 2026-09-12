@@ -1043,3 +1043,15 @@ input[type="checkbox"] { accent-color: #22d3ee; width: 16px; height: 16px; }
 .contacts a { color: var(--accent); text-decoration: none; }
 .contacts-form { display: grid; gap: 8px; margin-top: 14px; }
 .contacts-form div { display: flex; gap: 8px; }
+
+/* ---------- intercorrências (acompanhamento da missão) ---------- */
+.interc { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 8px; }
+.interc-row { display: flex; gap: 8px; align-items: baseline; padding: 4px 0; font-size: 13px; }
+.interc-row .reset { margin-left: auto; }
+
+/* aviso de mudança de faixa meteorológica após o acionamento */
+.modal.wxchange { border-width: 2px; }
+.modal.wxchange.fail { border-color: var(--fail); box-shadow: 0 0 0 4px rgba(248, 113, 113, 0.18); }
+.modal.wxchange.ok { border-color: var(--ok); }
+.modal.wxchange.fail h3 { color: var(--fail); }
+.modal.wxchange.ok h3 { color: var(--ok); }
