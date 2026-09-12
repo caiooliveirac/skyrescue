@@ -47,6 +47,8 @@ export const api = {
   patchPatient: (id, fields, clientId) =>
     req('PATCH', `/cases/${id}/patient`, { fields, clientId }),
   notifyCase: (id) => req('POST', `/cases/${id}/notify`),
+  iaStatus: () => req('GET', '/ia/status'),
+  iaCriterios: (historia, opcoes) => req('POST', '/ia/criterios', { historia, opcoes }),
   saveEvent: (id, event, ts) => req('POST', `/cases/${id}/events`, { event, ts }),
   liveCase: (id, since) => req('GET', `/cases/${id}/live${since ? `?since=${encodeURIComponent(since)}` : ''}`),
   // pontos de pouso da comunidade

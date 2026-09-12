@@ -15,6 +15,8 @@ DATABASE_URL=postgres://skyrescue:SENHA@127.0.0.1:5432/skyrescue
 SESSION_TTL_HOURS=12
 SEED_ADMIN_USER=goa.samu     # usado só na 1ª migration (quando não há usuários)
 SEED_ADMIN_PASS=samu@192
+ANTHROPIC_API_KEY=           # opcional: botão "Sugerir critérios pela história (IA)" no checklist
+IA_MODEL=claude-sonnet-5     # opcional: modelo da sugestão
 TELEGRAM_BOT_TOKEN=...       # bot da missão (sem ele: dry-run)
 BOT_LINK_CODE=...            # código do /vincular — Telegram E WhatsApp
 # bot do WhatsApp (chip da regulação, pareado em Config → WhatsApp):

@@ -9,6 +9,7 @@ import {
 import { startBot, notifyMission, echoMilestones, MILESTONES } from './telegram.js'
 import { sanitizePatient } from './patient-fields.js'
 import * as wa from './whatsapp.js'
+import { sugerirCriterios, iaDisponivel } from './ia.js'
 
 const app = express()
 app.set('trust proxy', 1) // atrás do nginx/Cloudflare
@@ -260,12 +261,22 @@ app.get('/api/cases', allowService, async (_req, res) => {
             c.air_total_min, c.ground_total_min, c.delta_min, c.gates_ok,
             c.created_at, c.updated_at,
             c.snapshot->>'caseTag' AS case_tag, c.snapshot->'scenePlace' AS scene_place,
+            cp.data->>'sexo' AS vit_sexo, cp.data->>'nascimento' AS vit_nasc,
             cu.username AS created_by_username, cu.full_name AS created_by_name
        FROM cases c
        LEFT JOIN users cu ON cu.id = c.created_by
+       LEFT JOIN case_patient cp ON cp.case_id = c.id
       ORDER BY c.updated_at DESC
       LIMIT 500`
   )
+  // "vítima" na lista: sexo e idade, o bastante para achar o caso sem expor
+  // a ficha; integração por token de serviço não recebe nem isso
+  const idade = (n) => { const d = new Date(n + 'T00:00:00'); if (isNaN(d)) return null; const a = Math.floor((Date.now() - d) / 31557600000); return a >= 0 && a < 150 ? a : null }
+  for (const r of rows) {
+    const partes = _req.user ? [r.vit_sexo, r.vit_nasc ? idade(r.vit_nasc) : null].filter((x) => x != null && x !== '') : []
+    r.vitima = partes.length ? partes.map((x) => (typeof x === 'number' ? `${x}a` : x)).join(', ') : null
+    delete r.vit_sexo; delete r.vit_nasc
+  }
   res.json({ cases: rows })
 })
 
@@ -877,6 +888,22 @@ app.get('/api/aircraft/position', allowService, async (_req, res) => {
       WHERE a.aircraft_id = 'goa'`
   )
   res.json({ position: rows[0] || null })
+})
+
+// ---------- IA: sugestão de critérios a partir da história ----------
+app.get('/api/ia/status', requireAuth, (_req, res) => res.json({ disponivel: iaDisponivel() }))
+app.post('/api/ia/criterios', requireAuth, async (req, res) => {
+  const historia = String(req.body?.historia || '').trim().slice(0, 4000)
+  const opcoes = Array.isArray(req.body?.opcoes) ? req.body.opcoes.slice(0, 60) : []
+  if (historia.length < 15) return res.status(400).json({ error: 'história curta demais para sugerir critérios' })
+  if (!opcoes.every((o) => o && typeof o.id === 'string' && typeof o.label === 'string'))
+    return res.status(400).json({ error: 'opções inválidas' })
+  try {
+    res.json(await sugerirCriterios(historia, opcoes.map((o) => ({ id: o.id.slice(0, 40), label: o.label.slice(0, 120), grupo: o.grupo ? String(o.grupo).slice(0, 40) : null }))))
+  } catch (e) {
+    console.error('ia criterios:', e.status || '', e.message)
+    res.status(e.status || 502).json({ error: e.status ? e.message : 'IA indisponível: ' + e.message })
+  }
 })
 
 // ---------- contatos das centrais SAMU ----------

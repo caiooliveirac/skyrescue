@@ -5,7 +5,7 @@ import { geocode, reversePlace, placeShort, fetchWeather, fetchMetar, groundRout
 import { catalogNear } from './data/helipads-catalog.js'
 import { haversineKm, fmtMin, fmtClock, fmtCoords, fmtCoordsDMS, fmtCoordsDDM, gmapsLink } from './lib/geo.js'
 import { computeMission, autoChecks, daylightCheck, rangeCheck, combinedWeatherStatus, classifyWeather } from './lib/mission.js'
-import { computeScore, caseTag, recommendation, evaluateGates, ITEM_BY_ID } from './lib/score.js'
+import { computeScore, caseTag, recommendation, evaluateGates, ITEM_BY_ID, SECTIONS } from './lib/score.js'
 import { rankLZ, parseObstacles } from './lib/lz.js'
 import MapView from './components/MapView.jsx'
 import NavMode from './components/NavMode.jsx'
@@ -16,7 +16,7 @@ import PatientForm from './components/PatientForm.jsx'
 import Tracking, { MILESTONES, MilestoneQuick, Intercorrencias, ultimoMarco } from './components/Tracking.jsx'
 import { sendEvent, pendingEvents } from './lib/eventQueue.js'
 import { makeDraftSaver, readDraft, draftWorthKeeping } from './lib/draft.js'
-import { emptyPatient, readPatient, savePatient, clearPatient, movePatient, migrateLegacyPatient, openProntuario, PATIENT_KEYS, patientWorthKeeping } from './lib/patient.js'
+import { ageFrom, emptyPatient, readPatient, savePatient, clearPatient, movePatient, migrateLegacyPatient, openProntuario, PATIENT_KEYS, patientWorthKeeping } from './lib/patient.js'
 import ConfigModal from './components/ConfigModal.jsx'
 import SamuContactsModal from './components/SamuContacts.jsx'
 import { DecisionStrip, wxHora, TimePanel, WeatherPanel, LZPanel, AlertsPanel, GatesPanel, CoordReadout } from './components/Results.jsx'
@@ -106,6 +106,10 @@ export default function App({ user, onLogout }) {
   const [manualChecked, setManualChecked] = useState({})
   const [autoOverrides, setAutoOverrides] = useState({})
   const [critTexts, setCritTexts] = useState({}) // texto dos critérios livres ("Outro")
+  // sugestão de critérios pela IA (servidor com ANTHROPIC_API_KEY); null = não configurada
+  const [iaOn, setIaOn] = useState(false)
+  const [iaSug, setIaSug] = useState(null) // {loading} | {err} | {criterios, centro, justificativa, faltam}
+  useEffect(() => { api.iaStatus().then((r) => setIaOn(!!r.disponivel)).catch(() => setIaOn(false)) }, [])
   const [gateManual, setGateManual] = useState({})
   const [gateOverrides, setGateOverrides] = useState({})
 
@@ -422,6 +426,40 @@ export default function App({ user, onLogout }) {
   // "TCE grave · Pituba, Salvador": identifica o caso no cabeçalho e na lista
   const tag = useMemo(() => caseTag(isChecked, critTexts), [manualChecked, autoOverrides, autos, critTexts]) // eslint-disable-line
   const tagFull = [tag, placeShort(scenePlace)].filter(Boolean).join(' · ')
+
+  // história clínica SEM identificação (nome, CPF, CNS, mãe, endereço ficam
+  // fora): é só isto que vai para a IA
+  const historiaClinica = () => {
+    const L = []
+    const idade = ageFrom(patient.nascimento)
+    if (patient.sexo || idade) L.push(`Paciente: ${[patient.sexo, idade].filter(Boolean).join(', ')}`)
+    if (patient.queixa) L.push(`Queixa / mecanismo: ${patient.queixa}`)
+    if (patient.hipotese) L.push(`Hipótese: ${patient.hipotese}`)
+    const sv = [['PA', patient.pa], ['FC', patient.fc], ['FR', patient.fr], ['SpO2', patient.spo2], ['GCS', patient.gcs], ['HGT', patient.hgt], ['Tax', patient.tax]]
+      .filter(([, v]) => v).map(([k, v]) => `${k} ${v}`)
+    if (sv.length) L.push(`Sinais vitais: ${sv.join(' · ')}`)
+    if (patient.comorbidades) L.push(`Comorbidades: ${patient.comorbidades}`)
+    if (patient.medUso) L.push(`Medicação em uso: ${patient.medUso}`)
+    if (patient.procedimentos) L.push(`Procedimentos: ${patient.procedimentos}`)
+    if (notes) L.push(`Observações da regulação: ${notes}`)
+    return L.join('\n')
+  }
+  const pedirSugestao = async () => {
+    const historia = historiaClinica()
+    if (historia.length < 15) return
+    setIaSug({ loading: true })
+    const opcoes = SECTIONS.filter((s) => s.id === 'grav' || s.id === 'centro')
+      .flatMap((s) => (s.items || s.groups.flatMap((g) => g.items.map((it) => ({ ...it, grupo: g.name }))))
+        .filter((it) => !it.text).map((it) => ({ id: it.id, label: it.label, grupo: it.grupo || (s.id === 'centro' ? 'Centro especializado' : null) })))
+    try { setIaSug(await api.iaCriterios(historia, opcoes)) }
+    catch (e) { setIaSug({ err: e.message || String(e) }) }
+  }
+  const aplicarSugestao = () => {
+    if (!iaSug?.criterios) return
+    const ids = [...iaSug.criterios, ...iaSug.centro]
+    setManualChecked((p) => ({ ...p, ...Object.fromEntries(ids.map((id) => [id, true])) }))
+    setIaSug(null)
+  }
 
   // Hora de referência da avaliação. Enquanto o caso está sendo avaliado ao
   // vivo acompanha o relógio (tick de 30 s); quando o acionamento é autorizado,
@@ -1467,6 +1505,15 @@ export default function App({ user, onLogout }) {
           </div>
           )}
 
+          {/* fluxo da comunicação: solicitante passa o paciente, depois o comandante
+              avalia as condições de voo — a ficha vem antes da pontuação, para a história alimentar os critérios */}
+          {show('paciente') && (
+          <PatientForm
+            patient={patient} onChange={updatePatient}
+            sync={patientSync} soLocal={fichaSoLocal} enviando={enviandoFicha}
+            onEnviar={enviarFichaLocal} />
+          )}
+
           {show('caso') && (
           <div className="card" style={{ paddingBottom: 10 }}>
             <h2>
@@ -1476,6 +1523,39 @@ export default function App({ user, onLogout }) {
             <div className="small" style={{ marginBottom: 4 }}>
               Marque o que se aplica — itens <span className="auto-tag" style={{ fontStyle: 'normal' }}>AUTO</span> são calculados pelos tempos e podem ser sobrescritos.
             </div>
+            {iaOn && (
+              <div style={{ marginTop: 6 }}>
+                <button className="btn xs sec" onClick={pedirSugestao} disabled={iaSug?.loading || historiaClinica().length < 15}
+                  title={historiaClinica().length < 15 ? 'Preencha queixa/mecanismo e hipótese na ficha do paciente' : 'A IA lê a história clínica (sem identificação) e sugere critérios'}>
+                  {iaSug?.loading ? <span className="spin" /> : '✦'} Sugerir critérios pela história (IA)
+                </button>
+                {iaSug && !iaSug.loading && (
+                  <div className={'alert ' + (iaSug.err ? 'fail' : 'info')} style={{ marginTop: 8, display: 'block' }}>
+                    {iaSug.err ? <>IA: {iaSug.err}</> : (
+                      <>
+                        {[...iaSug.criterios, ...iaSug.centro].length ? (
+                          <div>
+                            <b>Sugestão:</b>{' '}
+                            {[...iaSug.criterios, ...iaSug.centro].map((id) => (
+                              <span key={id} className={'badge ' + (isChecked(id) ? 'ok' : 'info')} style={{ marginRight: 4 }}>{ITEM_BY_ID[id]?.label || id}</span>
+                            ))}
+                          </div>
+                        ) : <div><b>Sem critério sustentado pela história.</b></div>}
+                        <div className="small" style={{ marginTop: 4 }}>{iaSug.justificativa}</div>
+                        {iaSug.faltam?.length > 0 && (
+                          <div className="small" style={{ marginTop: 4 }}>Perguntar ao solicitante: {iaSug.faltam.join(' · ')}</div>
+                        )}
+                        <div className="row" style={{ marginTop: 6 }}>
+                          {[...iaSug.criterios, ...iaSug.centro].length > 0 && <button className="btn xs" onClick={aplicarSugestao}>Aplicar sugestão</button>}
+                          <button className="btn xs sec" onClick={() => setIaSug(null)}>fechar</button>
+                        </div>
+                        <div className="small" style={{ marginTop: 4, opacity: 0.7 }}>Apoio à decisão ({iaSug.modelo}); quem decide é o médico regulador.</div>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
           )}
           {show('caso') && (
@@ -1483,14 +1563,6 @@ export default function App({ user, onLogout }) {
             texts={critTexts} onText={(id, v) => setCritTexts((p) => ({ ...p, [id]: v }))} />
           )}
 
-          {/* fluxo da comunicação: solicitante passa o paciente, depois o comandante
-              avalia as condições de voo — a ficha vem antes dos gates */}
-          {show('paciente') && (
-          <PatientForm
-            patient={patient} onChange={updatePatient}
-            sync={patientSync} soLocal={fichaSoLocal} enviando={enviandoFicha}
-            onEnviar={enviarFichaLocal} />
-          )}
 
           {show('fatores') && (
           <div className="card">
@@ -1810,7 +1882,7 @@ export default function App({ user, onLogout }) {
                 <div className="lzmain">
                   <div className="n">
                     {c.case_ref || `#${c.id}`}
-                    {(c.case_tag || c.scene_place) && <span style={{ color: 'var(--accent)' }}> · {[c.case_tag, placeShort(c.scene_place)].filter(Boolean).join(' · ')}</span>}
+                    {(c.case_tag || c.scene_place || c.vitima) && <span style={{ color: 'var(--accent)' }}> · {[c.case_tag, c.vitima, placeShort(c.scene_place)].filter(Boolean).join(' · ')}</span>}
                     {' '}<span className="type">{new Date(c.updated_at).toLocaleString('pt-BR')}</span>
                   </div>
                   <div className="m">
