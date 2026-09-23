@@ -1055,3 +1055,35 @@ input[type="checkbox"] { accent-color: #22d3ee; width: 16px; height: 16px; }
 .modal.wxchange.ok { border-color: var(--ok); }
 .modal.wxchange.fail h3 { color: var(--fail); }
 .modal.wxchange.ok h3 { color: var(--ok); }
+
+/* ---------- impressão: escolha das seções do PDF ---------- */
+.print-modal { max-width: 560px; }
+.print-presets { display: flex; flex-wrap: wrap; gap: 8px; }
+.print-chip {
+  font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+  padding: 8px 14px; border-radius: 999px; color: var(--ink);
+  background: rgba(148, 163, 184, 0.08); border: 1px solid var(--line-strong);
+}
+.print-chip.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+.print-list { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.print-item {
+  display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 8px 12px;
+  border: 1px solid var(--line-strong); border-radius: 10px; cursor: pointer; font-size: 14px;
+}
+.print-item:has(input:checked) { border-color: var(--accent-line); background: var(--accent-soft); }
+.print-item input { width: 18px; height: 18px; accent-color: var(--accent); flex: none; margin: 0; }
+.print-item small { margin-left: auto; color: var(--muted); font-size: 11px; white-space: nowrap; }
+.print-item.vazio span { color: var(--muted); }
+.print-actions {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end;
+  position: sticky; bottom: -20px; margin: 18px -22px -20px; padding: 12px 22px 16px;
+  background: #0d1524; border-top: 1px solid var(--line-strong);
+}
+.print-count { margin-right: auto; color: var(--muted); font-size: 12px; }
+@media (max-width: 620px) {
+  .modal-bg:has(.print-modal) { padding: 0; }
+  .print-modal { max-width: none; min-height: 100%; max-height: none; border-radius: 0; border: none; padding: 16px 16px 0; }
+  .print-list { grid-template-columns: 1fr; }
+  .print-actions { bottom: 0; margin: 18px -16px 0; padding: 12px 16px calc(12px + env(safe-area-inset-bottom)); }
+  .print-actions .btn { flex: 1; justify-content: center; }
+}

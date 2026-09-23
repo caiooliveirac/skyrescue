@@ -13,6 +13,8 @@ export default defineConfig(({ mode }) => {
     plugins: [react(), viteSingleFile()],
     // em dev, encaminha /api para a API local (server/, porta 3012; API_PORT
     // muda a porta quando 3012 já está ocupada por outra cópia do projeto)
+    // opcionais do jsPDF (doc.html / SVG) — não usados; ver src/lib/stubs/vazio.js
+    resolve: { alias: Object.fromEntries(['html2canvas', 'dompurify', 'canvg'].map((m) => [m, '/src/lib/stubs/vazio.js'])) },
     server: { proxy: { '/api': `http://127.0.0.1:${env.API_PORT || 3012}` } },
     build: { target: 'es2018', chunkSizeWarningLimit: 4000 },
     define: {

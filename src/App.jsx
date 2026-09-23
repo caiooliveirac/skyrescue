@@ -16,9 +16,11 @@ import PatientForm from './components/PatientForm.jsx'
 import Tracking, { MILESTONES, MilestoneQuick, Intercorrencias, ultimoMarco } from './components/Tracking.jsx'
 import { sendEvent, pendingEvents } from './lib/eventQueue.js'
 import { makeDraftSaver, readDraft, draftWorthKeeping } from './lib/draft.js'
-import { ageFrom, emptyPatient, readPatient, savePatient, clearPatient, movePatient, migrateLegacyPatient, openProntuario, PATIENT_KEYS, patientWorthKeeping } from './lib/patient.js'
+import { ageFrom, emptyPatient, readPatient, savePatient, clearPatient, movePatient, migrateLegacyPatient, PATIENT_KEYS, patientWorthKeeping } from './lib/patient.js'
 import ConfigModal from './components/ConfigModal.jsx'
 import SamuContactsModal from './components/SamuContacts.jsx'
+import PrintModal from './components/PrintModal.jsx'
+import { printContent } from './lib/pdf.js'
 import { DecisionStrip, wxHora, TimePanel, WeatherPanel, LZPanel, AlertsPanel, GatesPanel, CoordReadout } from './components/Results.jsx'
 import {
   IconHeli, IconPlus, IconFolder, IconPrint, IconSettings, IconSearch, IconPin,
@@ -79,6 +81,7 @@ export default function App({ user, onLogout }) {
   const [cfg, setCfg] = useState(loadCfg)
   const [showCfg, setShowCfg] = useState(false)
   const [showSamus, setShowSamus] = useState(false)
+  const [showPrint, setShowPrint] = useState(false)
   const [showCases, setShowCases] = useState(false)
 
   // navegação por tela (celular) x tela única (central)
@@ -1308,27 +1311,14 @@ export default function App({ user, onLogout }) {
     a.click()
   }
 
-  // Prontuário exportável: leva o contexto operacional JÁ calculado (score,
-  // tempos, destino, cronologia) para o médico não redigitar; a PII vem da
-  // ficha (patient) e não passa pelo servidor.
-  const exportProntuario = () => {
-    const hits = Object.values(score.perSection).flatMap((s) => s.hits)
-    const air = mission?.airTotal, gnd = mission?.ground?.total
-    const ctx = {
-      caseId,
-      sceneLabel: sceneLabel || '',
-      sceneCoords: scene ? `${fmtCoordsDDM(scene)} (dec ${fmtCoords(scene)})` : '',
-      destino: hospital ? destinoLabel() : '',
-      meio: rec ? (rec.key === 'blocked' ? 'Terrestre (aéreo inviável no momento)' : rec.key === 'green' ? 'Transporte terrestre' : 'Aeromédico (helicóptero)') : '',
-      justificativa: `Score SkyRescue ${score.total} pts — ${score.band.label}${gates.ok ? '' : ' · IMPEDITIVOS: ' + gates.fails.map((f) => f.label).join('; ')}`,
-      criterios: hits.join('; '),
-      tempos: air != null ? `Aéreo ${fmtMin(air)}${gnd != null ? ` · Terrestre ${fmtMin(gnd)}${mission.delta != null ? ` (Δ ${fmtMin(Math.abs(mission.delta))})` : ''}` : ''}` : '',
-      lz: lzPoint ? `${manualLz ? 'Manual' : lzPoint.name} — ${fmtCoordsDDM(lzPoint)}` : '',
-      cronologia: MILESTONES.map((m) => ({ label: m.label, time: events[m.id] ? new Date(events[m.id]).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '' })),
-      medico: user?.full_name || '',
-    }
-    openProntuario(patient, ctx)
-  }
+  // Conteúdo do PDF (voo + paciente); quem imprime escolhe as seções no
+  // PrintModal. Leva o contexto JÁ calculado para ninguém redigitar nada.
+  const printData = () => printContent({
+    tag: tagFull, scene, sceneLabel, score, gates, rec, mission, hospital, destinoLabel: destinoLabel(),
+    meio: rec ? (rec.key === 'blocked' ? 'Terrestre (aéreo inviável no momento)' : rec.key === 'green' ? 'Transporte terrestre' : 'Aeromédico (helicóptero)') : '',
+    landingHelipad, lzPoint, manualLz, wxScene, metar, daylight, events, intercorrencias, notes,
+    patient, medico: user?.full_name || '',
+  })
 
   const newCase = () => {
     revGeoRef.current++
@@ -1371,8 +1361,8 @@ export default function App({ user, onLogout }) {
         <button className="tbtn" onClick={() => setShowCases(true)} title={`Casos registrados (${cases.length})`}>
           <IconFolder size={14} /> <span className="tlabel">Casos ({cases.length})</span>
         </button>
-        <button className="tbtn" onClick={() => window.print()} title="Imprimir registro do caso">
-          <IconPrint size={14} /> <span className="tlabel">Registro</span>
+        <button className="tbtn" onClick={() => setShowPrint(true)} title="Imprimir o caso em PDF, escolhendo o que sai">
+          <IconPrint size={14} /> <span className="tlabel">Imprimir</span>
         </button>
         <button className="tbtn" onClick={() => setShowSamus(true)} title="Contatos das centrais SAMU"><IconAmbulance size={14} /> <span className="tlabel">SAMUs</span></button>
         <button className="tbtn" onClick={() => setShowCfg(true)} title="Configuração"><IconSettings size={14} /> <span className="tlabel">Config</span></button>
@@ -1770,8 +1760,7 @@ export default function App({ user, onLogout }) {
                 </button>
                 <button className="btn sec" onClick={() => setShowCases(true)}><IconFolder size={14} /> Casos ({cases.length})</button>
                 <button className="btn sec" onClick={copyResumo}><IconCopy size={14} /> Copiar resumo</button>
-                <button className="btn sec" onClick={exportProntuario} title="Abre o prontuário do paciente em HTML para imprimir como PDF, anexar ao e-mail e assinar no gov.br"><IconPrint size={14} /> Prontuário (PDF)</button>
-                <button className="btn sec" onClick={() => window.print()}><IconPrint size={14} /> Registro</button>
+                <button className="btn sec" onClick={() => setShowPrint(true)} title="PDF do caso (voo e paciente), escolhendo o que sai — para imprimir, anexar ao e-mail e assinar no gov.br"><IconPrint size={14} /> Imprimir / PDF</button>
                 <button className="btn sec" onClick={exportJSON}><IconDownload size={14} /> Exportar JSON</button>
               </div>
               {saveFlash && (
@@ -1817,6 +1806,7 @@ export default function App({ user, onLogout }) {
         <b>SkyRescue β</b> — ferramenta de apoio à decisão em fase piloto. Não substitui o julgamento do médico regulador, os protocolos do SAMU 192 / SESAB, nem a decisão final do comandante da aeronave (GOA/CBMBA). Meteorologia (Open-Meteo) e áreas de pouso (OpenStreetMap) são indicativas e exigem confirmação operacional. Rotas terrestres via OSRM, sem trânsito em tempo real. Os casos são registrados no servidor do GOA com controle de acesso e autoria. Dados pessoais de paciente só na <b>Ficha do paciente</b>, que é restrita à equipe autorizada e tem todo acesso registrado — fora dela (identificador do caso, observações) não escreva dado identificável.
       </div>
 
+      {showPrint && <PrintModal conteudo={printData()} meta={{ caseId, refMs, refFrozen: refAt != null }} onClose={() => setShowPrint(false)} />}
       {showSamus && <SamuContactsModal user={user} onClose={() => setShowSamus(false)} />}
       {showCfg && <ConfigModal cfg={cfg} user={user} onClose={() => setShowCfg(false)} onSave={(c) => { setCfg(c); saveCfg(c); setShowCfg(false) }} />}
 
