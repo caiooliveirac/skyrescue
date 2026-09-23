@@ -21,6 +21,7 @@ import ConfigModal from './components/ConfigModal.jsx'
 import SamuContactsModal from './components/SamuContacts.jsx'
 import PrintModal from './components/PrintModal.jsx'
 import { printContent } from './lib/pdf.js'
+import { pendencias } from './lib/pendencias.js'
 import { DecisionStrip, wxHora, TimePanel, WeatherPanel, LZPanel, AlertsPanel, GatesPanel, CoordReadout } from './components/Results.jsx'
 import {
   IconHeli, IconPlus, IconFolder, IconPrint, IconSettings, IconSearch, IconPin,
@@ -115,6 +116,8 @@ export default function App({ user, onLogout }) {
   useEffect(() => { api.iaStatus().then((r) => setIaOn(!!r.disponivel)).catch(() => setIaOn(false)) }, [])
   const [gateManual, setGateManual] = useState({})
   const [gateOverrides, setGateOverrides] = useState({})
+  // por que o regulador contrariou a avaliação automática: {gateId: texto}
+  const [gateJust, setGateJust] = useState({})
 
   // recursos / destino
   const [hospitalId, setHospitalId] = useState(cfg.hospitals[0]?.id || '')
@@ -664,9 +667,18 @@ export default function App({ user, onLogout }) {
     if (!hhmm) return // campo limpo durante a edição — mantém o horário anterior
     const [h, m] = hhmm.split(':').map(Number)
     if (!Number.isFinite(h) || !Number.isFinite(m)) return
-    const d = new Date(); d.setHours(h, m, 0, 0)
-    setEvents((p) => ({ ...p, [id]: d.getTime() }))
-    pushEvent(id, d.getTime())
+    // A data vem do CASO, não do relógio: corrigir amanhã o horário de hoje
+    // gravava a hora certa no dia errado (e a cronologia ficava com +24 h).
+    // Referência: o próprio marco, senão o marco anterior, senão a avaliação;
+    // entre ontem/hoje/amanhã vale o mais próximo dela (virada da meia-noite).
+    const idx = MILESTONES.findIndex((x) => x.id === id)
+    const anterior = MILESTONES.slice(0, idx).reverse().find((x) => events[x.id])
+    const ref = events[id] || (anterior && events[anterior.id]) || refMs
+    const d = new Date(ref); d.setHours(h, m, 0, 0)
+    const ts = [-864e5, 0, 864e5].map((k) => d.getTime() + k)
+      .sort((a, b) => Math.abs(a - ref) - Math.abs(b - ref))[0]
+    setEvents((p) => ({ ...p, [id]: ts }))
+    pushEvent(id, ts)
   }
 
   // ---------- a ocorrência ao vivo, em todas as telas ----------
@@ -691,7 +703,7 @@ export default function App({ user, onLogout }) {
   // para sempre. Eles vão junto na gravação; só não mandam nela.
   const CAMPOS_VIVOS = [
     'id', 'scene', 'sceneLabel', 'scenePlace', 'notes', 'hospitalId', 'landingSel', 'ambEta',
-    'manualChecked', 'autoOverrides', 'critTexts', 'gateManual', 'gateOverrides', 'lzSelId', 'manualLz',
+    'manualChecked', 'autoOverrides', 'critTexts', 'gateManual', 'gateOverrides', 'gateJust', 'lzSelId', 'manualLz',
     'intercorrencias',
   ]
   // calculados por cada tela a partir da SUA Config; viajam junto na gravação
@@ -708,21 +720,21 @@ export default function App({ user, onLogout }) {
     id: setCaseId, scene: setScene, sceneLabel: setSceneLabel, scenePlace: setScenePlace, notes: setNotes,
     hospitalId: setHospitalId, landingSel: setLandingSel, ambEta: setAmbEta,
     manualChecked: setManualChecked, autoOverrides: setAutoOverrides, critTexts: setCritTexts,
-    gateManual: setGateManual, gateOverrides: setGateOverrides,
+    gateManual: setGateManual, gateOverrides: setGateOverrides, gateJust: setGateJust,
     lzSelId: setLzSelId, manualLz: setManualLz, intercorrencias: setIntercorrencias,
   }
   const ROTULOS = {
     id: 'identificador', scene: 'local da ocorrência', sceneLabel: 'local da ocorrência', scenePlace: 'local da ocorrência',
     notes: 'observações', hospitalId: 'hospital de destino', landingSel: 'ponto de desembarque',
     ambEta: 'tempo da ambulância', manualChecked: 'pontuação', autoOverrides: 'pontuação', critTexts: 'pontuação',
-    gateManual: 'condições operacionais', gateOverrides: 'condições operacionais',
+    gateManual: 'condições operacionais', gateOverrides: 'condições operacionais', gateJust: 'condições operacionais',
     lzSelId: 'LZ escolhida', manualLz: 'LZ escolhida', intercorrencias: 'intercorrências',
   }
   // vazio de cada campo: input controlado do React não aceita null
   const VAZIO = {
     id: '', sceneLabel: '', scenePlace: null, notes: '', ambEta: '', landingSel: 'auto',
     hospitalId: cfg.hospitals[0]?.id || '', scene: null, lzSelId: null, manualLz: null,
-    manualChecked: {}, autoOverrides: {}, critTexts: {}, gateManual: {}, gateOverrides: {}, intercorrencias: [],
+    manualChecked: {}, autoOverrides: {}, critTexts: {}, gateManual: {}, gateOverrides: {}, gateJust: {}, intercorrencias: [],
   }
   const clientIdRef = useRef(Math.random().toString(36).slice(2, 10) + Date.now().toString(36))
   const ultimoSalvoRef = useRef(null)   // assinatura viva que já está no servidor
@@ -873,7 +885,7 @@ export default function App({ user, onLogout }) {
     refAt: refMs,
     sunsetISO: sunsetISO || null,
     scene, sceneLabel, scenePlace, hospitalId, hospitalName: hospital?.name || null, landingSel, ambEta, notes,
-    manualChecked, autoOverrides, critTexts, gateManual, gateOverrides, caseTag: tag,
+    manualChecked, autoOverrides, critTexts, gateManual, gateOverrides, gateJust, caseTag: tag,
     lzSelId, manualLz, events, intercorrencias,
     // ponto de encontro nomeado p/ o bot da missão (lzSelId sozinho não
     // resolve fora do app: o candidato vem do Overpass e não fica no snapshot)
@@ -1105,7 +1117,7 @@ export default function App({ user, onLogout }) {
   // assinatura do que compõe o caso: muda => reagenda a gravação do rascunho
   const draftSig = JSON.stringify([
     caseId, scene, sceneLabel, notes, hospitalId, landingSel, ambEta,
-    manualChecked, autoOverrides, gateManual, gateOverrides,
+    manualChecked, autoOverrides, gateManual, gateOverrides, gateJust,
     lzSelId, manualLz, events, dbId,
   ])
   useEffect(() => {
@@ -1252,7 +1264,7 @@ export default function App({ user, onLogout }) {
     setHospitalId(hospOk ? c.hospitalId : cfg.hospitals[0]?.id || '')
     setLandingSel(c.landingSel || 'auto'); setAmbEta(c.ambEta || ''); setNotes(c.notes || '')
     setManualChecked(c.manualChecked || {}); setAutoOverrides(c.autoOverrides || {}); setCritTexts(c.critTexts || {})
-    setGateManual(c.gateManual || {}); setGateOverrides(c.gateOverrides || {})
+    setGateManual(c.gateManual || {}); setGateOverrides(c.gateOverrides || {}); setGateJust(c.gateJust || {})
     setLzSelId(c.lzSelId || null); setManualLz(c.manualLz || null); setEvents(c.events || {})
     setIntercorrencias(Array.isArray(c.intercorrencias) ? c.intercorrencias : []); setWxChange(null)
     // congela a avaliação na hora original do caso (casos antigos, sem refAt,
@@ -1311,6 +1323,18 @@ export default function App({ user, onLogout }) {
     a.click()
   }
 
+  // o que falta para o caso ficar documentado (não bloqueia nada — ver lib/pendencias.js)
+  const pend = pendencias({
+    scene, hits: Object.values(score.perSection).flatMap((s) => s.hits), gates, gateJust, patient, events,
+  })
+  const faltamPaciente = pend.filter((p) => p.onde === 'paciente').map((p) => ({ label: p.label.replace('Paciente: ', '') }))
+  const ONDE = { caso: 'Caso', fatores: 'Fatores', paciente: 'Paciente', missao: 'Missão' }
+  // no celular troca de tela; no desktop (tudo à vista) rola até o bloco
+  const irPara = (v) => {
+    if (!wide) { go(v); window.scrollTo(0, 0); return }
+    document.getElementById('v-' + v)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+
   // Conteúdo do PDF (voo + paciente); quem imprime escolhe as seções no
   // PrintModal. Leva o contexto JÁ calculado para ninguém redigitar nada.
   const printData = () => printContent({
@@ -1318,7 +1342,21 @@ export default function App({ user, onLogout }) {
     meio: rec ? (rec.key === 'blocked' ? 'Terrestre (aéreo inviável no momento)' : rec.key === 'green' ? 'Transporte terrestre' : 'Aeromédico (helicóptero)') : '',
     landingHelipad, lzPoint, manualLz, wxScene, metar, daylight, events, intercorrencias, notes,
     patient, medico: user?.full_name || '',
+    gateJust, pend, missionStatus: missionOpen, registro: printReg,
+    baseName: cfg.base?.name,
+    usa: (() => {
+      const u = ambEta ? ambSug?.find((x) => String(x.min) === ambEta) : ambAuto
+      return u ? `${u.code} ${u.name} — ${u.min} min até a cena` : ambEta ? `${ambEta} min até a cena (informado)` : ''
+    })(),
   })
+  // autoria (quem abriu, quem autorizou, quem marcou cada horário) vem do
+  // servidor na hora de imprimir — é o dado mais fresco e não pesa no poll
+  const [printReg, setPrintReg] = useState(null)
+  const abrirImpressao = async () => {
+    let reg = null
+    if (dbId != null) { try { reg = (await api.getCase(dbId)).case } catch (e) { /* imprime sem autoria */ } }
+    setPrintReg(reg); setShowPrint(true)
+  }
 
   const newCase = () => {
     revGeoRef.current++
@@ -1334,7 +1372,7 @@ export default function App({ user, onLogout }) {
     sinceRef.current = null; baseRef.current = null; ultimoSalvoRef.current = null
     setLiveMsg(null); setAutoSave(null)
     setScene(null); setSceneLabel(''); setScenePlace(null); setSceneLock(false); setQ(''); setCaseId(''); setNotes(''); setGeoResults(null)
-    setManualChecked({}); setAutoOverrides({}); setCritTexts({}); setGateManual({}); setGateOverrides({})
+    setManualChecked({}); setAutoOverrides({}); setCritTexts({}); setGateManual({}); setGateOverrides({}); setGateJust({})
     setAmbEta(''); setLzSelId(null); setManualLz(null); setEvents({}); setLandingSel('auto'); setIntercorrencias([]); setWxChange(null)
     setCaseRefAt(null); setRefSunset(null); setNowTick(Date.now())
     setHospitalId(cfg.hospitals[0]?.id || '')
@@ -1361,7 +1399,7 @@ export default function App({ user, onLogout }) {
         <button className="tbtn" onClick={() => setShowCases(true)} title={`Casos registrados (${cases.length})`}>
           <IconFolder size={14} /> <span className="tlabel">Casos ({cases.length})</span>
         </button>
-        <button className="tbtn" onClick={() => setShowPrint(true)} title="Imprimir o caso em PDF, escolhendo o que sai">
+        <button className="tbtn" onClick={abrirImpressao} title="Imprimir o caso em PDF, escolhendo o que sai">
           <IconPrint size={14} /> <span className="tlabel">Imprimir</span>
         </button>
         <button className="tbtn" onClick={() => setShowSamus(true)} title="Contatos das centrais SAMU"><IconAmbulance size={14} /> <span className="tlabel">SAMUs</span></button>
@@ -1416,8 +1454,8 @@ export default function App({ user, onLogout }) {
             <IconUsers size={38} />
             <span className="t">Paciente</span>
             <span className="d">ficha · prontuário</span>
-            <span className={'badge ' + (patientWorthKeeping(patient) ? 'ok' : '')}>
-              {patientWorthKeeping(patient) ? 'ficha iniciada' : 'ficha vazia'}
+            <span className={'badge ' + (faltamPaciente.length ? 'warn' : 'ok')}>
+              {faltamPaciente.length ? `faltam ${faltamPaciente.length} campos` : 'ficha completa'}
             </span>
           </button>
 
@@ -1425,6 +1463,7 @@ export default function App({ user, onLogout }) {
             <IconClock size={38} />
             <span className="t">Missão</span>
             <span className="d">horários · grupo · registro</span>
+            {pend.length > 0 && <span className="badge warn">{pend.length} pendência{pend.length > 1 ? 's' : ''} no registro</span>}
             <span className={'badge ' + (missionOpen === 'ativa' ? 'ok' : dbId == null ? 'warn' : '')}>
               {missionOpen === 'ativa' ? 'grupo acionado'
                 : dbId == null ? 'não salvo'
@@ -1451,7 +1490,7 @@ export default function App({ user, onLogout }) {
         {(show('caso') || show('fatores') || show('paciente')) && (
         <div className="col">
           {show('caso') && (
-          <div className="card">
+          <div className="card" id="v-caso">
             <h2><span className="step-num">1</span> Local da ocorrência</h2>
             <div className="row">
               <input
@@ -1501,7 +1540,7 @@ export default function App({ user, onLogout }) {
           <PatientForm
             patient={patient} onChange={updatePatient}
             sync={patientSync} soLocal={fichaSoLocal} enviando={enviandoFicha}
-            onEnviar={enviarFichaLocal} />
+            onEnviar={enviarFichaLocal} faltam={faltamPaciente} />
           )}
 
           {show('caso') && (
@@ -1555,9 +1594,9 @@ export default function App({ user, onLogout }) {
 
 
           {show('fatores') && (
-          <div className="card">
+          <div className="card" id="v-fatores">
             <h2><span className="step-num">3</span> Condições operacionais (gates)</h2>
-            <GatesPanel gates={gates} manualVals={gateManual} onManual={(id, v) => setGateManual((p) => ({ ...p, [id]: v }))} onOverride={(id, v) => setGateOverrides((p) => { const n = { ...p }; if (v) n[id] = v; else delete n[id]; return n })} />
+            <GatesPanel gates={gates} manualVals={gateManual} just={gateJust} onJust={(id, t) => setGateJust((p) => ({ ...p, [id]: t }))} onManual={(id, v) => setGateManual((p) => ({ ...p, [id]: v }))} onOverride={(id, v) => setGateOverrides((p) => { const n = { ...p }; if (v) n[id] = v; else delete n[id]; return n })} />
           </div>
           )}
 
@@ -1705,7 +1744,7 @@ export default function App({ user, onLogout }) {
 
           {show('missao') && scene && (
             <div className="card">
-              <h2><IconRoute size={14} /> Acompanhamento da missão</h2>
+              <h2 id="v-missao"><IconRoute size={14} /> Acompanhamento da missão</h2>
               <Tracking events={events} onMark={markEvent} onEdit={editEvent} mission={mission} />
               <Intercorrencias lista={intercorrencias} events={events}
                 onAdd={(texto) => setIntercorrencias((p) => [...p, { at: Date.now(), fase: ultimoMarco(events), texto, tipo: null }])}
@@ -1728,6 +1767,34 @@ export default function App({ user, onLogout }) {
                   <IconUsers size={15} style={{ flex: 'none', marginTop: 1 }} />
                   <span>Atualizado em outra tela: <b>{liveMsg.quais}</b>{liveMsg.by ? <> · por {liveMsg.by}</> : null}</span>
                 </div>
+              )}
+            </div>
+          )}
+
+          {show('missao') && (
+            <div className="card">
+              <h2>
+                <IconAlert size={14} /> Documentação do caso
+                <span className={'badge ' + (pend.length ? 'warn' : 'ok')} style={{ marginLeft: 'auto' }}>
+                  {pend.length ? `${pend.length} pendente${pend.length > 1 ? 's' : ''}` : 'completa'}
+                </span>
+              </h2>
+              {pend.length ? (
+                <>
+                  <div className="small">
+                    Nada aqui impede o acionamento: é o que falta para o registro ficar completo. Enquanto houver
+                    pendência, a lista <b>sai impressa no PDF</b>. Toque num item para ir até ele.
+                  </div>
+                  <div className="pend-list">
+                    {pend.map((p) => (
+                      <button key={p.id} onClick={() => irPara(p.onde)}>
+                        <span>•</span>{p.label}<span>{ONDE[p.onde]} ›</span>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <div className="small">Tudo o que o registro exige está preenchido.</div>
               )}
             </div>
           )}
@@ -1760,7 +1827,7 @@ export default function App({ user, onLogout }) {
                 </button>
                 <button className="btn sec" onClick={() => setShowCases(true)}><IconFolder size={14} /> Casos ({cases.length})</button>
                 <button className="btn sec" onClick={copyResumo}><IconCopy size={14} /> Copiar resumo</button>
-                <button className="btn sec" onClick={() => setShowPrint(true)} title="PDF do caso (voo e paciente), escolhendo o que sai — para imprimir, anexar ao e-mail e assinar no gov.br"><IconPrint size={14} /> Imprimir / PDF</button>
+                <button className="btn sec" onClick={abrirImpressao} title="PDF do caso (voo e paciente), escolhendo o que sai — para imprimir, anexar ao e-mail e assinar no gov.br"><IconPrint size={14} /> Imprimir / PDF</button>
                 <button className="btn sec" onClick={exportJSON}><IconDownload size={14} /> Exportar JSON</button>
               </div>
               {saveFlash && (

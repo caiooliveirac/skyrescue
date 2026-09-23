@@ -138,25 +138,29 @@ export default function Tracking({ events, onMark, onEdit, mission }) {
                 <span className="small mono" style={{ marginLeft: 6 }}>+{fmtElapsed(events[m.id] - prevTs)}</span>
               )}
             </div>
-            {done ? (
-              <>
-                <input
-                  type="time"
-                  value={toTimeStr(events[m.id])}
-                  onChange={(e) => onEdit(m.id, e.target.value)}
-                />
-              </>
-            ) : (
-              <>
-                {i === nextIdx && running && (
-                  <span className="mono" style={{ fontSize: 13, color: 'var(--accent)' }} title="desde o último marco">
-                    {fmtElapsed(now - lastTs)}
-                  </span>
-                )}
-                <button className={'btn xs' + (i === nextIdx ? '' : ' sec')} disabled={i !== nextIdx} onClick={() => onMark(m.id)}>
-                  marcar agora
-                </button>
-              </>
+            {!done && i === nextIdx && running && (
+              <span key="crono" className="mono" style={{ fontSize: 13, color: 'var(--accent)' }} title="desde o último marco">
+                {fmtElapsed(now - lastTs)}
+              </span>
+            )}
+            {/* o próximo marco também aceita a hora digitada: quem registra
+                depois do fato (ou esqueceu de tocar na hora) lança o horário
+                real direto, sem "marcar agora" + correção — que ecoava duas
+                vezes no grupo. Mesma key nos dois estados: o campo não perde o
+                foco quando o marco passa a existir no meio da digitação. */}
+            {(done || i === nextIdx) && (
+              <input
+                key="hora"
+                type="time"
+                value={done ? toTimeStr(events[m.id]) : ''}
+                title={done ? 'corrigir o horário' : 'ou digite o horário em que aconteceu'}
+                onChange={(e) => onEdit(m.id, e.target.value)}
+              />
+            )}
+            {!done && (
+              <button key="marcar" className={'btn xs' + (i === nextIdx ? '' : ' sec')} disabled={i !== nextIdx} onClick={() => onMark(m.id)}>
+                marcar agora
+              </button>
             )}
           </div>
         )

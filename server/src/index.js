@@ -284,8 +284,12 @@ app.get('/api/cases/:id', requireAuth, async (req, res) => {
   // mission_status ('ativa' | 'encerrada' | null) para o app mostrar, ao reabrir
   // um caso, se o grupo da missão já foi acionado
   const { rows } = await query(
-    `SELECT c.*, m.status AS mission_status
+    `SELECT c.*, m.status AS mission_status,
+            coalesce(cu.full_name, cu.username) AS created_by_name,
+            coalesce(uu.full_name, uu.username) AS updated_by_name
        FROM cases c LEFT JOIN mission_chat m ON m.case_id = c.id
+       LEFT JOIN users cu ON cu.id = c.created_by
+       LEFT JOIN users uu ON uu.id = c.updated_by
       WHERE c.id = $1`,
     [req.params.id]
   )
@@ -393,6 +397,17 @@ app.patch('/api/cases/:id/live', requireAuth, async (req, res) => {
   }
 })
 
+// Autoria de cada horário marcado — vai para o documento impresso ("Acionamento
+// autorizado 21:25 · por Fulano"). Falha aqui não derruba a gravação do horário.
+async function autorMarcos(caseId, ids, user) {
+  if (!ids.length) return
+  const quem = { uid: user.id, by: user.full_name || user.username, at: Date.now() }
+  await query(
+    `UPDATE cases SET events_by = coalesce(events_by, '{}'::jsonb) || $2::jsonb WHERE id = $1`,
+    [caseId, JSON.stringify(Object.fromEntries(ids.map((id) => [id, quem])))]
+  ).catch((e) => console.error('autoria dos marcos:', e.message))
+}
+
 app.post('/api/cases', requireAuth, async (req, res) => {
   const snapshot = req.body?.snapshot
   if (!snapshot || typeof snapshot !== 'object')
@@ -428,6 +443,7 @@ app.post('/api/cases', requireAuth, async (req, res) => {
     const marcados = Object.entries(snapshot.events || {})
       .filter(([, ts]) => ts)
       .map(([id, ts]) => ({ id, ts, edited: false }))
+    await autorMarcos(rows[0].id, marcados.map((m) => m.id), req.user)
     if (marcados.some((m) => m.id === 'decisao')) {
       echoMilestones(rows[0].id, marcados, req.user)
         .catch((e) => console.error('bot acionamento na criação:', e.message))
@@ -479,6 +495,7 @@ app.put('/api/cases/:id', requireAuth, async (req, res) => {
       .map(([id, ts]) => ({ id, ts, edited: before[id] != null }))
     // mesma regra do POST /events: se o 'decisao' chega por aqui (marcado sem
     // sinal e sincronizado no "Atualizar caso"), ele também aciona o grupo
+    await autorMarcos(req.params.id, changed.map((m) => m.id), req.user)
     if (changed.length) {
       echoMilestones(req.params.id, changed, req.user)
         .catch((e) => console.error('bot milestones:', e.message))
@@ -631,6 +648,7 @@ app.post('/api/cases/:id/events', requireAuth, async (req, res) => {
       'INSERT INTO case_audit (case_id, user_id, action, case_ref) VALUES ($1,$2,$3,$4)',
       [req.params.id, req.user.id, 'update', prev.rows[0].case_ref]
     )
+    await autorMarcos(req.params.id, [event], req.user)
     // o horário JÁ está gravado: uma falha do Telegram daqui em diante não pode
     // virar 500 (o cliente reenfileiraria e o marco piscaria como não salvo).
     // Vira aviso na resposta, para o médico ver que o grupo não foi acionado.

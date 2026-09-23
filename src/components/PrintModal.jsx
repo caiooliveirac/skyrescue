@@ -4,7 +4,7 @@ import { IconPrint, IconDownload, IconX } from './Icons.jsx'
 
 // Escolha do que sai no PDF do caso. A seleção fica lembrada no aparelho
 // (conveniência de quem imprime); "Padrão" volta ao pré-selecionado.
-const KEY = 'skyrescue_print_v1'
+const KEY = 'skyrescue_print_v2' // v2: seções novas (pendências, responsáveis, trechos, intervalos)
 const PADRAO = PRINT_PRESETS[0].ids
 const lerSel = () => {
   try {
@@ -66,6 +66,14 @@ export default function PrintModal({ conteudo, meta, onClose }) {
           <button className="tbtn" style={{ marginLeft: 'auto' }} onClick={onClose} title="Fechar"><IconX size={14} /></button>
         </h3>
 
+        {conteudo.pendencias?.length > 0 && (
+          <div className="alert warn" style={{ marginBottom: 12 }}>
+            <span>Registro com <b>{conteudo.pendencias.length} pendência{conteudo.pendencias.length > 1 ? 's' : ''}</b> de
+              documentação — {sel.includes('pendencias') ? 'saem listadas no topo do PDF' : 'a seção de pendências está desmarcada'}.
+              Complete o caso antes de arquivar.</span>
+          </div>
+        )}
+
         <div className="print-presets">
           {PRINT_PRESETS.map((p) => (
             <button key={p.id} className={'print-chip' + (presetAtivo === p.id ? ' on' : '')} onClick={() => salvar(p.ids)}>{p.label}</button>
@@ -82,7 +90,7 @@ export default function PrintModal({ conteudo, meta, onClose }) {
                   <label key={s.id} className={'print-item' + (vazio ? ' vazio' : '')}>
                     <input type="checkbox" checked={sel.includes(s.id)} onChange={() => toggle(s.id)} />
                     <span>{s.title}</span>
-                    {vazio && <small>sem dados</small>}
+                    {vazio && <small>{s.id === 'pendencias' ? 'nenhuma' : 'sem dados'}</small>}
                   </label>
                 )
               })}

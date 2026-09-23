@@ -5,9 +5,9 @@ import { PATIENT_SECTIONS, ageFrom } from '../lib/patient.js'
 function Field({ f, value, onChange }) {
   const common = { value: value || '', onChange: (e) => onChange(f.k, e.target.value) }
   return (
-    <div className="field" style={f.w === 2 ? { gridColumn: '1 / -1' } : undefined}>
+    <div className={'field' + (f.req && !String(value || '').trim() ? ' req-vazio' : '')} style={f.w === 2 ? { gridColumn: '1 / -1' } : undefined}>
       <label>
-        {f.label}
+        {f.label}{f.req && <span className="req-mark" title="obrigatório para o caso ficar documentado"> *</span>}
         {f.k === 'nascimento' && ageFrom(value) && <span className="auto-tag" style={{ fontStyle: 'normal' }}> {ageFrom(value)}</span>}
       </label>
       {f.type === 'textarea' ? (
@@ -23,20 +23,28 @@ function Field({ f, value, onChange }) {
   )
 }
 
-export default function PatientForm({ patient, onChange, sync, soLocal, onEnviar, enviando }) {
+export default function PatientForm({ patient, onChange, sync, soLocal, onEnviar, enviando, faltam = [] }) {
   return (
-    <div className="card">
+    <div className="card" id="v-paciente">
       <h2>
         Ficha do paciente <span className="badge info">prontuário</span>
         {sync?.err && <span className="badge warn" title={sync.err}>sem gravar</span>}
       </h2>
       <div className="small" style={{ marginBottom: 10 }}>
-        Preenchimento para o <b>prontuário exportável</b> (HTML → PDF, assinável no gov.br). A ficha é
+        Preenchimento para o <b>prontuário exportável</b> (PDF assinável no gov.br). A ficha é
         gravada <b>no servidor do GOA</b>, junto do caso: quem estiver acompanhando a ocorrência vê o que
         você acrescenta, e reabrir o caso em qualquer aparelho traz a ficha de volta. Contém dado
         identificável de paciente — o acesso é restrito à equipe autorizada e <b>fica registrado</b>.
         O documento definitivo continua sendo o PDF assinado e arquivado.
       </div>
+      {faltam.length > 0 ? (
+        <div className="alert warn" style={{ marginBottom: 10 }}>
+          <span><b>Faltam {faltam.length} campo{faltam.length > 1 ? 's' : ''} obrigatório{faltam.length > 1 ? 's' : ''}</b> (marcados com *):{' '}
+            {faltam.map((f) => f.label).join(', ')}. Paciente sem identificação? Escreva "não identificado" no nome.</span>
+        </div>
+      ) : (
+        <div className="alert ok" style={{ marginBottom: 10 }}>Campos obrigatórios da ficha preenchidos.</div>
+      )}
       {soLocal && (
         <div className="notice" style={{ marginBottom: 10 }}>
           Esta ficha foi preenchida quando os dados ficavam <b>só neste navegador</b>, e por isso ainda

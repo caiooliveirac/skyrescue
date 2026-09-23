@@ -291,7 +291,7 @@ export function AlertsPanel({ alerts }) {
   )
 }
 
-export function GatesPanel({ gates, manualVals, onManual, onOverride }) {
+export function GatesPanel({ gates, manualVals, onManual, onOverride, just = {}, onJust }) {
   const st = (s) =>
     s === 'ok' ? <span className="badge ok">OK</span> :
     s === 'warn' ? <span className="badge warn">ATENÇÃO</span> :
@@ -320,6 +320,16 @@ export function GatesPanel({ gates, manualVals, onManual, onOverride }) {
                 <option value="fail">forçar NÃO</option>
               </select>
             </>
+          )}
+          {/* contrariar a avaliação automática é decisão que vai para o
+              documento: sem o porquê, o registro não se sustenta */}
+          {g.override && (
+            <input
+              className={'gate-just' + (just[g.id]?.trim() ? '' : ' req-vazio')}
+              value={just[g.id] || ''}
+              onChange={(e) => onJust?.(g.id, e.target.value)}
+              placeholder={`Justificativa obrigatória: por que forçar ${g.override === 'ok' ? 'OK' : 'NÃO'}?`}
+            />
           )}
         </div>
       ))}

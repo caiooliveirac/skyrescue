@@ -18,14 +18,16 @@
 
 // Estrutura compartilhada pelo formulário e pelo documento impresso.
 // w:2 = campo ocupa a linha inteira (2 colunas) no grid do form.
+// req = exigido para o caso ficar documentado (ver lib/pendencias.js); não
+// bloqueia nada, só cobra.
 export const PATIENT_SECTIONS = [
   {
     id: 'ident',
     title: 'Identificação do paciente',
     fields: [
-      { k: 'nome', label: 'Nome completo', w: 2 },
-      { k: 'nascimento', label: 'Data de nascimento', type: 'date' },
-      { k: 'sexo', label: 'Sexo', type: 'select', opts: ['', 'Feminino', 'Masculino', 'Outro / Não informado'] },
+      { k: 'nome', req: true, label: 'Nome completo', w: 2 },
+      { k: 'nascimento', req: true, label: 'Data de nascimento', type: 'date' },
+      { k: 'sexo', req: true, label: 'Sexo', type: 'select', opts: ['', 'Feminino', 'Masculino', 'Outro / Não informado'] },
       { k: 'nomeMae', label: 'Nome da mãe', w: 2 },
       { k: 'cpf', label: 'CPF' },
       { k: 'cns', label: 'CNS (Cartão SUS)' },
@@ -36,14 +38,14 @@ export const PATIENT_SECTIONS = [
     id: 'clinico',
     title: 'Quadro clínico',
     fields: [
-      { k: 'queixa', label: 'Queixa principal / mecanismo', type: 'textarea', w: 2 },
-      { k: 'pa', label: 'PA (mmHg)' },
-      { k: 'fc', label: 'FC (bpm)' },
+      { k: 'queixa', req: true, label: 'Queixa principal / mecanismo', type: 'textarea', w: 2 },
+      { k: 'pa', req: true, label: 'PA (mmHg)' },
+      { k: 'fc', req: true, label: 'FC (bpm)' },
       { k: 'fr', label: 'FR (irpm)' },
-      { k: 'spo2', label: 'SpO₂ (%)' },
+      { k: 'spo2', req: true, label: 'SpO₂ (%)' },
       { k: 'tax', label: 'Tax (°C)' },
       { k: 'hgt', label: 'HGT (mg/dL)' },
-      { k: 'gcs', label: 'GCS (3–15)' },
+      { k: 'gcs', req: true, label: 'GCS (3–15)' },
       { k: 'dor', label: 'Dor (EVA 0–10)' },
       { k: 'alergias', label: 'Alergias', w: 2 },
       { k: 'comorbidades', label: 'Comorbidades', w: 2 },
@@ -54,9 +56,9 @@ export const PATIENT_SECTIONS = [
     id: 'conduta',
     title: 'Avaliação e conduta',
     fields: [
-      { k: 'hipotese', label: 'Hipótese diagnóstica', w: 2 },
+      { k: 'hipotese', req: true, label: 'Hipótese diagnóstica', w: 2 },
       { k: 'cid', label: 'CID-10' },
-      { k: 'risco', label: 'Classificação de risco', type: 'select',
+      { k: 'risco', req: true, label: 'Classificação de risco', type: 'select',
         opts: ['', 'Vermelho (emergência)', 'Laranja (muito urgente)', 'Amarelo (urgente)', 'Verde (pouco urgente)', 'Azul (não urgente)'] },
       { k: 'procedimentos', label: 'Procedimentos realizados', type: 'textarea', w: 2 },
       { k: 'medicacoes', label: 'Medicações administradas (nome · dose · via · hora)', type: 'textarea', w: 2 },
@@ -67,9 +69,9 @@ export const PATIENT_SECTIONS = [
     id: 'autor',
     title: 'Responsável pela regulação',
     fields: [
-      { k: 'medico', label: 'Médico regulador' },
-      { k: 'crm', label: 'CRM / UF' },
-      { k: 'equipe', label: 'Equipe de transporte (enfermeiro, piloto…)', w: 2 },
+      { k: 'medico', req: true, label: 'Médico regulador' },
+      { k: 'crm', req: true, label: 'CRM / UF' },
+      { k: 'equipe', req: true, label: 'Equipe de transporte (enfermeiro, piloto…)', w: 2 },
     ],
   },
 ]

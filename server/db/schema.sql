@@ -61,6 +61,9 @@ CREATE TABLE IF NOT EXISTS cases (
 -- qual ABA gravou por último. A tela ao vivo usa isto para não reaplicar em si
 -- mesma o próprio eco (e entrar em ping-pong de gravações com as outras telas)
 ALTER TABLE cases ADD COLUMN IF NOT EXISTS updated_by_client TEXT;
+-- quem marcou cada horário da missão: {marco: {uid, by, at}}. Coluna própria,
+-- fora do snapshot, porque o PUT grava o snapshot inteiro e apagaria a autoria.
+ALTER TABLE cases ADD COLUMN IF NOT EXISTS events_by JSONB NOT NULL DEFAULT '{}'::jsonb;
 
 CREATE INDEX IF NOT EXISTS cases_created_by_idx ON cases (created_by);
 CREATE INDEX IF NOT EXISTS cases_created_at_idx ON cases (created_at DESC);
