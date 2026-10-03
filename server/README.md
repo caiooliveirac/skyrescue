@@ -23,15 +23,16 @@ BOT_LINK_CODE=...            # código do /vincular — Telegram E WhatsApp
 # WA_AUTH_DIR=/home/ubuntu/skyrescue/server/.wa-auth   # sessão (padrão); fora do rsync do deploy
 # WHATSAPP_DISABLED=1                                   # desliga o bot (dev)
 # WA_LOG_LEVEL=error                                    # log interno do Baileys
-GOA_FEDERACAO_SECRET=...     # passagem para o portal mnrs.com.br (mesmo valor no porteiro); sem ela, o botão "Mesa" some
+GOA_FEDERACAO_SECRET=...     # passagem para o Painel do portal mnrs.com.br (mesmo valor no porteiro); sem ela, o botão "Painel" some
 # PORTAL_URL=https://mnrs.com.br                        # padrão
 ```
 
-### Internos: Mesa do plantões pelo portal
+### Internos: Painel do portal sem segunda senha
 
-Usuário marcado com `acesso_portal` vê o botão **Mesa** na barra: abre, numa
-aba nova, a Mesa operacional do plantões e o Painel do portal (Tabela, Quadro)
-**só leitura**, de qualquer lugar, sem segunda senha. `GET /api/auth/portal`
+Usuário marcado com `acesso_portal` vê o botão **Painel** na barra: abre, numa
+aba nova, o Painel do portal mnrs.com.br (Tabela, Destino, Giro, Quadro)
+**só leitura**, de qualquer lugar, sem segunda senha. A Mesa operacional do
+plantões não faz parte. `GET /api/auth/portal`
 assina um handoff de 60 s (`server/src/portal.js`) e o porteiro do mnrs.com.br
 cria/acha a conta `interno` vinculada a este usuário no plantões. Contrato e
 regras no plantões: `docs/internos-goa.md`.
@@ -73,7 +74,7 @@ Ou pela API (autenticado como `admin`): `POST /api/users`, `GET /api/users`, `PA
 | POST | `/api/auth/login` | login → seta cookie de sessão |
 | POST | `/api/auth/logout` | encerra a sessão |
 | GET | `/api/auth/me` | usuário atual (401 se não logado) |
-| GET | `/api/auth/portal` | interno com `acesso_portal`: 302 para o porteiro do mnrs.com.br com handoff de 60 s (`?proximo=plantoes`) |
+| GET | `/api/auth/portal` | interno com `acesso_portal`: 302 para o porteiro do mnrs.com.br com handoff de 60 s (`?proximo=tabela`) |
 | POST | `/api/auth/password` | troca a própria senha |
 | GET | `/api/cases` | lista casos (todos, com autoria) |
 | GET | `/api/cases/:id` | caso completo (snapshot) |

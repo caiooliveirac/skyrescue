@@ -1,12 +1,12 @@
 import crypto from 'node:crypto'
 
 // ---------- passagem para o portal mnrs.com.br (internos de medicina) ----------
-// O interno logado aqui abre a Mesa operacional do plantões e o Painel
-// (Tabela, Quadro) sem segunda senha: este servidor assina um handoff de 60 s
-// e o navegador leva até o porteiro do portal (mnrs.com.br/_auth/de/goa). O
-// porteiro confere a assinatura e pergunta ao plantões QUAL conta de lá é este
-// usuário — lá ela é sempre só `interno` (lê a Mesa, não escreve). Contrato e
-// regras no plantões: docs/internos-goa.md.
+// O interno logado aqui abre o Painel do portal (Tabela, Destino, Giro,
+// Quadro), só leitura, sem segunda senha: este servidor assina um handoff de
+// 60 s e o navegador leva até o porteiro (mnrs.com.br/_auth/de/goa). O porteiro
+// confere a assinatura e pergunta ao plantões QUAL conta de lá é este usuário —
+// lá ela é sempre só `interno`, sem a Mesa operacional. Contrato e regras no
+// plantões: docs/internos-goa.md.
 //
 // Só sai handoff para usuário marcado com `acesso_portal` (admin marca:
 // PATCH /api/users/:id ou scripts/acesso-portal.js). Chave GOA_FEDERACAO_SECRET,
@@ -18,7 +18,7 @@ export const TIPO_HANDOFF = 'goa-handoff'
 const VALIDADE_S = 60
 
 // sistemas que o interno alcança no portal (porteiro lib.mjs, internoDoGoa)
-export const PROXIMOS = new Set(['plantoes', 'tabela', 'destino', 'giro', 'quadro'])
+export const PROXIMOS = new Set(['tabela', 'destino', 'giro', 'quadro'])
 
 export function portalConfigurado(env = process.env) {
   return (env.GOA_FEDERACAO_SECRET || '').trim().length >= 32

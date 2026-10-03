@@ -23,7 +23,7 @@ app.use(cookieParser())
 app.use(authMiddleware)
 
 const clientIp = (req) => (req.headers['x-forwarded-for']?.split(',')[0]?.trim()) || req.ip
-// `portal`: o botão "Mesa / Portal" aparece (usuário marcado e servidor com a chave)
+// `portal`: o botão "Painel" aparece (usuário marcado e servidor com a chave)
 const publicUser = (u) => ({
   id: u.id, username: u.username, full_name: u.full_name, role: u.role,
   portal: Boolean(u.acesso_portal) && portalConfigurado(),

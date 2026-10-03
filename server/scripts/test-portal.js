@@ -30,6 +30,8 @@ assert.equal(portalConfigurado({ GOA_FEDERACAO_SECRET: 'curta' }), false)
 assert.equal(portalConfigurado({ GOA_FEDERACAO_SECRET: CHAVE }), true)
 
 const env = { GOA_FEDERACAO_SECRET: CHAVE, PORTAL_URL: 'https://mnrs.com.br/' }
-assert.match(destinoPortal(user, 'plantoes', env), /^https:\/\/mnrs\.com\.br\/_auth\/de\/goa\?token=[^&]+&proximo=plantoes$/)
+assert.match(destinoPortal(user, 'tabela', env), /^https:\/\/mnrs\.com\.br\/_auth\/de\/goa\?token=[^&]+&proximo=tabela$/)
+// a Mesa do plantões não é do interno: o pedido cai no portal, sem proximo
+assert.match(destinoPortal(user, 'plantoes', env), /^https:\/\/mnrs\.com\.br\/_auth\/de\/goa\?token=[^&]+$/)
 assert.match(destinoPortal(user, 'https://mal.example', env), /^https:\/\/mnrs\.com\.br\/_auth\/de\/goa\?token=[^&]+$/)
 console.log('ok — handoff do portal')

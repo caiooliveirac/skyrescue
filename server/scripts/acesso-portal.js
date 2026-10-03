@@ -1,5 +1,5 @@
-// CLI: libera ou tira do usuário a passagem para o portal mnrs.com.br (Mesa do
-// plantões e Painel, só leitura — server/src/portal.js):
+// CLI: libera ou tira do usuário a passagem para o Painel do portal
+// mnrs.com.br (Tabela, Destino, Giro, Quadro — só leitura; server/src/portal.js):
 //   node scripts/acesso-portal.js <username> on|off
 //   node scripts/acesso-portal.js --listar
 import { query, pool } from '../src/db.js'
