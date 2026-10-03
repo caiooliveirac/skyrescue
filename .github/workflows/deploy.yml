@@ -32,6 +32,9 @@ jobs:
       - name: Install deps
         run: npm ci
 
+      - name: Testes de unidade (fusão da ficha)
+        run: node server/scripts/test-patient-merge.js
+
       - name: Build (arquivo único)
         env:
           # opcional: embute a chave Google Maps p/ todos os usuários do site
