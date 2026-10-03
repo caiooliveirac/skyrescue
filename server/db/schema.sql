@@ -22,6 +22,10 @@ ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
 ALTER TABLE users ADD CONSTRAINT users_role_check
   CHECK (role IN ('admin', 'gestor', 'regulador', 'operador'));
 
+-- interno(a) de medicina que abre a Mesa do plantões e o Painel pelo portal
+-- mnrs.com.br sem segunda senha (server/src/portal.js). Marcado pelo admin.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS acesso_portal BOOLEAN NOT NULL DEFAULT FALSE;
+
 -- ---------- sessões ----------
 CREATE TABLE IF NOT EXISTS sessions (
   token_hash  TEXT        PRIMARY KEY,           -- sha256(token) — o token cru só existe no cookie

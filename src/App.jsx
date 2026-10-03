@@ -1404,6 +1404,14 @@ export default function App({ user, onLogout }) {
         </button>
         <button className="tbtn" onClick={() => setShowSamus(true)} title="Contatos das centrais SAMU"><IconAmbulance size={14} /> <span className="tlabel">SAMUs</span></button>
         <button className="tbtn" onClick={() => setShowCfg(true)} title="Configuração"><IconSettings size={14} /> <span className="tlabel">Config</span></button>
+        {/* interno(a) marcado pelo admin: abre a Mesa do plantões pelo portal mnrs.com.br sem
+            segunda senha (server/src/portal.js); nova aba, o GOA segue aberto aqui */}
+        {user?.portal && (
+          <button className="tbtn" onClick={() => window.open('/api/auth/portal?proximo=plantoes', '_blank', 'noopener')}
+            title="Abrir a Mesa operacional (plantões) e o Painel no portal mnrs.com.br, com este login">
+            <IconLayers size={14} /> <span className="tlabel">Mesa</span>
+          </button>
+        )}
         {user && <span className="who" title={user.role}>{user.full_name || user.username}</span>}
         <button className="tbtn" onClick={doLogout} title="Encerrar sessão"><IconX size={14} /> <span className="tlabel">Sair</span></button>
       </div>
