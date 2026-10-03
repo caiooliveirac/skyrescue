@@ -7,7 +7,8 @@ import {
   COOKIE_NAME, startSessionGC,
 } from './auth.js'
 import { startBot, notifyMission, echoMilestones, MILESTONES } from './telegram.js'
-import { sanitizePatient } from './patient-fields.js'
+import { sanitizePatient, PATIENT_KEYS } from './patient-fields.js'
+import { mergePatient } from './patient-merge.js'
 import * as wa from './whatsapp.js'
 import { sugerirCriterios, iaDisponivel } from './ia.js'
 import { portalConfigurado, destinoPortal } from './portal.js'
@@ -322,7 +323,9 @@ app.get('/api/cases/:id/live', requireAuth, async (req, res) => {
     `SELECT c.snapshot, c.updated_at, c.updated_by_client,
             uu.full_name AS updated_by_name, uu.username AS updated_by_username,
             m.status AS mission_status,
-            p.updated_at AS patient_at
+            p.updated_at AS patient_at,
+            (SELECT count(*)::int FROM case_patient_conflict x
+              WHERE x.case_id = c.id AND x.status = 'pendente') AS patient_conflicts
        FROM cases c
        LEFT JOIN users uu ON uu.id = c.updated_by
        LEFT JOIN mission_chat m ON m.case_id = c.id
@@ -345,6 +348,8 @@ app.get('/api/cases/:id/live', requireAuth, async (req, res) => {
     // motivo que missionStatus: a ficha muda sem tocar em cases.updated_at, e
     // na resposta curta ela ficaria invisível para sempre.
     patientAt: r.patient_at || null,
+    // divergências de ficha esperando decisão: só a CONTAGEM, pelo mesmo motivo
+    patientConflicts: r.patient_conflicts || 0,
   }
   // nada mudou desde a última consulta desta tela: responde curto. Numa
   // ocorrência de 40 min são ~480 consultas por tela aberta, e a esmagadora
@@ -427,9 +432,19 @@ app.post('/api/cases', requireAuth, async (req, res) => {
   const snapshot = req.body?.snapshot
   if (!snapshot || typeof snapshot !== 'object')
     return res.status(400).json({ error: 'snapshot obrigatório' })
+  // opId: caso criado sem rede é reenviado até ter resposta — o mesmo opId
+  // devolve o caso que já existe em vez de criar outro
+  const opId = typeof req.body?.opId === 'string' && req.body.opId ? req.body.opId.slice(0, 80) : null
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
+    if (opId) {
+      const ja = await client.query('SELECT id, created_at, case_ref FROM cases WHERE client_op_id = $1', [opId])
+      if (ja.rows[0]) {
+        await client.query('ROLLBACK')
+        return res.json({ ...ja.rows[0], duplicate: true })
+      }
+    }
     if (!snapshot.id) snapshot.id = await nextCaseRef(client)
     const p = promote(snapshot)
     const { rows } = await client.query(
@@ -437,13 +452,13 @@ app.post('/api/cases', requireAuth, async (req, res) => {
          (case_ref, created_by, updated_by, scene_label, scene_lat, scene_lon,
           score_total, score_band, recommendation, hospital_name,
           air_total_min, ground_total_min, delta_min, gates_ok, notes, snapshot,
-          updated_by_client)
-       VALUES ($1,$2,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+          updated_by_client, client_op_id)
+       VALUES ($1,$2,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
        RETURNING id, created_at`,
       [p.case_ref, req.user.id, p.scene_label, p.scene_lat, p.scene_lon,
        p.score_total, p.score_band, p.recommendation, p.hospital_name,
        p.air_total_min, p.ground_total_min, p.delta_min, p.gates_ok, p.notes, snapshot,
-       typeof req.body?.clientId === 'string' ? req.body.clientId.slice(0, 40) : null]
+       typeof req.body?.clientId === 'string' ? req.body.clientId.slice(0, 40) : null, opId]
     )
     await client.query(
       'INSERT INTO case_audit (case_id, user_id, action, case_ref) VALUES ($1,$2,$3,$4)',
@@ -564,7 +579,7 @@ app.get('/api/cases/:id/patient', requireAuth, async (req, res) => {
   const client = await pool.connect()
   try {
     const { rows } = await client.query(
-      `SELECT p.data, p.updated_at, p.updated_by_client,
+      `SELECT p.data, p.updated_at, p.updated_by_client, p.version,
               uu.full_name AS updated_by_name, uu.username AS updated_by_username
          FROM case_patient p
          LEFT JOIN users uu ON uu.id = p.updated_by
@@ -579,9 +594,10 @@ app.get('/api/cases/:id/patient', requireAuth, async (req, res) => {
       updatedAt: r?.updated_at || null,
       updatedBy: r?.updated_by_name || r?.updated_by_username || null,
       updatedByClient: r?.updated_by_client || null,
+      version: r?.version ?? 0,
     })
   } catch (e) {
-    console.error('get patient:', e)
+    console.error('get patient:', e.message)
     res.status(500).json({ error: 'erro ao ler a ficha' })
   } finally {
     client.release()
@@ -591,43 +607,200 @@ app.get('/api/cases/:id/patient', requireAuth, async (req, res) => {
 // Gravação POR CAMPO, pelo mesmo motivo do PATCH /cases/:id/live: o médico
 // escreve a hipótese no celular enquanto a regulação preenche os vitais no PC.
 // Quem mandasse a ficha inteira apagaria o campo que o outro acabou de digitar.
+// Aceita dois formatos:
+//   { fields }                               cliente antigo: o que vem, entra
+//   { changes, base, baseVersion, opId, clientTs }   caixa de saída offline:
+//       fusão de três pontas por campo (src/patient-merge.js). Campo que o
+//       aparelho e o servidor mudaram para valores diferentes NÃO é aplicado e
+//       vira linha em case_patient_conflict, para um usuário escolher depois.
 app.patch('/api/cases/:id/patient', requireAuth, async (req, res) => {
-  const fields = req.body?.fields
+  const b = req.body || {}
+  const fields = b.changes ?? b.fields
   if (!fields || typeof fields !== 'object' || Array.isArray(fields))
     return res.status(400).json({ error: 'campos obrigatórios' })
   const limpos = sanitizePatient(fields)
   if (!Object.keys(limpos).length)
     return res.status(400).json({ error: 'nenhum campo de ficha reconhecido' })
+  const base = b.base && typeof b.base === 'object' && !Array.isArray(b.base) ? sanitizePatient(b.base) : null
+  const baseVersion = Number.isInteger(b.baseVersion) && b.baseVersion >= 0 ? b.baseVersion : null
+  const opId = typeof b.opId === 'string' && b.opId ? b.opId.slice(0, 80) : null
+  const cts = Number(b.clientTs)
+  const clientTs = Number.isFinite(cts) && cts > 0 ? new Date(cts) : null
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
     const existe = await client.query('SELECT 1 FROM cases WHERE id = $1', [req.params.id])
     if (!existe.rows[0]) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'caso não encontrado' }) }
-    // trava a linha da ficha (ou cria vazia) antes de mesclar, para dois PATCH
-    // simultâneos não se perderem
+    // trava a linha da ficha (ou cria vazia, versão 0) antes de mesclar, para
+    // dois PATCH simultâneos não se perderem
     await client.query(
-      `INSERT INTO case_patient (case_id, data) VALUES ($1, '{}'::jsonb)
+      `INSERT INTO case_patient (case_id, data, version) VALUES ($1, '{}'::jsonb, 0)
        ON CONFLICT (case_id) DO NOTHING`,
       [req.params.id]
     )
     const cur = await client.query(
-      'SELECT data FROM case_patient WHERE case_id = $1 FOR UPDATE', [req.params.id]
+      'SELECT data, version, updated_at, updated_by FROM case_patient WHERE case_id = $1 FOR UPDATE', [req.params.id]
     )
-    const merged = { ...(cur.rows[0]?.data || {}), ...limpos }
-    const { rows } = await client.query(
-      `UPDATE case_patient
-          SET data = $2, updated_at = now(), updated_by = $3, updated_by_client = $4
-        WHERE case_id = $1 RETURNING updated_at`,
-      [req.params.id, merged, req.user.id,
-       typeof req.body?.clientId === 'string' ? req.body.clientId.slice(0, 40) : null]
-    )
-    await auditaFicha(client, req.params.id, req.user.id, 'patient_write')
+    const atual = cur.rows[0]
+    // estado dos campos enviados como ficou no servidor: o aparelho adota isto
+    // como nova base (e passa a mostrar o valor do servidor no campo em disputa)
+    const eco = (data) => Object.fromEntries(Object.keys(limpos).map((k) => [k, data[k] ?? '']))
+    const pendentes = async () => (await client.query(
+      `SELECT count(*)::int AS n FROM case_patient_conflict WHERE case_id = $1 AND status = 'pendente'`,
+      [req.params.id]
+    )).rows[0].n
+
+    // reenvio de um envio já processado (a resposta se perdeu no caminho)
+    if (opId) {
+      const novoOp = await client.query(
+        'INSERT INTO case_patient_op (op_id, case_id) VALUES ($1, $2) ON CONFLICT (op_id) DO NOTHING RETURNING op_id',
+        [opId, req.params.id]
+      )
+      if (!novoOp.rows[0]) {
+        const n = await pendentes()
+        await client.query('COMMIT')
+        return res.json({
+          ok: true, duplicate: true, updatedAt: atual.updated_at, version: atual.version,
+          fields: eco(atual.data || {}), conflicts: [], pendingConflicts: n,
+        })
+      }
+    }
+
+    const m = mergePatient({ server: atual.data || {}, serverVersion: atual.version, base, baseVersion, changes: limpos })
+    let updatedAt = atual.updated_at
+    let version = atual.version
+    if (m.applied.length || atual.version === 0) {
+      const { rows } = await client.query(
+        `UPDATE case_patient
+            SET data = $2, updated_at = now(), updated_by = $3, updated_by_client = $4, version = version + 1
+          WHERE case_id = $1 RETURNING updated_at, version`,
+        [req.params.id, m.data, req.user.id,
+         typeof b.clientId === 'string' ? b.clientId.slice(0, 40) : null]
+      )
+      updatedAt = rows[0].updated_at
+      version = rows[0].version
+      await auditaFicha(client, req.params.id, req.user.id, 'patient_write')
+    }
+    for (const c of m.conflicts) {
+      await client.query(
+        `INSERT INTO case_patient_conflict
+           (case_id, field, server_value, client_value, base_value,
+            server_user_id, server_at, client_user_id, client_ts, op_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+        [req.params.id, c.field, c.server_value, c.client_value, c.base_value,
+         atual.updated_by, atual.updated_at, req.user.id, clientTs, opId]
+      )
+    }
+    if (m.conflicts.length) {
+      const ref = await client.query('SELECT case_ref FROM cases WHERE id = $1', [req.params.id])
+      await client.query(
+        'INSERT INTO case_audit (case_id, user_id, action, case_ref) VALUES ($1,$2,$3,$4)',
+        [req.params.id, req.user.id, 'patient_conflict', ref.rows[0]?.case_ref || null]
+      )
+    }
+    const n = await pendentes()
     await client.query('COMMIT')
-    res.json({ ok: true, updatedAt: rows[0].updated_at })
+    res.json({
+      ok: true, updatedAt, version, fields: eco(m.data),
+      conflicts: m.conflicts.map((c) => c.field), pendingConflicts: n,
+    })
   } catch (e) {
-    await client.query('ROLLBACK')
-    console.error('patch patient:', e)
+    await client.query('ROLLBACK').catch(() => {})
+    // só a mensagem: o objeto de erro do pg pode carregar valores da ficha
+    console.error('patch patient:', e.message)
     res.status(500).json({ error: 'erro ao gravar a ficha' })
+  } finally {
+    client.release()
+  }
+})
+
+// Divergências pendentes da ficha. PII: mesma fronteira e mesma auditoria da
+// leitura da ficha. "Valor do servidor" é o que está na ficha AGORA (o campo
+// pode ter andado depois que a divergência foi registrada).
+app.get('/api/cases/:id/patient/conflicts', requireAuth, async (req, res) => {
+  const client = await pool.connect()
+  try {
+    const { rows } = await client.query(
+      `SELECT x.id, x.field, coalesce(p.data->>x.field, '') AS server_value,
+              x.client_value, x.base_value, x.client_ts, x.created_at,
+              coalesce(pu.full_name, pu.username, su.full_name, su.username) AS server_by,
+              coalesce(p.updated_at, x.server_at) AS server_at,
+              coalesce(cu.full_name, cu.username) AS client_by
+         FROM case_patient_conflict x
+         LEFT JOIN case_patient p ON p.case_id = x.case_id
+         LEFT JOIN users pu ON pu.id = p.updated_by
+         LEFT JOIN users su ON su.id = x.server_user_id
+         LEFT JOIN users cu ON cu.id = x.client_user_id
+        WHERE x.case_id = $1 AND x.status = 'pendente'
+        ORDER BY x.id`,
+      [req.params.id]
+    )
+    if (rows.length) await auditaFicha(client, req.params.id, req.user.id, 'patient_read')
+    res.json({
+      conflicts: rows.map((r) => ({
+        id: Number(r.id), field: r.field,
+        serverValue: r.server_value, serverBy: r.server_by || null, serverAt: r.server_at,
+        clientValue: r.client_value, clientBy: r.client_by || null, clientAt: r.client_ts || r.created_at,
+        baseValue: r.base_value,
+      })),
+    })
+  } catch (e) {
+    console.error('list conflicts:', e.message)
+    res.status(500).json({ error: 'erro ao ler as divergências' })
+  } finally {
+    client.release()
+  }
+})
+
+// Resolve uma divergência: { chosen: 'server' | 'client' }. 'client' grava o
+// valor do aparelho na ficha; 'server' mantém o que está lá. A escolha fica na
+// própria linha (quem, quando, qual) e na trilha do caso — sem coalescer.
+app.post('/api/cases/:id/patient/conflicts/:cid/resolve', requireAuth, async (req, res) => {
+  const chosen = req.body?.chosen
+  if (chosen !== 'server' && chosen !== 'client')
+    return res.status(400).json({ error: 'escolha inválida' })
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    await client.query('SELECT 1 FROM case_patient WHERE case_id = $1 FOR UPDATE', [req.params.id])
+    const { rows } = await client.query(
+      `SELECT id, field, client_value, status FROM case_patient_conflict
+        WHERE id = $1 AND case_id = $2 FOR UPDATE`,
+      [req.params.cid, req.params.id]
+    )
+    const c = rows[0]
+    if (!c) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'divergência não encontrada' }) }
+    if (c.status !== 'pendente') { await client.query('ROLLBACK'); return res.status(409).json({ error: 'divergência já resolvida' }) }
+    if (chosen === 'client' && PATIENT_KEYS.includes(c.field)) {
+      await client.query(
+        `UPDATE case_patient
+            SET data = jsonb_set(data, ARRAY[$2::text], to_jsonb($3::text), true),
+                updated_at = now(), updated_by = $4, updated_by_client = NULL, version = version + 1
+          WHERE case_id = $1`,
+        [req.params.id, c.field, c.client_value, req.user.id]
+      )
+    }
+    await client.query(
+      `UPDATE case_patient_conflict
+          SET status = 'resolvido', chosen = $2, resolved_by = $3, resolved_at = now()
+        WHERE id = $1`,
+      [c.id, chosen, req.user.id]
+    )
+    const ref = await client.query('SELECT case_ref FROM cases WHERE id = $1', [req.params.id])
+    await client.query(
+      'INSERT INTO case_audit (case_id, user_id, action, case_ref) VALUES ($1,$2,$3,$4)',
+      [req.params.id, req.user.id, 'patient_conflict_resolve', ref.rows[0]?.case_ref || null]
+    )
+    const n = await client.query(
+      `SELECT count(*)::int AS n FROM case_patient_conflict WHERE case_id = $1 AND status = 'pendente'`,
+      [req.params.id]
+    )
+    await client.query('COMMIT')
+    res.json({ ok: true, pendingConflicts: n.rows[0].n })
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {})
+    console.error('resolve conflict:', e.message)
+    res.status(500).json({ error: 'erro ao resolver a divergência' })
   } finally {
     client.release()
   }

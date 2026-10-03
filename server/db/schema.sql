@@ -72,6 +72,11 @@ ALTER TABLE cases ADD COLUMN IF NOT EXISTS events_by JSONB NOT NULL DEFAULT '{}'
 CREATE INDEX IF NOT EXISTS cases_created_by_idx ON cases (created_by);
 CREATE INDEX IF NOT EXISTS cases_created_at_idx ON cases (created_at DESC);
 CREATE INDEX IF NOT EXISTS cases_ref_idx        ON cases (case_ref);
+-- idempotência da criação: o aparelho que criou o caso sem rede reenvia o
+-- mesmo POST até ter resposta; com o opId o servidor devolve o caso que já
+-- existe em vez de criar outro.
+ALTER TABLE cases ADD COLUMN IF NOT EXISTS client_op_id TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS cases_client_op_idx ON cases (client_op_id) WHERE client_op_id IS NOT NULL;
 
 -- ---------- pontos de pouso sugeridos pela comunidade ----------
 -- Usuário logado sugere um local onde a equipe já pousou (campo de futebol,
@@ -241,6 +246,45 @@ CREATE TABLE IF NOT EXISTS case_patient (
   updated_by        BIGINT REFERENCES users(id) ON DELETE SET NULL,
   updated_by_client TEXT
 );
+-- versão da ficha: sobe a cada gravação que muda conteúdo. O aparelho manda a
+-- versão que tinha quando editou; se for outra, a fusão é campo a campo
+-- (src/patient-merge.js). Ficha criada pelo PATCH nasce em 0 e vai a 1.
+ALTER TABLE case_patient ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1;
+
+-- Divergência de ficha: o aparelho que ficou sem rede e o servidor mudaram o
+-- MESMO campo para valores diferentes. Nenhum dos dois é descartado: o campo
+-- fica como está no servidor e a disputa espera um usuário autenticado
+-- escolher. Os valores são PII — mesma fronteira de case_patient: só saem
+-- pelas rotas /api/cases/:id/patient…, nunca no snapshot, no bot, na listagem
+-- nem em log. No poll de 5 s viaja só a contagem de pendentes.
+CREATE TABLE IF NOT EXISTS case_patient_conflict (
+  id             BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  case_id        BIGINT NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+  field          TEXT NOT NULL,
+  server_value   TEXT NOT NULL,                 -- como estava no servidor na hora
+  client_value   TEXT NOT NULL,
+  base_value     TEXT,                          -- como o aparelho via antes de editar
+  server_user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,  -- último a gravar a ficha
+  server_at      TIMESTAMPTZ,
+  client_user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  client_ts      TIMESTAMPTZ,                   -- carimbo do aparelho
+  op_id          TEXT,
+  status         TEXT NOT NULL DEFAULT 'pendente',   -- 'pendente' | 'resolvido'
+  chosen         TEXT,                               -- 'server' | 'client'
+  resolved_by    BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  resolved_at    TIMESTAMPTZ,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS case_patient_conflict_case_idx ON case_patient_conflict (case_id, status);
+CREATE INDEX IF NOT EXISTS case_patient_conflict_op_idx ON case_patient_conflict (op_id);
+
+-- envios de ficha já processados (idempotência): o aparelho reenvia o mesmo
+-- opId até ter resposta. Só o identificador, nenhum conteúdo.
+CREATE TABLE IF NOT EXISTS case_patient_op (
+  op_id   TEXT PRIMARY KEY,
+  case_id BIGINT NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+  at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 
 -- ---------- trilha de auditoria dos casos ----------
 CREATE TABLE IF NOT EXISTS case_audit (
@@ -248,6 +292,7 @@ CREATE TABLE IF NOT EXISTS case_audit (
   case_id  BIGINT,                               -- sem FK: preserva histórico após DELETE
   user_id  BIGINT REFERENCES users(id) ON DELETE SET NULL,
   -- 'create' | 'update' | 'autosave' | 'delete' | 'patient_read' | 'patient_write'
+  -- | 'patient_conflict' (divergência registrada) | 'patient_conflict_resolve'
   action   TEXT NOT NULL,
   at       TIMESTAMPTZ NOT NULL DEFAULT now(),
   case_ref TEXT

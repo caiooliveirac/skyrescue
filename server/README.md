@@ -78,9 +78,13 @@ Ou pela API (autenticado como `admin`): `POST /api/users`, `GET /api/users`, `PA
 | POST | `/api/auth/password` | troca a própria senha |
 | GET | `/api/cases` | lista casos (todos, com autoria) |
 | GET | `/api/cases/:id` | caso completo (snapshot) |
-| POST | `/api/cases` | registra caso |
+| POST | `/api/cases` | registra caso (`opId` opcional: repetir o mesmo devolve o caso já criado) |
 | PUT | `/api/cases/:id` | atualiza caso |
 | DELETE | `/api/cases/:id` | exclui caso (auditado) |
+| GET | `/api/cases/:id/patient` | ficha do paciente + `version` (auditado) |
+| PATCH | `/api/cases/:id/patient` | grava a ficha por campo. `{fields}` (formato antigo) ou `{changes, base, baseVersion, opId, clientTs}`: fusão de três pontas — campo mudado nos dois lados para valores diferentes não entra e vira divergência |
+| GET | `/api/cases/:id/patient/conflicts` | divergências pendentes da ficha (PII; auditado) |
+| POST | `/api/cases/:id/patient/conflicts/:cid/resolve` | `{chosen: 'server'｜'client'}` — qualquer usuário autenticado; grava em `case_audit` |
 | GET/POST/PATCH | `/api/users…` | admin de usuários (perfil admin) |
 | POST | `/api/acionamentos` | **público** (tela Acionar GOA): grava o pedido e o bot do WhatsApp avisa; limite por IP/global |
 | GET | `/api/acionamentos` | histórico dos pedidos do site (autenticado) |
@@ -91,6 +95,22 @@ Ou pela API (autenticado como `admin`): `POST /api/users`, `GET /api/users`, `PA
 | POST/PATCH/DELETE | `/api/whatsapp/recipients…` | admin: plantonistas que recebem no privado |
 | DELETE | `/api/whatsapp/group` | admin: desvincula o grupo |
 | GET | `/api/health` | status + conexão ao banco |
+
+## Sincronização offline da ficha
+
+O app funciona sem rede e sobe tudo depois (caixa de saída no aparelho, ver
+`src/lib/outbox.js`). O servidor garante que nada é sobrescrito em silêncio:
+`case_patient.version` sobe a cada gravação; o aparelho manda a versão e os
+valores que via (`base`); `src/patient-merge.js` decide campo a campo. Disputa
+vai para `case_patient_conflict` e espera um usuário escolher. Os valores em
+disputa são PII: só saem pelas rotas `/patient…`; o poll (`/live`) leva só a
+contagem (`patientConflicts`).
+
+```bash
+node scripts/test-patient-merge.js     # unidade, sem banco
+# integração, contra API de desenvolvimento (nunca produção):
+BASE=http://127.0.0.1:PORTA TEST_USER=... TEST_PASS=... node scripts/test-ficha-offline.js
+```
 
 ## Operação (systemd)
 
