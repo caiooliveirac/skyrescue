@@ -10,6 +10,7 @@ import { startBot, notifyMission, echoMilestones, MILESTONES } from './telegram.
 import { sanitizePatient } from './patient-fields.js'
 import * as wa from './whatsapp.js'
 import { sugerirCriterios, iaDisponivel } from './ia.js'
+import { portalConfigurado, destinoPortal } from './portal.js'
 
 const app = express()
 app.set('trust proxy', 1) // atrás do nginx/Cloudflare
@@ -22,7 +23,11 @@ app.use(cookieParser())
 app.use(authMiddleware)
 
 const clientIp = (req) => (req.headers['x-forwarded-for']?.split(',')[0]?.trim()) || req.ip
-const publicUser = (u) => ({ id: u.id, username: u.username, full_name: u.full_name, role: u.role })
+// `portal`: o botão "Painel" aparece (usuário marcado e servidor com a chave)
+const publicUser = (u) => ({
+  id: u.id, username: u.username, full_name: u.full_name, role: u.role,
+  portal: Boolean(u.acesso_portal) && portalConfigurado(),
+})
 
 // ---------- health ----------
 app.get('/api/health', async (_req, res) => {
@@ -184,7 +189,7 @@ app.post('/api/auth/login', async (req, res) => {
   if (!username || !password) return res.status(400).json({ error: 'usuário e senha obrigatórios' })
   try {
     const { rows } = await query(
-      'SELECT id, username, full_name, role, active, password_hash FROM users WHERE lower(username) = lower($1)',
+      'SELECT id, username, full_name, role, active, acesso_portal, password_hash FROM users WHERE lower(username) = lower($1)',
       [String(username).trim()]
     )
     const u = rows[0]
@@ -209,6 +214,16 @@ app.post('/api/auth/logout', async (req, res) => {
 })
 
 app.get('/api/auth/me', requireAuth, (req, res) => res.json({ user: publicUser(req.user) }))
+
+// passagem para o portal mnrs.com.br (server/src/portal.js): navegação de
+// clique, não API — responde com 302 para o porteiro, que emite a sessão de lá
+app.get('/api/auth/portal', requireAuth, (req, res) => {
+  if (!portalConfigurado()) return res.status(404).json({ error: 'portal não configurado' })
+  if (!req.user.acesso_portal) return res.status(403).send('Seu usuário não tem acesso ao portal. Fale com a coordenação do GOA.')
+  console.log(`[portal] ${new Date().toISOString()} handoff ${JSON.stringify({ id: req.user.id, username: req.user.username })}`)
+  res.set('Cache-Control', 'no-store')
+  res.redirect(302, destinoPortal(req.user, String(req.query.proximo || '')))
+})
 
 // troca da própria senha
 app.post('/api/auth/password', requireAuth, async (req, res) => {
@@ -985,7 +1000,7 @@ app.delete('/api/samu-contacts/:id', requireStaff, async (req, res) => {
 // ---------- admin de usuários ----------
 app.get('/api/users', requireAdmin, async (_req, res) => {
   const { rows } = await query(
-    'SELECT id, username, full_name, role, active, created_at, last_login_at FROM users ORDER BY username'
+    'SELECT id, username, full_name, role, active, acesso_portal, created_at, last_login_at FROM users ORDER BY username'
   )
   res.json({ users: rows })
 })
@@ -1010,9 +1025,10 @@ app.post('/api/users', requireAdmin, async (req, res) => {
 })
 
 app.patch('/api/users/:id', requireAdmin, async (req, res) => {
-  const { active, role, password, full_name } = req.body || {}
+  const { active, role, password, full_name, acesso_portal } = req.body || {}
   const sets = [], vals = []
   if (active !== undefined) { vals.push(active); sets.push(`active = $${vals.length}`) }
+  if (typeof acesso_portal === 'boolean') { vals.push(acesso_portal); sets.push(`acesso_portal = $${vals.length}`) }
   if (role && ['admin', 'gestor', 'regulador', 'operador'].includes(role)) { vals.push(role); sets.push(`role = $${vals.length}`) }
   if (full_name !== undefined) { vals.push(full_name); sets.push(`full_name = $${vals.length}`) }
   if (password) {
@@ -1023,7 +1039,7 @@ app.patch('/api/users/:id', requireAdmin, async (req, res) => {
   vals.push(req.params.id)
   const { rows } = await query(
     `UPDATE users SET ${sets.join(', ')} WHERE id = $${vals.length}
-     RETURNING id, username, full_name, role, active`, vals
+     RETURNING id, username, full_name, role, active, acesso_portal`, vals
   )
   if (!rows[0]) return res.status(404).json({ error: 'usuário não encontrado' })
   if (active === false || password) // sessões deixam de valer ao desativar/trocar senha

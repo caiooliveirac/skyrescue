@@ -60,14 +60,14 @@ export async function authMiddleware(req, _res, next) {
   if (!token) return next()
   try {
     const { rows } = await query(
-      `SELECT u.id, u.username, u.full_name, u.role, u.active, s.expires_at
+      `SELECT u.id, u.username, u.full_name, u.role, u.active, u.acesso_portal, s.expires_at
          FROM sessions s JOIN users u ON u.id = s.user_id
         WHERE s.token_hash = $1`,
       [sha256(token)]
     )
     const s = rows[0]
     if (s && s.active && new Date(s.expires_at) > new Date()) {
-      req.user = { id: s.id, username: s.username, full_name: s.full_name, role: s.role }
+      req.user = { id: s.id, username: s.username, full_name: s.full_name, role: s.role, acesso_portal: s.acesso_portal }
     } else if (s) {
       await destroySession(token) // vencida ou usuário inativo
     }
