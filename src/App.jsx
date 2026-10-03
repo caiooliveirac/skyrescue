@@ -14,9 +14,11 @@ import { LzPhotoModal } from './components/LzPhotos.jsx'
 import Checklist from './components/Checklist.jsx'
 import PatientForm from './components/PatientForm.jsx'
 import Tracking, { MILESTONES, MilestoneQuick, Intercorrencias, ultimoMarco } from './components/Tracking.jsx'
-import { sendEvent, pendingEvents } from './lib/eventQueue.js'
+import * as outbox from './lib/outbox.js'
+import SyncBadge from './components/SyncBadge.jsx'
+import PatientConflicts from './components/PatientConflicts.jsx'
 import { makeDraftSaver, readDraft, draftWorthKeeping } from './lib/draft.js'
-import { ageFrom, emptyPatient, readPatient, savePatient, clearPatient, movePatient, migrateLegacyPatient, PATIENT_KEYS, patientWorthKeeping } from './lib/patient.js'
+import { ageFrom, emptyPatient, readPatient, readMirror, savePatient, clearPatient, movePatient, migrateLegacyPatient, PATIENT_KEYS, patientWorthKeeping } from './lib/patient.js'
 import ConfigModal from './components/ConfigModal.jsx'
 import SamuContactsModal from './components/SamuContacts.jsx'
 import PrintModal from './components/PrintModal.jsx'
@@ -78,7 +80,7 @@ const go = (v) => { location.hash = v }
 // nome da faixa meteo no aviso de mudança
 const WX_NOME = { ok: 'favorável', warn: 'marginal', fail: 'desfavorável', unknown: 'sem dado' }
 
-export default function App({ user, onLogout }) {
+export default function App({ user, onLogout, onRelogin }) {
   const [cfg, setCfg] = useState(loadCfg)
   const [showCfg, setShowCfg] = useState(false)
   const [showSamus, setShowSamus] = useState(false)
@@ -159,7 +161,20 @@ export default function App({ user, onLogout }) {
   const [wxChange, setWxChange] = useState(null) // {where, from, to, at, reasons} — meteo mudou de faixa após o acionamento
   const [cases, setCases] = useState([])
   const [casesErr, setCasesErr] = useState('')
-  const [dbId, setDbId] = useState(null) // id do caso no banco (null = ainda não salvo)
+  // id do caso no banco. null = ainda não salvo; 'tmp-…' = criado sem rede,
+  // esperando na caixa de saída (lib/outbox.js) o id de verdade
+  const [dbId, setDbId] = useState(null)
+  const dbIdRef = useRef(null)
+  useEffect(() => { dbIdRef.current = dbId }, [dbId])
+  const noServidor = dbId != null && !outbox.isTmp(dbId)
+  // estado da rede para a tela (o indicador da barra tem o detalhe)
+  const [, setRedeTick] = useState(0)
+  useEffect(() => outbox.subscribe(() => setRedeTick((n) => n + 1)), [])
+  const semRede = !outbox.status(user?.id).online
+  // sessão nova nesta tela: a caixa de saída reconfirma quem está logado
+  useEffect(() => { outbox.resetAuth(); outbox.flush() }, [user?.id])
+  // divergências pendentes da ficha do caso aberto (só a contagem viaja no poll)
+  const [conflitos, setConflitos] = useState(0)
   const [saving, setSaving] = useState(false)
   const [notifying, setNotifying] = useState(false)
   const [notifyMsg, setNotifyMsg] = useState(null) // {ok, text} do acionamento do grupo
@@ -623,7 +638,7 @@ export default function App({ user, onLogout }) {
   // foi acionada) — sem esperar o "Atualizar caso". Debounce: o input de hora
   // dispara onChange a cada tecla e mandaria "(corrigido)" repetido ao grupo.
   // Se estiver sem sinal (comum em voo), o horário entra numa fila local e é
-  // reenviado quando a conexão voltar — ver lib/eventQueue.js.
+  // reenviado quando a conexão voltar — ver lib/outbox.js.
   const evtTimersRef = useRef({})
   // marcar "Acionamento do GOA autorizado" ACIONA o grupo no servidor (o médico
   // não precisa clicar "Grupo da missão" também). A resposta diz se o bot
@@ -644,7 +659,9 @@ export default function App({ user, onLogout }) {
     // aceitaria a correção do horário feita em outra tela.
     evtTimersRef.current[id] = setTimeout(() => {
       delete evtTimersRef.current[id]
-      sendEvent(dbId, id, ts, onEventSaved)
+      // caixa de saída: sem sinal o horário fica no aparelho e sobe depois,
+      // com o carimbo original. A resposta chega por outbox.onResult.
+      outbox.sendEvent(user?.id, outbox.resolveId(dbId), id, ts)
     }, delay)
   }
   const markEvent = (id) => {
@@ -747,7 +764,7 @@ export default function App({ user, onLogout }) {
   const LIVE_MS = 5000
   const LIVE_MS_OCULTA = 30_000
   useEffect(() => {
-    if (dbId == null) return
+    if (dbId == null || outbox.isTmp(dbId)) return // caso só local: nada a consultar
     let alive = true
     let ultimo = 0
     const tick = async (forcar) => {
@@ -756,8 +773,10 @@ export default function App({ user, onLogout }) {
       ultimo = Date.now()
       try {
         const r = await api.liveCase(dbId, sinceRef.current)
+        outbox.netOk()
         if (!alive) return
         setMissionOpen(r.missionStatus || null)
+        setConflitos(r.patientConflicts || 0)
 
         // ---- ficha do paciente ----
         // No poll viaja só o carimbo de tempo (PII não entra numa resposta que
@@ -779,7 +798,7 @@ export default function App({ user, onLogout }) {
         // ---- marcos ----
         // um marco que esta tela acabou de tocar (POST em voo, fila offline ou
         // debounce aberto) é MAIS novo que o servidor — nunca sobrescrever
-        const pend = pendingEvents(dbId)
+        const pend = outbox.pendingEvents(dbId)
         const prevEv = eventsRef.current
         const chegaram = Object.entries(remoto.events || {}).filter(
           ([id, ts]) => ts && !pend.has(id) && !evtTimersRef.current[id] && prevEv[id] !== ts
@@ -819,7 +838,10 @@ export default function App({ user, onLogout }) {
           ultimoSalvoRef.current = assinaturaViva(remoto)
           setLiveMsg({ quais: chamou.join(' · '), by: r.updatedBy })
         }
-      } catch (e) { /* camada opcional: sem rede a tela segue com o que tem */ }
+      } catch (e) {
+        // sem rede a tela segue com o que tem; o indicador da barra avisa
+        if (!e?.status) outbox.netDown()
+      }
     }
     tick(true)
     const id = setInterval(tick, LIVE_MS)
@@ -915,6 +937,7 @@ export default function App({ user, onLogout }) {
   const lateRef = useRef({})
   const booted = useRef(false)
   const [restored, setRestored] = useState(null) // {at} do rascunho recuperado
+  const [bootTick, setBootTick] = useState(0)
 
   // ficha do paciente guardada para AQUELE caso, com o médico regulador
   // pré-preenchido com quem está logado (se a ficha ainda não disser outro)
@@ -925,28 +948,42 @@ export default function App({ user, onLogout }) {
   }
 
   useEffect(() => {
-    migrateLegacyPatient(user?.id) // ficha da v1 (sem caso) vira ficha do rascunho
-    const d = readDraft(user?.id)
-    if (d) {
-      // applySnapshot já traz a ficha do caso que está sendo restaurado
-      lateRef.current.applySnapshot?.(d.snapshot, d.dbId)
-      setRestored({ at: d.at })
-    } else {
-      setPatient(patientFor(null))
-    }
-    booted.current = true
+    let vivo = true
+    // a caixa de saída precisa estar lida antes: restaurar o caso consulta o
+    // que este aparelho ainda tem por enviar (para não pôr o servidor por cima)
+    outbox.ready.then(() => {
+      if (!vivo) return
+      migrateLegacyPatient(user?.id) // ficha da v1 (sem caso) vira ficha do rascunho
+      const d = readDraft(user?.id)
+      if (d) {
+        // applySnapshot já traz a ficha do caso que está sendo restaurado. O
+        // rascunho pode guardar o id provisório de um caso que já subiu.
+        lateRef.current.applySnapshot?.(d.snapshot, outbox.resolveId(d.dbId))
+        setRestored({ at: d.at })
+      } else {
+        setPatient(patientFor(null))
+      }
+      booted.current = true
+      setBootTick((n) => n + 1) // os autosaves esperavam o boot
+    })
+    return () => { vivo = false }
   }, [user?.id])
 
   // espelha a ficha no localStorage, na gaveta DO CASO aberto; grava na hora
   // que a aba some, igual ao rascunho. Isto é o espelho offline — a fonte da
   // verdade é o servidor (ver o autosave da ficha, mais abaixo). `dbId` entra
   // nas dependências: trocar de caso troca de gaveta.
+  // junto vai a base (como o servidor estava na última sincronização): é ela
+  // que, depois de horas sem rede, diz o que ESTE aparelho mudou
+  const basePatientRef = useRef(null)      // última ficha VINDA do servidor
+  const patientVersionRef = useRef(0)      // versão da ficha no servidor
+  const espelhar = () => savePatient(user?.id, dbId, patient, basePatientRef.current, patientVersionRef.current)
   useEffect(() => {
     if (!booted.current) return
-    savePatient(user?.id, dbId, patient)
+    espelhar()
   }, [patient, user?.id, dbId])
   useEffect(() => {
-    const flush = () => { if (booted.current) savePatient(user?.id, dbId, patient) }
+    const flush = () => { if (booted.current) espelhar() }
     const onHide = () => { if (document.visibilityState === 'hidden') flush() }
     document.addEventListener('visibilitychange', onHide)
     window.addEventListener('pagehide', flush)
@@ -961,8 +998,6 @@ export default function App({ user, onLogout }) {
   // estado vindo do servidor. Duas pessoas na mesma ocorrência escrevem em
   // campos diferentes da ficha (a médica a hipótese, a regulação os vitais) e
   // nenhuma pode apagar o campo da outra.
-  const basePatientRef = useRef(null)      // última ficha VINDA do servidor
-  const enviandoPatientRef = useRef(new Set()) // campos com PATCH nosso em voo
   // espelho do estado para o poll: o efeito que consulta o servidor é criado
   // uma vez por caso e enxergaria uma ficha velha se lesse a closure (mesmo
   // motivo do eventsRef, mais acima)
@@ -987,8 +1022,10 @@ export default function App({ user, onLogout }) {
   const puxarFicha = async (id) => {
     try {
       const r = await api.getPatient(id)
+      if (String(dbIdRef.current) !== String(id)) return null // a tela já está em outro caso
       const remoto = r.patient || null
       patientAtRef.current = r.updatedAt || null
+      patientVersionRef.current = r.version || 0
       if (!remoto) {
         // servidor ainda não tem ficha deste caso: o espelho local (se houver)
         // continua valendo e vira candidato a subir — ver `fichaSoLocal`
@@ -997,17 +1034,17 @@ export default function App({ user, onLogout }) {
       }
       const anterior = basePatientRef.current
       const atual = patientRef.current
+      const naFila = outbox.pendingPatient(id) // o que este aparelho ainda não entregou
       const base = { ...emptyPatient(), ...remoto }
       const novo = { ...atual }
       for (const k of PATIENT_KEYS) {
-        if (enviandoPatientRef.current.has(k)) continue // gravação nossa em voo
-        // edição local ainda não gravada vence e será enviada pelo autosave; a
-        // base fica com o valor LOCAL para não virar diferença fantasma, que
-        // reenviaria o campo a cada resposta do servidor
-        if (anterior && String(atual[k] ?? '') !== String(anterior[k] ?? '')) {
-          base[k] = atual[k] ?? ''
-          continue
-        }
+        // Campo que ESTE aparelho mudou e o servidor ainda não recebeu (na
+        // caixa de saída, ou digitado agora): o valor local fica na tela e a
+        // base continua sendo a de quando o aparelho divergiu — é ela que vai
+        // junto no envio e deixa o servidor ver se o outro lado também mudou.
+        // Pôr o valor do servidor por cima aqui era onde se perdia dado.
+        if (naFila && k in naFila.changes) { base[k] = naFila.base[k] ?? ''; continue }
+        if (anterior && String(atual[k] ?? '') !== String(anterior[k] ?? '')) { base[k] = anterior[k] ?? ''; continue }
         novo[k] = base[k] ?? ''
       }
       if (!novo.medico && user?.full_name) novo.medico = user.full_name
@@ -1027,45 +1064,19 @@ export default function App({ user, onLogout }) {
 
   // Sobe a ficha inteira de uma vez. Usado quando o caso acaba de nascer no
   // servidor e quando o usuário manda subir uma ficha que só existia local.
-  const subirFicha = async (id, p) => {
+  // Vai pela caixa de saída, com base vazia: se nesse meio-tempo alguém criou
+  // a ficha no servidor, o que conflitar vira divergência em vez de sobrescrever.
+  const subirFicha = (id, p) => {
     const campos = {}
     for (const k of PATIENT_KEYS) if (String(p?.[k] || '').trim() !== '') campos[k] = p[k]
-    if (!Object.keys(campos).length) return
-    const r = await api.patchPatient(id, campos, clientIdRef.current)
-    basePatientRef.current = { ...emptyPatient(), ...campos }
-    patientAtRef.current = r?.updatedAt || patientAtRef.current
     setFichaPendente(false)
-    setPatientSync({ at: Date.now() })
+    if (!Object.keys(campos).length) return
+    outbox.setPatientPatch(user?.id, id, campos, {}, 0, clientIdRef.current)
   }
 
-  // Reenvio depois de falha. Sem isto, a gravação só seria retentada na tecla
-  // SEGUINTE — e o caso típico a bordo é justamente digitar, perder o sinal e
-  // parar de digitar: o texto ficaria só no tablet, que é exatamente o defeito
-  // que esta mudança existe para eliminar. Volta a tentar sozinho, e na hora em
-  // que o sistema avisa que a rede voltou.
-  const [retryFicha, setRetryFicha] = useState(0)
-  const retryFichaRef = useRef(null)
-  const reagendarFicha = () => {
-    if (retryFichaRef.current) return // já há uma tentativa marcada
-    retryFichaRef.current = setTimeout(() => {
-      retryFichaRef.current = null
-      setRetryFicha((n) => n + 1)
-    }, 15000)
-  }
-  useEffect(() => {
-    const agora = () => {
-      clearTimeout(retryFichaRef.current); retryFichaRef.current = null
-      setRetryFicha((n) => n + 1)
-    }
-    window.addEventListener('online', agora)
-    return () => {
-      window.removeEventListener('online', agora)
-      clearTimeout(retryFichaRef.current); retryFichaRef.current = null
-    }
-  }, [])
-
-  // gravação automática da ficha: 1,5 s depois da última tecla, só os campos
-  // alterados em relação ao servidor
+  // gravação automática da ficha: 1,5 s depois da última tecla, a diferença
+  // entre a tela e a base vai para a caixa de saída — que envia na hora se há
+  // rede e segura (e reenvia sozinha) se não há. Só os campos alterados.
   const patientSig = JSON.stringify(PATIENT_KEYS.map((k) => patient?.[k] ?? ''))
   useEffect(() => {
     if (dbId == null || !booted.current) return
@@ -1077,41 +1088,60 @@ export default function App({ user, onLogout }) {
     for (const k of PATIENT_KEYS) {
       if (String(patient[k] ?? '') !== String(base[k] ?? '')) alterados[k] = patient[k] ?? ''
     }
-    if (!Object.keys(alterados).length) return
-    const t = setTimeout(async () => {
-      const emVoo = Object.keys(alterados)
-      emVoo.forEach((k) => enviandoPatientRef.current.add(k))
-      try {
-        const r = await api.patchPatient(dbId, alterados, clientIdRef.current)
-        basePatientRef.current = { ...(basePatientRef.current || emptyPatient()), ...alterados }
-        patientAtRef.current = r?.updatedAt || patientAtRef.current
-        setPatientSync({ at: Date.now() })
-      } catch (e) {
-        // o espelho local já guardou; volta a tentar sozinho, sem depender de
-        // a pessoa digitar de novo
-        setPatientSync({ err: e.message || String(e) })
-        reagendarFicha()
-      } finally {
-        emVoo.forEach((k) => enviandoPatientRef.current.delete(k))
-      }
+    // médico pré-preenchido sozinho não cria ficha de ninguém (ver patientWorthKeeping)
+    if (!basePatientRef.current && !patientWorthKeeping(patient)) return
+    const id = dbId
+    const t = setTimeout(() => {
+      outbox.setPatientPatch(user?.id, id, alterados, base, patientVersionRef.current, clientIdRef.current)
     }, 1500)
     return () => clearTimeout(t)
-  }, [patientSig, dbId, fichaPendente, retryFicha])
+  }, [patientSig, dbId, fichaPendente, bootTick])
+
+  // Respostas da caixa de saída. Chegam a qualquer hora (inclusive de itens de
+  // uma sessão anterior), por isso tudo aqui lê refs, não o estado do render.
+  useEffect(() => outbox.onResult((ev) => {
+    const aberto = dbIdRef.current
+    if (ev.type === 'case.create') {
+      refreshCases()
+      if (aberto !== ev.tmpId) return
+      // o caso criado sem rede ganhou id de verdade: a tela passa a ser dele
+      const snap = { ...ev.snapshot, id: ev.case_ref || ev.snapshot.id }
+      if (ev.case_ref) setCaseId(ev.case_ref)
+      sinceRef.current = null
+      baseRef.current = snap
+      ultimoSalvoRef.current = assinaturaViva(snap)
+      setAutoSave({ at: Date.now() })
+      setDbId(ev.id)
+    } else if (ev.type === 'patient.patch') {
+      if (String(aberto) !== String(ev.caseId)) return // o espelho já foi atualizado pela caixa
+      basePatientRef.current = { ...(basePatientRef.current || emptyPatient()), ...ev.fields }
+      patientVersionRef.current = ev.version
+      patientAtRef.current = ev.updatedAt || patientAtRef.current
+      // campo em disputa: a tela volta a mostrar o valor do servidor (o deste
+      // aparelho ficou guardado na divergência) — a não ser que a pessoa já
+      // tenha digitado outra coisa depois do envio
+      setPatient((p) => {
+        const n = { ...p }
+        for (const k of Object.keys(ev.fields)) {
+          if (String(p[k] ?? '') === String(ev.sent[k] ?? '')) n[k] = ev.fields[k]
+        }
+        return n
+      })
+      setFichaPendente(false)
+      setConflitos(ev.pendingConflicts)
+      setPatientSync({ at: Date.now() })
+    } else if (ev.type === 'event.save') {
+      if (String(aberto) === String(ev.caseId)) onEventSaved(ev.result)
+    }
+  }), [])
 
   const fichaSoLocal = fichaPendente && patientWorthKeeping(patient)
-  const [enviandoFicha, setEnviandoFicha] = useState(false)
+  const enviandoFicha = false
   // Subir é ATO EXPLÍCITO, nunca automático: estas fichas foram digitadas sob
   // um aviso na tela de que nunca sairiam do navegador. Quem escreveu decide.
-  const enviarFichaLocal = async () => {
-    if (dbId == null || enviandoFicha) return
-    setEnviandoFicha(true)
-    try {
-      await subirFicha(dbId, patient)
-    } catch (e) {
-      setPatientSync({ err: e.message || String(e) })
-    } finally {
-      setEnviandoFicha(false)
-    }
+  const enviarFichaLocal = () => {
+    if (dbId == null) return
+    subirFicha(dbId, patient)
   }
 
   // assinatura do que compõe o caso: muda => reagenda a gravação do rascunho
@@ -1142,6 +1172,13 @@ export default function App({ user, onLogout }) {
     const sig = assinaturaViva(snap)
     if (sig === ultimoSalvoRef.current) return
     const t = setTimeout(async () => {
+      // caso criado sem rede e ainda na caixa de saída: o que sobe é o estado
+      // mais novo. Se a criação já está em voo, a diferença sobe pelo caminho
+      // normal assim que o id de verdade chegar (este efeito roda de novo).
+      if (outbox.isTmp(dbId)) {
+        if (outbox.updateCaseCreate(dbId, snap)) { ultimoSalvoRef.current = sig; baseRef.current = snap }
+        return
+      }
       const base = baseRef.current || {}
       // só o que ESTA tela mudou em relação ao que o servidor tem. Mandar o
       // snapshot inteiro apagaria o campo que a outra tela acabou de escrever.
@@ -1172,7 +1209,8 @@ export default function App({ user, onLogout }) {
       }
     }, 1500)
     return () => clearTimeout(t)
-  }, [draftSig, dbId])
+    // semRede: a gravação que falhou sem rede é refeita quando ela volta
+  }, [draftSig, dbId, semRede, bootTick])
 
   // grava no servidor (Postgres). dbId != null => atualiza o mesmo caso.
   const saveCase = async () => {
@@ -1181,16 +1219,29 @@ export default function App({ user, onLogout }) {
     setSaveErr('')
     const snap = snapshot()
     try {
-      if (dbId != null) {
+      if (outbox.isTmp(dbId)) {
+        // ainda na caixa de saída: atualiza o que vai subir
+        outbox.updateCaseCreate(dbId, snap)
+      } else if (dbId != null) {
         await api.updateCase(dbId, snap, { clientId: clientIdRef.current })
       } else {
-        const { id, case_ref } = await api.createCase(snap, clientIdRef.current)
+        // Sem rede o caso nasce no aparelho, com id provisório, e sobe pela
+        // caixa de saída. O mesmo opId vale para as duas vias: se o POST chegou
+        // ao servidor e só a resposta se perdeu, o reenvio devolve o mesmo caso.
+        const opId = outbox.newOpId()
+        let id, case_ref
+        try {
+          ({ id, case_ref } = await api.createCase(snap, clientIdRef.current, opId))
+        } catch (e) {
+          if (!outbox.transient(e)) throw e
+          id = outbox.enqueueCaseCreate(user?.id, snap, opId, clientIdRef.current)
+        }
         if (case_ref) { snap.id = case_ref; setCaseId(case_ref) }
         // a ficha digitada antes do caso existir no servidor vai junto: no
         // espelho local (muda de gaveta) e no servidor, que passa a ser a
         // fonte da verdade dela a partir daqui
         movePatient(user?.id, null, id)
-        await subirFicha(id, patient).catch((e) => console.warn('ficha não subiu:', e?.message || e))
+        subirFicha(id, patient)
         setDbId(id)
       }
       // a base absorve o que gravamos (o poll não reaplica isto como novidade).
@@ -1201,7 +1252,7 @@ export default function App({ user, onLogout }) {
       ultimoSalvoRef.current = assinaturaViva(snap)
       baseRef.current = snap
       setAutoSave({ at: Date.now() })
-      await refreshCases()
+      refreshCases()
       setSaveFlash(true)
       setTimeout(() => setSaveFlash(false), 4000)
     } catch (e) {
@@ -1215,6 +1266,10 @@ export default function App({ user, onLogout }) {
   // Salva/atualiza antes: o bot lê o snapshot do servidor.
   const notifyGroup = async () => {
     if (notifying || saving) return
+    if (outbox.isTmp(dbId)) {
+      setNotifyMsg({ ok: false, text: 'Sem rede: o grupo só pode ser acionado depois que o caso subir ao servidor.' })
+      return
+    }
     setNotifying(true)
     setNotifyMsg(null)
     try {
@@ -1223,11 +1278,11 @@ export default function App({ user, onLogout }) {
       if (id != null) {
         await api.updateCase(id, snap, { clientId: clientIdRef.current })
       } else {
-        const r = await api.createCase(snap, clientIdRef.current)
+        const r = await api.createCase(snap, clientIdRef.current, outbox.newOpId())
         id = r.id
         if (r.case_ref) { snap.id = r.case_ref; setCaseId(r.case_ref) }
         movePatient(user?.id, null, id) // ver saveCase
-        await subirFicha(id, patient).catch((e) => console.warn('ficha não subiu:', e?.message || e))
+        subirFicha(id, patient)
         setDbId(id)
         await refreshCases()
       }
@@ -1276,14 +1331,31 @@ export default function App({ user, onLogout }) {
     // abre em branco — nunca com o paciente do caso anterior.
     const fichaLocal = patientFor(id ?? null)
     setPatient(fichaLocal)
-    basePatientRef.current = null
+    // o espelho traz também a base e a versão da última sincronização deste
+    // aparelho: sem rede, é contra elas que se mede o que foi mudado aqui
+    const espelho = readMirror(user?.id, id ?? null)
+    const antigo = !espelho || espelho.legacy
+    basePatientRef.current = antigo ? null : espelho.base
+    patientVersionRef.current = antigo ? 0 : espelho.version
+    // espelho perdido (faxina do navegador) com envio ainda na caixa de saída:
+    // a tela é refeita a partir do que está na fila, senão o próximo autosave
+    // trocaria o envio pendente por "nada mudou"
+    const naFila = id != null ? outbox.pendingPatient(id) : null
+    if (!espelho && naFila) {
+      Object.assign(fichaLocal, naFila.changes)
+      basePatientRef.current = { ...emptyPatient(), ...naFila.base }
+      setPatient({ ...fichaLocal })
+    }
     patientAtRef.current = null
-    enviandoPatientRef.current.clear()
+    dbIdRef.current = id ?? null // puxarFicha confere antes do próximo render
     setPatientSync(null)
-    // retém o que veio do espelho até o servidor responder: se ele já tem
-    // ficha, ela vence; se não tem, subir é decisão do usuário
-    setFichaPendente(id != null && patientWorthKeeping(fichaLocal))
-    if (id != null) puxarFicha(id)
+    setConflitos(0)
+    // Espelho ANTIGO (anterior à gravação no servidor) fica retido até o
+    // servidor responder: se ele já tem ficha, ela vence; se não tem, subir é
+    // decisão do usuário. Espelho novo não precisa disso — sobe só a diferença.
+    const noServ = id != null && !outbox.isTmp(id)
+    setFichaPendente(noServ && Boolean(espelho?.legacy) && patientWorthKeeping(fichaLocal))
+    if (noServ) puxarFicha(id)
     setSaveFlash(false); setSaveErr('')
   }
 
@@ -1311,7 +1383,10 @@ export default function App({ user, onLogout }) {
   }
 
   const doLogout = async () => {
+    const { pending } = outbox.status(user?.id)
+    if (pending && !confirm(`Há ${pending} item(ns) guardado(s) neste aparelho que ainda não subiram ao servidor. Eles ficam aqui e sobem quando você entrar de novo. Sair assim mesmo?`)) return
     try { await api.logout() } catch (e) { /* segue mesmo assim */ }
+    outbox.resetAuth()
     onLogout?.()
   }
 
@@ -1365,8 +1440,8 @@ export default function App({ user, onLogout }) {
     // continuam nas gavetas deles (e no servidor)
     clearPatient(user?.id, null)
     setPatient(patientFor(null))
-    basePatientRef.current = null; patientAtRef.current = null
-    enviandoPatientRef.current.clear(); setPatientSync(null); setFichaPendente(false)
+    basePatientRef.current = null; patientAtRef.current = null; patientVersionRef.current = 0
+    setPatientSync(null); setFichaPendente(false); setConflitos(0)
     setDbId(null); setSaveFlash(false); setSaveErr('')
     setMissionOpen(null); setNotifyMsg(null)
     sinceRef.current = null; baseRef.current = null; ultimoSalvoRef.current = null
@@ -1412,6 +1487,7 @@ export default function App({ user, onLogout }) {
             <IconLayers size={14} /> <span className="tlabel">Portal</span>
           </button>
         )}
+        <SyncBadge userId={user?.id} onRelogin={onRelogin} />
         {user && <span className="who" title={user.role}>{user.full_name || user.username}</span>}
         <button className="tbtn" onClick={doLogout} title="Encerrar sessão"><IconX size={14} /> <span className="tlabel">Sair</span></button>
       </div>
@@ -1420,11 +1496,20 @@ export default function App({ user, onLogout }) {
           card "Pontuação de elegibilidade", e a faixa custava uma tela inteira */}
       {wide && <DecisionStrip scene={scene} score={score} gates={gates} rec={rec} onCopy={copyResumo} tag={tagFull} />}
 
+      {semRede && (
+        <div className="notice">
+          <b>Sem conexão com o servidor.</b> Mapa, meteorologia, rotas e a lista de casos ficam indisponíveis.
+          O caso, a ficha do paciente e os horários continuam funcionando: ficam guardados neste aparelho e
+          sobem sozinhos quando a rede voltar.
+        </div>
+      )}
+
       {restored && (
         <div className="notice notice-draft">
           <b>Rascunho recuperado</b> — o caso voltou como estava às{' '}
           {new Date(restored.at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}.
-          {dbId != null ? ' Já existe no servidor; use "Atualizar caso" para gravar as mudanças.' : ' Ainda não foi gravado no servidor.'}
+          {noServidor ? ' Já existe no servidor; use "Atualizar caso" para gravar as mudanças.'
+            : dbId != null ? ' Foi criado sem rede e sobe sozinho quando ela voltar.' : ' Ainda não foi gravado no servidor.'}
           <button className="tbtn" onClick={discardDraft} style={{ marginLeft: 10 }}>Descartar e começar novo</button>
         </div>
       )}
@@ -1548,6 +1633,8 @@ export default function App({ user, onLogout }) {
           <PatientForm
             patient={patient} onChange={updatePatient}
             sync={patientSync} soLocal={fichaSoLocal} enviando={enviandoFicha}
+            aviso={noServidor && <PatientConflicts caseId={dbId} count={conflitos}
+              onResolved={(n) => { setConflitos(n); puxarFicha(dbId) }} />}
             onEnviar={enviarFichaLocal} faltam={faltamPaciente} />
           )}
 
@@ -1811,8 +1898,9 @@ export default function App({ user, onLogout }) {
             <div className="card">
               <h2>
                 <IconSave size={14} /> Registro
-                <span className={'badge ' + (dbId != null && !autoSave?.err ? 'ok' : autoSave?.err ? 'fail' : '')} style={{ marginLeft: 'auto' }}>
+                <span className={'badge ' + (!noServidor && dbId != null ? 'warn' : dbId != null && !autoSave?.err ? 'ok' : autoSave?.err ? 'fail' : '')} style={{ marginLeft: 'auto' }}>
                   {dbId == null ? 'Não salvo'
+                    : !noServidor ? 'Guardado no aparelho · sobe quando houver rede'
                     : autoSave?.err ? `Caso #${dbId} · sem gravar`
                     : `Caso #${dbId} · salvo ${autoSave?.at ? fmtClock(autoSave.at) : 'automaticamente'}`}
                 </span>
@@ -1841,7 +1929,9 @@ export default function App({ user, onLogout }) {
               {saveFlash && (
                 <div className="alert ok" style={{ marginTop: 10, marginBottom: 0 }}>
                   <IconSave size={15} style={{ flex: 'none', marginTop: 1 }} />
-                  Caso gravado no servidor. Aparece na lista <b>Casos ({cases.length})</b> — abra para revê-lo depois.{' '}
+                  {noServidor
+                    ? <>Caso gravado no servidor. Aparece na lista <b>Casos ({cases.length})</b> — abra para revê-lo depois.{' '}</>
+                    : <>Sem rede: o caso ficou <b>guardado neste aparelho</b> e sobe sozinho quando a conexão voltar. Pode seguir preenchendo a ficha e marcando os horários.{' '}</>}
                   <button className="btn xs sec" style={{ marginLeft: 4 }} onClick={newCase}><IconPlus size={12} /> Iniciar novo caso</button>
                 </div>
               )}
@@ -1881,7 +1971,7 @@ export default function App({ user, onLogout }) {
         <b>SkyRescue β</b> — ferramenta de apoio à decisão em fase piloto. Não substitui o julgamento do médico regulador, os protocolos do SAMU 192 / SESAB, nem a decisão final do comandante da aeronave (GOA/CBMBA). Meteorologia (Open-Meteo) e áreas de pouso (OpenStreetMap) são indicativas e exigem confirmação operacional. Rotas terrestres via OSRM, sem trânsito em tempo real. Os casos são registrados no servidor do GOA com controle de acesso e autoria. Dados pessoais de paciente só na <b>Ficha do paciente</b>, que é restrita à equipe autorizada e tem todo acesso registrado — fora dela (identificador do caso, observações) não escreva dado identificável.
       </div>
 
-      {showPrint && <PrintModal conteudo={printData()} meta={{ caseId, refMs, refFrozen: refAt != null }} onClose={() => setShowPrint(false)} />}
+      {showPrint && <PrintModal conteudo={printData()} meta={{ caseId, refMs, refFrozen: refAt != null, divergencias: conflitos }} onClose={() => setShowPrint(false)} />}
       {showSamus && <SamuContactsModal user={user} onClose={() => setShowSamus(false)} />}
       {showCfg && <ConfigModal cfg={cfg} user={user} onClose={() => setShowCfg(false)} onSave={(c) => { setCfg(c); saveCfg(c); setShowCfg(false) }} />}
 

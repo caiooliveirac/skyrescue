@@ -44,6 +44,7 @@ jobs:
       - name: Smoke test do bundle
         run: |
           test -f dist/index.html
+          test -f dist/sw.js                          # service worker (app abre sem rede)
           grep -q "SkyRescue" dist/index.html
           grep -q "Hospital do Sub" dist/index.html   # dados de hospitais embutidos
           size=$(wc -c < dist/index.html)
@@ -56,7 +57,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: dist
-          path: dist/index.html
+          path: |
+            dist/index.html
+            dist/sw.js
           retention-days: 7
 
   deploy:
@@ -119,11 +122,16 @@ jobs:
         run: |
           # WEBROOT pertence ao root: sobe para o home e instala com sudo
           # (--chmod/install -m 644: o www-data do nginx precisa ler o arquivo)
+          # sw.js vai junto: é o service worker que faz o app abrir sem rede
+          # (não dá para embutir no index.html — o navegador exige arquivo próprio)
           rsync -az --chmod=F644 \
             -e "ssh -o StrictHostKeyChecking=accept-new -i ~/.ssh/id_ed25519" \
             dist/index.html ${{ env.REMOTE }}:/tmp/skyrescue-index.html
+          rsync -az --chmod=F644 \
+            -e "ssh -o StrictHostKeyChecking=accept-new -i ~/.ssh/id_ed25519" \
+            dist/sw.js ${{ env.REMOTE }}:/tmp/skyrescue-sw.js
           ssh -i ~/.ssh/id_ed25519 ${{ env.REMOTE }} \
-            "sudo -n install -m 644 -o root -g root /tmp/skyrescue-index.html ${{ env.WEBROOT }}/index.html && rm -f /tmp/skyrescue-index.html"
+            "sudo -n install -m 644 -o root -g root /tmp/skyrescue-sw.js ${{ env.WEBROOT }}/sw.js && sudo -n install -m 644 -o root -g root /tmp/skyrescue-index.html ${{ env.WEBROOT }}/index.html && rm -f /tmp/skyrescue-index.html /tmp/skyrescue-sw.js"
 
       - name: Healthcheck (com auto-rollback)
         run: |

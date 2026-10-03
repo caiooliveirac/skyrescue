@@ -26,14 +26,20 @@ export function mergePatient({ server = {}, serverVersion = 0, base, baseVersion
     const c = norm(v)
     const s = norm(server[k])
     if (c === s) continue
-    if (legado || mesmaVersao) { data[k] = c; applied.push(k); continue }
-    // base desconhecida para o campo: não dá para provar que o servidor não
-    // mudou, então só entra direto se o servidor estiver vazio
-    const temBase = base != null && Object.prototype.hasOwnProperty.call(base, k)
-    const b = temBase ? norm(base[k]) : ''
-    if (s === b) { data[k] = c; applied.push(k); continue }
-    if (temBase && c === b) continue
-    conflicts.push({ field: k, server_value: s, client_value: c, base_value: temBase ? b : null })
+    const aplica = () => { data[k] = c; applied.push(k) }
+    if (legado) { aplica(); continue }
+    if (base != null && Object.prototype.hasOwnProperty.call(base, k)) {
+      // a base do CAMPO manda, mesmo com a versão em dia: a versão que o
+      // aparelho conhece pode ser mais nova que a base que ele tem do campo
+      const b = norm(base[k])
+      if (s === b) aplica()
+      else if (c !== b) conflicts.push({ field: k, server_value: s, client_value: c, base_value: b })
+      continue
+    }
+    // sem base para o campo: só a versão em dia (ou servidor vazio) prova que
+    // não há nada do outro lado para sobrescrever
+    if (mesmaVersao || s === '') aplica()
+    else conflicts.push({ field: k, server_value: s, client_value: c, base_value: null })
   }
   return { data, applied, conflicts }
 }
