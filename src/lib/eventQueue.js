@@ -43,7 +43,7 @@ export async function flush() {
     let q = load()
     while (q.length) {
       const it = q[0]
-      try { await api.saveEvent(it.caseId, it.event, it.ts) } catch { break }
+      try { await api.saveEvent(it.caseId, it.event, it.ts, it.nota) } catch { break }
       q = q.slice(1)
       save(q)
     }
@@ -59,11 +59,11 @@ export async function flush() {
 // app fica sabendo que o marco do acionamento abriu o grupo da missão. Pelo
 // caminho da fila não há retorno (outra sessão, talvez outro dia): o servidor
 // aciona o grupo do mesmo jeito, o app só descobre ao reabrir o caso.
-export function sendEvent(caseId, event, ts, onResult) {
+export function sendEvent(caseId, event, ts, onResult, nota) {
   const q = load()
   const rest = q.filter((it) => !(it.caseId === caseId && it.event === event))
   if (q.length) {
-    save([...rest, { caseId, event, ts }])
+    save([...rest, { caseId, event, ts, nota }])
     flush()
     return
   }
@@ -71,9 +71,9 @@ export function sendEvent(caseId, event, ts, onResult) {
   // é confundido com falha de rede e não reenfileira um horário já gravado
   const k = key(caseId, event)
   inflight.add(k)
-  api.saveEvent(caseId, event, ts).then(
+  api.saveEvent(caseId, event, ts, nota).then(
     (r) => { inflight.delete(k); onResult?.(r) },
-    () => { inflight.delete(k); save([...rest, { caseId, event, ts }]); schedule() }
+    () => { inflight.delete(k); save([...rest, { caseId, event, ts, nota }]); schedule() }
   )
 }
 

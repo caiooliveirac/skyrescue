@@ -1,3 +1,4 @@
+import crypto from 'node:crypto'
 import express from 'express'
 import cookieParser from 'cookie-parser'
 import { query, pool } from './db.js'
@@ -72,53 +73,107 @@ function rateLimitAcionamento(req, res, next) {
 const str = (v, max) => (v == null ? '' : String(v)).trim().slice(0, max)
 const CENTRAIS_OK = /^[\wÀ-ÿ .'-]{2,40}$/
 
+// Lê e valida o corpo. O LOCAL é o mínimo: com ele o primeiro aviso já sai.
+// `completo` exige também quem pede e o que é (a passagem do caso).
+function lerAcionamento(b, completo) {
+  const v = {
+    central: str(b.central, 40), medico: str(b.medico, 120), fone: str(b.fone, 30),
+    tipo: str(b.tipo, 40), detalhe: str(b.detalhe, 300), localTxt: str(b.local, 300),
+    pinLabel: str(b.pinLabel, 300), pacNome: str(b.pacienteNome, 120), pacIdade: str(b.pacienteIdade, 40),
+    lat: null, lon: null,
+  }
+  if (!v.localTxt) return { error: 'local da ocorrência obrigatório' }
+  if (b.lat != null || b.lon != null) {
+    v.lat = Number(b.lat); v.lon = Number(b.lon)
+    if (!Number.isFinite(v.lat) || !Number.isFinite(v.lon) || Math.abs(v.lat) > 90 || Math.abs(v.lon) > 180)
+      return { error: 'coordenadas inválidas' }
+  }
+  if (completo) {
+    if (!CENTRAIS_OK.test(v.central)) return { error: 'central inválida' }
+    if (v.medico.length < 2) return { error: 'nome do médico obrigatório' }
+    if (v.fone.replace(/\D/g, '').length < 10) return { error: 'telefone de contato inválido' }
+    if (!v.tipo) return { error: 'tipo de ocorrência obrigatório' }
+  }
+  return { v }
+}
+
+// o aviso é a razão de ser da rota: espera por ele, mas com teto — o médico
+// da rua não pode ficar olhando um spinner por causa do WhatsApp
+async function avisarAcionamento(row, opts) {
+  let r
+  try {
+    r = await Promise.race([
+      wa.notifyAcionamento(row, opts),
+      new Promise((resolve) => setTimeout(() => resolve({ status: 'pendente', detail: {} }), 25_000).unref?.()),
+    ])
+  } catch (e) {
+    console.error('acionamento: aviso whatsapp:', e.message)
+    r = { status: 'falhou', detail: { erro: e.message } }
+  }
+  const privados = Object.entries(r.detail).filter(([k]) => k !== 'group' && k !== 'motivo' && k !== 'erro')
+  return {
+    id: row.id,
+    apelido: wa.apelido(row),
+    createdAt: row.created_at,
+    whatsapp: r.status,   // 'ok' | 'parcial' | 'falhou' | 'desconectado' | 'desligado' | 'pendente'
+    grupo: r.detail.group ?? null,
+    privados: { ok: privados.filter(([, x]) => x).length, total: privados.length },
+  }
+}
+
+// Etapa 1 (ou pedido já completo, quando a etapa 1 não conseguiu sair): grava
+// e avisa. Sem `tipo` no corpo é o primeiro aviso, só com o endereço.
 app.post('/api/acionamentos', rateLimitAcionamento, async (req, res) => {
   const b = req.body || {}
-  const central = str(b.central, 40), medico = str(b.medico, 120), fone = str(b.fone, 30)
-  const tipo = str(b.tipo, 40), detalhe = str(b.detalhe, 300), localTxt = str(b.local, 300)
-  const pinLabel = str(b.pinLabel, 300)
-  if (!CENTRAIS_OK.test(central)) return res.status(400).json({ error: 'central inválida' })
-  if (medico.length < 2) return res.status(400).json({ error: 'nome do médico obrigatório' })
-  if (fone.replace(/\D/g, '').length < 10) return res.status(400).json({ error: 'telefone de contato inválido' })
-  if (!tipo) return res.status(400).json({ error: 'tipo de ocorrência obrigatório' })
-  if (!localTxt) return res.status(400).json({ error: 'local da ocorrência obrigatório' })
-  let lat = null, lon = null
-  if (b.lat != null || b.lon != null) {
-    lat = Number(b.lat); lon = Number(b.lon)
-    if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180)
-      return res.status(400).json({ error: 'coordenadas inválidas' })
-  }
+  const completo = !!str(b.tipo, 40)
+  const { v, error } = lerAcionamento(b, completo)
+  if (error) return res.status(400).json({ error })
   try {
+    const token = crypto.randomBytes(18).toString('base64url')
     const { rows } = await query(
-      `INSERT INTO acionamento (central, medico, fone, tipo, detalhe, local_txt, lat, lon, pin_label, ip)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
-      [central, medico, fone, tipo, detalhe || null, localTxt, lat, lon, pinLabel || null, clientIp(req)]
+      `INSERT INTO acionamento (central, medico, fone, tipo, detalhe, local_txt, lat, lon, pin_label, ip,
+                                token, paciente_nome, paciente_idade, completo_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, CASE WHEN $14 THEN now() END) RETURNING *`,
+      [v.central || null, v.medico || null, v.fone || null, v.tipo || null, v.detalhe || null, v.localTxt,
+        v.lat, v.lon, v.pinLabel || null, clientIp(req), token, v.pacNome || null, v.pacIdade || null, completo]
     )
-    const row = rows[0]
-    // o aviso é a razão de ser da rota: espera por ele, mas com teto — o
-    // médico da rua não pode ficar olhando um spinner por causa do WhatsApp
-    let r
-    try {
-      r = await Promise.race([
-        wa.notifyAcionamento(row),
-        new Promise((resolve) => setTimeout(() => resolve({ status: 'pendente', detail: {} }), 25_000).unref?.()),
-      ])
-    } catch (e) {
-      console.error('acionamento: aviso whatsapp:', e.message)
-      r = { status: 'falhou', detail: { erro: e.message } }
-    }
-    const grupo = r.detail.group ?? null
-    const privados = Object.entries(r.detail).filter(([k]) => k !== 'group' && k !== 'motivo' && k !== 'erro')
-    res.status(201).json({
-      id: row.id,
-      createdAt: row.created_at,
-      whatsapp: r.status,   // 'ok' | 'parcial' | 'falhou' | 'desconectado' | 'desligado' | 'pendente'
-      grupo,
-      privados: { ok: privados.filter(([, v]) => v).length, total: privados.length },
-    })
+    res.status(201).json({ ...(await avisarAcionamento(rows[0])), token })
   } catch (e) {
     console.error('acionamento:', e)
     res.status(500).json({ error: 'erro ao registrar o acionamento' })
+  }
+})
+
+// Etapa 2: a passagem completa do caso, por quem abriu o pedido (token da
+// etapa 1). Endereço diferente do primeiro aviso vai destacado na mensagem.
+// Rota pública ⇒ janela de 6 h e teto de revisões por pedido.
+const perto = (a, b) => a != null && b != null && Math.abs(a - b) < 1e-4
+app.patch('/api/acionamentos/:id', async (req, res) => {
+  const b = req.body || {}
+  const { v, error } = lerAcionamento(b, true)
+  if (error) return res.status(400).json({ error })
+  try {
+    const prev = (await query(
+      `SELECT * FROM acionamento WHERE id = $1 AND created_at > now() - interval '6 hours'`,
+      [Number(req.params.id) || 0]
+    )).rows[0]
+    if (!prev || !prev.token || prev.token !== str(b.token, 60)) return res.status(404).json({ error: 'acionamento não encontrado' })
+    if (prev.revisoes >= 5) return res.status(429).json({ error: 'muitas alterações neste acionamento — ligue para a regulação' })
+    const mudou = prev.local_txt !== v.localTxt ||
+      ((prev.lat != null || v.lat != null) && !(perto(prev.lat, v.lat) && perto(prev.lon, v.lon)))
+    const { rows } = await query(
+      `UPDATE acionamento SET central=$2, medico=$3, fone=$4, tipo=$5, detalhe=$6, local_txt=$7, lat=$8, lon=$9,
+              pin_label=$10, paciente_nome=$11, paciente_idade=$12, local_anterior=$13,
+              completo_at=now(), revisoes=revisoes+1
+        WHERE id=$1 RETURNING *`,
+      [prev.id, v.central, v.medico, v.fone, v.tipo, v.detalhe || null, v.localTxt, v.lat, v.lon,
+        v.pinLabel || null, v.pacNome || null, v.pacIdade || null,
+        mudou ? [prev.local_txt, prev.pin_label].filter(Boolean).join(' — ') : null]
+    )
+    res.json({ ...(await avisarAcionamento(rows[0], { segundo: true })), enderecoAlterado: mudou })
+  } catch (e) {
+    console.error('acionamento (passagem):', e)
+    res.status(500).json({ error: 'erro ao registrar a passagem do caso' })
   }
 })
 
@@ -126,7 +181,7 @@ app.post('/api/acionamentos', rateLimitAcionamento, async (req, res) => {
 app.get('/api/acionamentos', requireAuth, async (_req, res) => {
   const { rows } = await query(
     `SELECT id, created_at, central, medico, fone, tipo, detalhe, local_txt, lat, lon, pin_label,
-            wa_status, wa_detail, wa_sent_at
+            paciente_nome, paciente_idade, local_anterior, completo_at, wa_status, wa_detail, wa_sent_at
        FROM acionamento ORDER BY created_at DESC LIMIT 200`
   )
   res.json({ acionamentos: rows })
@@ -624,6 +679,7 @@ app.patch('/api/cases/:id/patient', requireAuth, async (req, res) => {
 const MILESTONE_IDS = new Set(MILESTONES.map((m) => m.id))
 app.post('/api/cases/:id/events', requireAuth, async (req, res) => {
   const { event, ts } = req.body || {}
+  const nota = str(req.body?.nota, 300)   // motivo do cancelamento, para o aviso no grupo
   const t = Number(ts)
   if (!MILESTONE_IDS.has(event)) return res.status(400).json({ error: 'marco inválido' })
   if (!Number.isFinite(t) || t <= 0) return res.status(400).json({ error: 'horário inválido' })
@@ -655,7 +711,7 @@ app.post('/api/cases/:id/events', requireAuth, async (req, res) => {
     let mission = null
     let missionError = null
     try {
-      mission = await echoMilestones(req.params.id, [{ id: event, ts: t, edited: old != null }], req.user)
+      mission = await echoMilestones(req.params.id, [{ id: event, ts: t, edited: old != null }], req.user, nota)
     } catch (e) {
       console.error('bot milestone:', e.message)
       if (event === 'decisao') { mission = 'erro'; missionError = e.message }

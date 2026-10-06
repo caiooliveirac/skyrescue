@@ -1102,3 +1102,12 @@ input.req-vazio { border-color: rgba(251, 191, 36, 0.55); }
   border-radius: 8px; padding: 8px 10px; display: flex; gap: 8px; align-items: center; min-height: 40px;
 }
 .pend-list button span:last-child { margin-left: auto; color: var(--muted); font-size: 11px; white-space: nowrap; }
+
+/* desfecho da ocorrência (paciente acolhido / envio cancelado) */
+.desfecho { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+.desfecho .small { flex-basis: 100%; }
+.modal.cancel-modal { max-width: 460px; border-color: rgba(251, 113, 133, 0.55); margin-top: 8vh; }
+/* convite a sugerir ponto de pouso: sempre visível junto ao mapa e à lista de LZ */
+.mapmode button.sugerir { color: var(--accent); border: 1px dashed var(--accent-line); }
+.lz-sugerir { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+.print-goa { width: 100%; justify-content: center; margin-bottom: 12px; }

@@ -81,7 +81,11 @@ export const MILESTONES = [
   // 'livre' ("Aeronave liberada") saiu do fluxo em 2026-09-12: o paciente
   // acolhido encerra a ocorrência. Fica aceito só para casos antigos.
   { id: 'livre', label: 'Aeronave liberada', legado: true },
+  // desfecho alternativo: o envio foi cancelado pela plataforma. Fora da
+  // sequência (não é "próximo marco" de ninguém) e encerra a missão.
+  { id: 'cancelado', label: 'Envio do helicóptero cancelado', desfecho: true },
 ]
+const FIM = ['entrega', 'livre', 'cancelado']
 const MILESTONE_BY_ID = Object.fromEntries(MILESTONES.map((m) => [m.id, m.label]))
 
 // ponto de encontro da missão: LZ escolhida, senão a própria cena
@@ -138,6 +142,7 @@ async function adotarAcionamentoOrfao() {
         AND c.snapshot->'events'->>'decisao' IS NOT NULL
         AND c.snapshot->'events'->>'livre' IS NULL
         AND c.snapshot->'events'->>'entrega' IS NULL
+        AND c.snapshot->'events'->>'cancelado' IS NULL
         AND to_timestamp((c.snapshot->'events'->>'decisao')::bigint / 1000.0)
               > now() - make_interval(hours => $1)
       ORDER BY (c.snapshot->'events'->>'decisao')::bigint DESC LIMIT 1`,
@@ -181,7 +186,8 @@ export async function sweepStaleMissions() {
 // ---------- mensagens compostas ----------
 function briefingHtml(caseRow, snap) {
   const L = []
-  L.push(`🚁 <b>MISSÃO — Caso ${esc(snap.id || caseRow.id)}</b>`)
+  // número + "apelido" (rótulo do caso: o que foi marcado nos critérios)
+  L.push(`🚁 <b>MISSÃO — Caso ${esc(snap.id || caseRow.id)}${snap.caseTag ? ` · ${esc(snap.caseTag)}` : ''}</b>`)
   const score = snap.scoreTotal != null ? `Score ${snap.scoreTotal}${snap.band ? ` (${esc(snap.band)})` : ''}` : null
   if (score || snap.recommendation) L.push([score, esc(snap.recommendation)].filter(Boolean).join(' · '))
   if (snap.sceneLabel || snap.scene) {
@@ -253,17 +259,19 @@ export async function notifyMission(caseRow, snap, user) {
 }
 
 // eco de cada horário novo/ajustado marcado no app (comandante/regulação)
-export async function postMilestones(caseId, changed, byName) {
+export async function postMilestones(caseId, changed, byName, nota) {
   const { rows } = await query(`SELECT chat_id, status FROM mission_chat WHERE case_id = $1`, [caseId])
   const mc = rows[0]
   if (!mc || mc.status !== 'ativa') return
   for (const { id, ts, edited } of changed) {
+    if (id === 'cancelado') continue // o aviso de encerramento abaixo já diz
     const label = MILESTONE_BY_ID[id] || id
     await send(mc.chat_id, `🕐 <b>${label}</b> — ${hhmm(ts)}${edited ? ' (corrigido)' : ''}${byName ? ` · por ${esc(byName)}` : ''}`)
   }
   // paciente acolhido encerra a missão no grupo com o resumo dos tempos
   // ('livre' segue encerrando, para caso antigo que ainda tenha o marco)
-  if (changed.some((c) => c.id === 'entrega' || c.id === 'livre')) await closeMission(caseId)
+  // o cancelamento do envio também encerra, com aviso próprio e o motivo
+  if (changed.some((c) => FIM.includes(c.id))) await closeMission(caseId, nota)
 }
 
 // Marcar "Acionamento do GOA autorizado" É acionar o GOA: se o grupo da missão
@@ -281,7 +289,7 @@ export async function postMilestones(caseId, changed, byName) {
 //
 // Devolve 'aberta' quando acionou aqui (o briefing já publica os horários já
 // marcados, então não se ecoa de novo) ou null quando foi só eco.
-export async function echoMilestones(caseId, changed, user) {
+export async function echoMilestones(caseId, changed, user, nota) {
   if (changed.some((c) => c.id === 'decisao') && (await missionStatus(caseId)) === null) {
     const { rows } = await query('SELECT id, snapshot FROM cases WHERE id = $1', [caseId])
     if (rows[0]) {
@@ -289,11 +297,11 @@ export async function echoMilestones(caseId, changed, user) {
       return 'aberta'
     }
   }
-  await postMilestones(caseId, changed, user?.full_name || user?.username)
+  await postMilestones(caseId, changed, user?.full_name || user?.username, nota)
   return null
 }
 
-async function closeMission(caseId) {
+async function closeMission(caseId, nota) {
   const { rows } = await query(
     `SELECT m.chat_id, c.snapshot FROM mission_chat m JOIN cases c ON c.id = m.case_id WHERE m.case_id = $1`,
     [caseId]
@@ -301,7 +309,10 @@ async function closeMission(caseId) {
   if (!rows[0]) return
   const snap = rows[0].snapshot || {}
   const lines = MILESTONES.filter((m) => snap.events?.[m.id]).map((m) => `• ${m.label}: <b>${hhmm(snap.events[m.id])}</b>`)
-  await send(rows[0].chat_id, `✅ <b>Missão encerrada — Caso ${esc(snap.id || caseId)}</b>\n${lines.join('\n')}`)
+  const titulo = snap.events?.cancelado
+    ? `🛑 <b>ENVIO CANCELADO — Caso ${esc(snap.id || caseId)}</b>\nO helicóptero NÃO segue para esta ocorrência.${nota ? `\nMotivo: ${esc(nota)}` : ''}`
+    : `✅ <b>Missão encerrada — Caso ${esc(snap.id || caseId)}</b>`
+  await send(rows[0].chat_id, `${titulo}\n${lines.join('\n')}`)
   await query(`UPDATE mission_chat SET status = 'encerrada' WHERE case_id = $1`, [caseId])
 }
 
@@ -387,7 +398,7 @@ const SEM_MISSAO = 'Nenhuma missão ativa no momento. O briefing chega aqui quan
 function temposHtml(snap, caseId) {
   const ev = snap?.events || {}
   const marcados = MILESTONES.filter((m) => ev[m.id])
-  const proximo = MILESTONES.find((m) => !ev[m.id])
+  const proximo = FIM.some((id) => ev[id]) ? null : MILESTONES.find((m) => !ev[m.id] && !m.legado && !m.desfecho)
   const L = [`🕐 <b>Cronologia — Caso ${esc(snap?.id || caseId)}</b>`]
   L.push(marcados.length
     ? marcados.map((m) => `• ${m.label}: <b>${hhmm(ev[m.id])}</b>`).join('\n')

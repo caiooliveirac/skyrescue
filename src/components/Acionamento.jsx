@@ -8,12 +8,15 @@ import { api } from '../lib/backend.js'
 import { loadGoogleMaps, googleAuthFailed, watchMutant } from '../lib/gmaps.js'
 
 // Tela pública: é o que qualquer pessoa vê ao cair no site, antes de login.
-// Dois caminhos — acionar o GOA (formulário) ou acompanhar um acionamento já
-// feito. "Acionar" grava o pedido no servidor (POST /api/acionamentos) e o
-// bot do WhatsApp da regulação avisa o grupo e os plantonistas na hora. Se o
-// aviso não puder ser confirmado (bot fora, servidor fora), a tela devolve o
-// plano B de sempre: abrir o WhatsApp da própria pessoa com o texto pronto
-// para o número da regulação. Login da equipe fica num botão discreto no canto.
+// Dois caminhos — acionar o GOA ou acompanhar um acionamento já feito.
+// "Acionar" começa pelo ENDEREÇO: confirmou o local, o servidor grava o pedido
+// (POST /api/acionamentos) e o bot do WhatsApp já avisa o grupo do GOA e os
+// plantonistas. Só então vem a passagem do caso (o que é, paciente, quem
+// pede), que completa o mesmo pedido (PATCH) e sai como segunda mensagem —
+// alertando se o endereço mudou. Se o aviso não puder ser confirmado (bot
+// fora, servidor fora), a tela devolve o plano B de sempre: abrir o WhatsApp
+// da própria pessoa com o texto pronto para o número da regulação. Login da
+// equipe fica num botão discreto no canto.
 
 // edite aqui a lista de centrais (botões, na ordem)
 const CENTRAIS = ['Salvador', 'Feira de Santana', 'Alagoinhas', 'SAJ', 'Itabuna', 'Camaçari']
@@ -124,20 +127,32 @@ export function MapaLocal({ pin, onPin }) {
   return <div ref={boxRef} style={{ height: 280, borderRadius: 10, overflow: 'hidden' }} />
 }
 
+const hhmm = (ts) => new Date(ts || Date.now()).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+const chegou = (r) => !!r && !r.error && (r.whatsapp === 'ok' || r.whatsapp === 'parcial')
+
 export default function Acionamento({ onLogin }) {
-  const [tela, setTela] = useState('home') // 'home' | 'acionar'
+  // 'home' → 'local' (endereço: ao confirmar, o GOA já é avisado) → 'dados'
+  // (o que é, paciente, quem pede: a passagem completa do caso)
+  const [tela, setTela] = useState('home')
   const [central, setCentral] = useState('')
   const [medico, setMedico] = useState('')
   const [fone, setFone] = useState('')
   const [tipo, setTipo] = useState('')
   const [trauma, setTrauma] = useState('') // botão escolhido quando tipo = Trauma
   const [detalhe, setDetalhe] = useState('')
+  // paciente: o que se souber — "Ignorado" vale como resposta
+  const [pacNome, setPacNome] = useState('')
+  const [pacIdade, setPacIdade] = useState('')
   const [done, setDone] = useState(false)
   const [sending, setSending] = useState(false)
-  // resposta do servidor: { id, whatsapp: 'ok'|'parcial'|…, hora } ou { error }
+  // primeiro aviso (só o endereço): null | { sending } | { id, token, whatsapp, hora } | { error }
+  const [aviso, setAviso] = useState(null)
+  const avisoRef = useRef(null)          // promessa do primeiro aviso, para a passagem esperar por ele
+  const [localAvisado, setLocalAvisado] = useState(null) // { txt, lat, lon } que foi no primeiro aviso
+  // resposta da passagem completa: { id, whatsapp: 'ok'|'parcial'|…, hora } ou { error }
   const [result, setResult] = useState(null)
 
-  // local da ocorrência: texto livre (obrigatório) + pino no mapa (refinamento)
+  // local da ocorrência: texto livre + pino no mapa (um dos dois basta)
   const [localTxt, setLocalTxt] = useState('')
   const [buscando, setBuscando] = useState(false)
   const [resultados, setResultados] = useState(null) // null = sem busca; [] = nada achado
@@ -174,25 +189,33 @@ export default function Acionamento({ onLogin }) {
   const pedeDetalhe = DETALHE[tipo]
   // Trauma: exige um botão; "Outro" (do trauma ou do tipo) exige o texto
   const traumaOk = tipo !== 'Trauma' || (trauma && (trauma !== 'Outro' || detalhe.trim()))
+  const pinOk = pin && pinLabel !== '…' ? pinLabel : ''
+  // o endereço mínimo: o que foi escrito, senão o que o pino achou
+  const localFinal = localTxt.trim() || pinOk || (pin ? `Ponto no mapa ${pin.lat.toFixed(5)}, ${pin.lon.toFixed(5)}` : '')
   const ok = central && medico.trim() && fone.replace(/\D/g, '').length >= 10 && tipo &&
-    (!pedeDetalhe || detalhe.trim()) && traumaOk && localTxt.trim()
+    (!pedeDetalhe || detalhe.trim()) && traumaOk && localFinal && pacNome.trim() && pacIdade.trim()
 
   // o detalhe do tipo como vai no aviso: subtipo do trauma, hora do ictus ou texto livre
   const detalheTxt = tipo === 'Trauma' ? (trauma === 'Outro' ? detalhe.trim() : trauma)
     : tipo === 'AVC' ? (detalhe ? `ictus ${detalhe}` : '')
     : pedeDetalhe ? detalhe.trim() : ''
-  const pinOk = pin && pinLabel !== '…' ? pinLabel : ''
+  // "apelido" da ocorrência: o que foi descrito clicando — "AVC ictus 10:30"
+  const apelido = [tipo, detalheTxt].filter(Boolean).join(' ')
+  const pedidoId = result?.id || aviso?.id
+  const mudouLocal = !!localAvisado && (localAvisado.txt !== localFinal ||
+    localAvisado.lat !== (pin?.lat ?? null) || localAvisado.lon !== (pin?.lon ?? null))
 
   const waLink = (msg) => `https://wa.me/${WHATSAPP}?text=${encodeURIComponent(msg)}`
   const waAcionar = () => {
     const linhas = [
       'ACIONAMENTO AEROMÉDICO — SkyRescue',
-      result?.id ? `Pedido #${result.id} (registrado no site)` : null,
+      pedidoId ? `Pedido #${pedidoId}${apelido ? ` · ${apelido}` : ''} (registrado no site)` : null,
       `Central: SAMU ${central}`,
       `Médico(a): ${medico.trim()}`,
       `Contato: ${fone.trim()}`,
       `Tipo: ${tipo}${detalheTxt ? ` — ${detalheTxt}` : ''}`,
-      `Local: ${localTxt.trim()}`,
+      `Paciente: ${pacNome.trim()} · idade ${pacIdade.trim()}`,
+      `Local: ${localFinal}`,
     ].filter(Boolean)
     if (pin) {
       if (pinOk) linhas.push(`Ponto no mapa: ${pinOk}`)
@@ -203,26 +226,52 @@ export default function Acionamento({ onLogin }) {
   }
   const waAcompanhar = waLink('Olá! Gostaria de acompanhar um acionamento aeromédico já realizado.')
 
-  // "Acionar": o servidor grava e o bot avisa. Qualquer falha vira o plano B
-  // (WhatsApp da pessoa) no modal — nunca uma tela de erro sem saída.
+  const corpoLocal = () => ({ local: localFinal, lat: pin?.lat, lon: pin?.lon, pinLabel: pinOk })
+
+  // Confirmar o endereço JÁ aciona: o grupo do GOA e os plantonistas recebem o
+  // primeiro aviso só com o local, e a pessoa segue preenchendo o resto. Se o
+  // endereço for trocado depois, a passagem completa avisa a alteração.
+  const confirmarLocal = () => {
+    if (!localFinal) return
+    setTela('dados'); window.scrollTo(0, 0)
+    if (avisoRef.current) return // já avisado: a mudança de endereço vai na passagem
+    setLocalAvisado({ txt: localFinal, lat: pin?.lat ?? null, lon: pin?.lon ?? null })
+    setAviso({ sending: true })
+    avisoRef.current = api.acionar(corpoLocal()).then(
+      (r) => { const a = { ...r, hora: hhmm(r.createdAt) }; setAviso(a); return a },
+      (e) => { const a = { error: e.message || 'falha de rede' }; setAviso(a); return a }
+    )
+  }
+
+  // Passagem completa do caso. Completa o pedido do primeiro aviso; se ele não
+  // chegou a ser registrado, manda tudo de uma vez. Qualquer falha vira o
+  // plano B (WhatsApp da pessoa) no modal — nunca uma tela de erro sem saída.
   const acionar = async () => {
     if (!ok || sending) return
     setSending(true)
     setResult(null)
     setDone(true)
     try {
-      const r = await api.acionar({
-        central, medico: medico.trim(), fone: fone.trim(), tipo, detalhe: detalheTxt,
-        local: localTxt.trim(), lat: pin?.lat, lon: pin?.lon, pinLabel: pinOk,
-      })
-      setResult({ ...r, hora: new Date(r.createdAt || Date.now()).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) })
+      const a = await avisoRef.current
+      const corpo = {
+        ...corpoLocal(), central, medico: medico.trim(), fone: fone.trim(), tipo, detalhe: detalheTxt,
+        pacienteNome: pacNome.trim(), pacienteIdade: pacIdade.trim(),
+      }
+      const r = a?.id && a.token
+        ? await api.completarAcionamento(a.id, { ...corpo, token: a.token })
+        : await api.acionar(corpo)
+      if (r.token) { // pedido novo (o primeiro aviso não tinha saído): as correções passam a mirar nele
+        avisoRef.current = Promise.resolve(r)
+        setLocalAvisado({ txt: localFinal, lat: pin?.lat ?? null, lon: pin?.lon ?? null })
+      }
+      setResult({ ...r, hora: hhmm() })
     } catch (e) {
       setResult({ error: e.message || 'falha de rede' })
     } finally {
       setSending(false)
     }
   }
-  const entregue = result && !result.error && (result.whatsapp === 'ok' || result.whatsapp === 'parcial')
+  const entregue = chegou(result)
 
   const pick = (val, cur, set) => (
     <button
@@ -234,6 +283,21 @@ export default function Acionamento({ onLogin }) {
     >
       {val}
     </button>
+  )
+  // campo que aceita "Ignorado" como resposta (dado do paciente ainda desconhecido)
+  const comIgnorado = (label, val, set, props) => (
+    <div className="field">
+      <label>{label}</label>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <input {...props} value={val === 'Ignorado' ? '' : val} disabled={val === 'Ignorado'}
+          placeholder={val === 'Ignorado' ? 'ignorado' : props.placeholder}
+          onChange={(e) => set(e.target.value)} style={{ flex: 1, minWidth: 0 }} />
+        <button type="button" className={`btn ${val === 'Ignorado' ? '' : 'sec'}`} aria-pressed={val === 'Ignorado'}
+          onClick={() => set(val === 'Ignorado' ? '' : 'Ignorado')}>
+          Ignorado
+        </button>
+      </div>
+    </div>
   )
 
   const brand = (
@@ -255,7 +319,7 @@ export default function Acionamento({ onLogin }) {
         </button>
         <div className="login-card">
           {brand}
-          <button className="btn" type="button" onClick={() => setTela('acionar')}
+          <button className="btn" type="button" onClick={() => setTela('local')}
             style={{ width: '100%', justifyContent: 'center', minHeight: 76, fontSize: 19, gap: 12, marginTop: 8 }}>
             <span style={{ fontSize: 34 }} aria-hidden="true">🚁</span> Acionar GOA
           </button>
@@ -268,45 +332,120 @@ export default function Acionamento({ onLogin }) {
     )
   }
 
+  if (tela === 'local') {
+    const jaAvisado = !!aviso
+    return (
+      <div className="login-bg">
+        <form className="login-card" onSubmit={(e) => { e.preventDefault(); confirmarLocal() }}>
+          {brand}
+
+          <div className="login-title">{jaAvisado ? 'Alterar o endereço' : 'Onde é a ocorrência?'}</div>
+
+          <div className="field">
+            <label>Local da ocorrência</label>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input
+                type="text"
+                autoFocus
+                value={localTxt}
+                onChange={(e) => setLocalTxt(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); buscar() } }}
+                placeholder="endereço, rodovia + km ou referência"
+                style={{ flex: 1, minWidth: 0 }}
+              />
+              <button type="button" className="btn sec" onClick={buscar} disabled={buscando || !localTxt.trim()}>
+                {buscando ? <span className="spin" /> : 'Buscar'}
+              </button>
+            </div>
+            <div className="small" style={{ marginTop: 2 }}>
+              Escreva o que souber (ex.: “BR-324 km 520, perto do posto”) e busque,
+              ou toque direto no mapa. Dá para detalhar depois.
+            </div>
+          </div>
+
+          {resultados && (
+            <div className="field" style={{ gap: 6 }}>
+              {resultados.length === 0 && (
+                <div className="small">Nada encontrado — tente rua + cidade, ou toque direto no mapa abaixo.</div>
+              )}
+              {resultados.slice(0, 4).map((r, i) => (
+                <button key={i} type="button" className="btn sec"
+                  style={{ justifyContent: 'flex-start', textAlign: 'left', fontSize: 13, whiteSpace: 'normal', lineHeight: 1.35 }}
+                  onClick={() => { marcarPin({ lat: r.lat, lon: r.lon }, r.label); setResultados(null) }}>
+                  📍 {r.label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          <div className="field">
+            <MapaLocal pin={pin} onPin={marcarPin} />
+            <div className="small" style={{ marginTop: 4 }}>
+              {pin
+                ? <>Ponto marcado{pinLabel && pinLabel !== '…' ? <>: <strong>{pinLabel}</strong></> : ''}. Toque ou arraste o 📍 para ajustar.</>
+                : 'Toque no mapa no ponto da ocorrência (aproxime com dois dedos).'}
+            </div>
+          </div>
+
+          <button className="btn" type="submit" disabled={!localFinal}
+            style={{ width: '100%', justifyContent: 'center', marginTop: 4, minHeight: 56, fontSize: 16 }}>
+            {jaAvisado ? 'Confirmar novo endereço' : '🚁 Confirmar endereço e acionar o GOA'}
+          </button>
+          <div className="small" style={{ marginTop: 8, textAlign: 'center' }}>
+            {jaAvisado
+              ? 'O novo endereço segue na passagem do caso, com aviso de que houve alteração.'
+              : <>Ao confirmar, <strong>o GOA já é avisado</strong> com este endereço. Os dados do caso você preenche em seguida.</>}
+          </div>
+
+          <div className="small" style={{ marginTop: 12, textAlign: 'center' }}>
+            <a href="#" onClick={(e) => { e.preventDefault(); setTela(jaAvisado ? 'dados' : 'home') }}>← Voltar</a>
+          </div>
+        </form>
+      </div>
+    )
+  }
+
   return (
     <div className="login-bg">
       <form className="login-card" onSubmit={(e) => { e.preventDefault(); acionar() }}>
         {brand}
 
-        <div className="login-title">Acionar o GOA</div>
+        {/* o que aconteceu com o primeiro aviso — a pessoa precisa saber se o GOA já sabe */}
+        {aviso?.sending && (
+          <div className="alert info"><span className="spin" /> <span>Avisando o GOA do endereço…</span></div>
+        )}
+        {aviso && !aviso.sending && chegou(aviso) && (
+          <div className="alert ok"><span>✅ <strong>GOA avisado às {aviso.hora}</strong> · pedido <strong>#{aviso.id}</strong>.
+            Agora complete a passagem do caso.</span></div>
+        )}
+        {aviso && !aviso.sending && !chegou(aviso) && (
+          <div className="alert warn"><span>
+            {aviso.error
+              ? <>O primeiro aviso <strong>não saiu</strong> ({aviso.error}). </>
+              : <>Pedido <strong>#{aviso.id}</strong> registrado, mas o aviso automático não foi confirmado. </>}
+            Complete e envie abaixo — se não chegar, a tela oferece o seu WhatsApp.</span></div>
+        )}
+
+        <div className="login-title">Passagem do caso</div>
 
         <div className="field">
-          <label>De qual central você está falando?</label>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-            {CENTRAIS.map((c) => pick(c, central, setCentral))}
+          <label>Local da ocorrência</label>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <div style={{ flex: 1, minWidth: 0, fontSize: 14, lineHeight: 1.35 }}>
+              📍 {localFinal}
+              {pinOk && pinOk !== localFinal && <div className="small">{pinOk}</div>}
+            </div>
+            <button type="button" className="btn sec xs" onClick={() => setTela('local')}>Alterar</button>
           </div>
+          {mudouLocal && (
+            <div className="small" style={{ color: 'var(--warn)', marginTop: 2 }}>
+              Endereço diferente do primeiro aviso — a passagem vai alertar a alteração.
+            </div>
+          )}
         </div>
 
         <div className="field">
-          <label>Nome do médico</label>
-          <input
-            type="text"
-            autoComplete="name"
-            value={medico}
-            onChange={(e) => setMedico(e.target.value)}
-            placeholder="nome completo"
-          />
-        </div>
-
-        <div className="field">
-          <label>Telefone para contato</label>
-          <input
-            type="tel"
-            inputMode="tel"
-            autoComplete="tel"
-            value={fone}
-            onChange={(e) => setFone(e.target.value)}
-            placeholder="(71) 9 9999-9999"
-          />
-        </div>
-
-        <div className="field">
-          <label>Tipo de ocorrência</label>
+          <label>O que é?</label>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
             {TIPOS.map((t) => pick(t, tipo, (v) => { setTipo(v); setTrauma(''); setDetalhe('') }))}
           </div>
@@ -342,59 +481,48 @@ export default function Acionamento({ onLogin }) {
           </div>
         )}
 
+        {comIgnorado('Nome do paciente', pacNome, setPacNome, { type: 'text', placeholder: 'nome, se souber' })}
+        {comIgnorado('Idade estimada', pacIdade, setPacIdade, { type: 'text', inputMode: 'numeric', placeholder: 'ex.: 45' })}
+
         <div className="field">
-          <label>Local da ocorrência</label>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <input
-              type="text"
-              value={localTxt}
-              onChange={(e) => setLocalTxt(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); buscar() } }}
-              placeholder="endereço, rodovia + km ou referência"
-              style={{ flex: 1 }}
-            />
-            <button type="button" className="btn sec" onClick={buscar} disabled={buscando || !localTxt.trim()}>
-              {buscando ? <span className="spin" /> : 'Buscar'}
-            </button>
-          </div>
-          <div className="small" style={{ marginTop: 2 }}>
-            Escreva o que souber (ex.: “BR-324 km 520, perto do posto”). A busca
-            ajuda a achar no mapa — depois toque no ponto exato.
+          <label>De qual central você está falando?</label>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+            {CENTRAIS.map((c) => pick(c, central, setCentral))}
           </div>
         </div>
 
-        {resultados && (
-          <div className="field" style={{ gap: 6 }}>
-            {resultados.length === 0 && (
-              <div className="small">Nada encontrado — tente rua + cidade, ou toque direto no mapa abaixo.</div>
-            )}
-            {resultados.slice(0, 4).map((r, i) => (
-              <button key={i} type="button" className="btn sec"
-                style={{ justifyContent: 'flex-start', textAlign: 'left', fontSize: 13, whiteSpace: 'normal', lineHeight: 1.35 }}
-                onClick={() => { marcarPin({ lat: r.lat, lon: r.lon }, r.label); setResultados(null) }}>
-                📍 {r.label}
-              </button>
-            ))}
-          </div>
-        )}
+        <div className="field">
+          <label>Nome do médico</label>
+          <input
+            type="text"
+            autoComplete="name"
+            value={medico}
+            onChange={(e) => setMedico(e.target.value)}
+            placeholder="nome completo"
+          />
+        </div>
 
         <div className="field">
-          <MapaLocal pin={pin} onPin={marcarPin} />
-          <div className="small" style={{ marginTop: 4 }}>
-            {pin
-              ? <>Ponto marcado{pinLabel && pinLabel !== '…' ? <>: <strong>{pinLabel}</strong></> : ''}. Toque ou arraste o 📍 para ajustar.</>
-              : 'Opcional: toque no mapa no ponto exato da ocorrência (aproxime com dois dedos).'}
-          </div>
+          <label>Telefone para contato</label>
+          <input
+            type="tel"
+            inputMode="tel"
+            autoComplete="tel"
+            value={fone}
+            onChange={(e) => setFone(e.target.value)}
+            placeholder="(71) 9 9999-9999"
+          />
         </div>
 
         <button className="btn" type="submit" disabled={!ok || sending}
           style={{ width: '100%', justifyContent: 'center', marginTop: 4, minHeight: 48 }}>
-          {sending ? <span className="spin" /> : 'Acionar'}
+          {sending ? <span className="spin" /> : result && !result.error ? 'Reenviar passagem (corrigida)' : 'Enviar passagem do caso'}
         </button>
-
-        <div className="small" style={{ marginTop: 12, textAlign: 'center' }}>
-          <a href="#" onClick={(e) => { e.preventDefault(); setTela('home') }}>← Voltar</a>
-        </div>
+        {!ok && (
+          <div className="small" style={{ marginTop: 8, textAlign: 'center' }}>
+            Preencha tudo para enviar — no nome e na idade do paciente vale tocar em <strong>Ignorado</strong>.
+          </div>
+        )}
       </form>
 
       {done && (
@@ -402,7 +530,7 @@ export default function Acionamento({ onLogin }) {
           <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 380 }}>
             {sending && (
               <>
-                <h3>Enviando acionamento…</h3>
+                <h3>Enviando a passagem do caso…</h3>
                 <p style={{ margin: '0 0 12px', lineHeight: 1.5, display: 'flex', alignItems: 'center', gap: 10 }}>
                   <span className="spin" /> Avisando a regulação pelo WhatsApp.
                 </p>
@@ -411,10 +539,11 @@ export default function Acionamento({ onLogin }) {
 
             {!sending && entregue && (
               <>
-                <h3>✅ Acionamento enviado</h3>
+                <h3>✅ Passagem enviada</h3>
                 <p style={{ margin: '0 0 12px', lineHeight: 1.5 }}>
-                  Pedido <strong>#{result.id}</strong> avisado à regulação pelo WhatsApp às{' '}
-                  <strong>{result.hora}</strong>
+                  Ocorrência <strong>#{result.id} · {result.apelido || apelido}</strong> avisada à regulação pelo
+                  WhatsApp às <strong>{result.hora}</strong>
+                  {result.enderecoAlterado ? ', com alerta de endereço alterado' : ''}
                   {result.grupo === false || (result.privados?.total && result.privados.ok < result.privados.total)
                     ? ' (parte dos destinatários não confirmou)' : ''}.{' '}
                   <strong>Fique atento ao telefone informado</strong> — a regulação vai ligar.
@@ -435,8 +564,8 @@ export default function Acionamento({ onLogin }) {
                 <h3>Envie pelo WhatsApp</h3>
                 <p style={{ margin: '0 0 12px', lineHeight: 1.5 }}>
                   {result?.error
-                    ? <>Não foi possível registrar o pedido no servidor ({result.error}). </>
-                    : <>O pedido <strong>#{result?.id}</strong> foi registrado, mas o aviso automático
+                    ? <>Não foi possível registrar a passagem no servidor ({result.error}). </>
+                    : <>A ocorrência <strong>#{result?.id}</strong> foi registrada, mas o aviso automático
                         não pôde ser confirmado. </>}
                   Toque no botão abaixo para enviar o acionamento pelo WhatsApp e{' '}
                   <strong>fique atento ao telefone informado</strong> — a regulação

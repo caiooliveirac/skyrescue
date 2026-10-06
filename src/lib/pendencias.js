@@ -28,7 +28,8 @@ export function pendencias({ scene, hits, gates, gateJust, patient, events }) {
   }
   // horários só são cobrados depois que houve acionamento — caso que ficou no
   // terrestre não tem voo para documentar
-  if (events?.decisao) {
+  // envio cancelado: os marcos que não aconteceram não são pendência
+  if (events?.decisao && !events.cancelado) {
     for (const m of MILESTONES) {
       if (!events[m.id]) out.push({ id: 'h_' + m.id, label: `Horário: ${m.label}`, onde: 'missao' })
     }

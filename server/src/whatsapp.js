@@ -89,24 +89,50 @@ export function prettyPhone(d) {
   return m ? `+55 ${m[1]} ${m[2]}-${m[3]}` : d ? `+${d}` : ''
 }
 
-// texto do aviso — WhatsApp usa *negrito* e _itálico_. Sem dado de paciente:
-// quem pede, de onde, o que é e onde; o resto se resolve no telefone.
-export function formatAcionamento(a) {
-  const L = [
-    `🚁 *ACIONAMENTO AEROMÉDICO — SkyRescue*`,
-    `#${a.id} · ${fmtWhen(a.created_at || Date.now())}`,
-    '',
-    `🏥 *Central:* SAMU ${a.central}`,
-    `👨‍⚕️ *Médico(a):* ${a.medico}`,
-  ]
-  const fone = normalizePhone(a.fone)
-  L.push(`📞 *Contato:* ${a.fone}${fone ? `\n   wa.me/${fone}` : ''}`)
-  L.push(`🩺 *Tipo:* ${a.tipo}${a.detalhe ? ` — ${a.detalhe}` : ''}`)
-  L.push(`📍 *Local:* ${a.local_txt}`)
+// "apelido" da ocorrência, como na triagem do SAMU: o que o solicitante
+// descreveu clicando — "AVC ictus 10:30", "Trauma Ac. Moto"
+export const apelido = (a) => [a.tipo, a.detalhe].filter(Boolean).join(' ')
+
+const linhasLocal = (a) => {
+  const L = [`📍 *Local:* ${a.local_txt}`]
   if (a.lat != null && a.lon != null) {
     if (a.pin_label) L.push(`🗺️ ${a.pin_label}`)
     L.push(`https://maps.google.com/?q=${Number(a.lat).toFixed(5)},${Number(a.lon).toFixed(5)}`)
   }
+  return L
+}
+
+// texto do aviso — WhatsApp usa *negrito* e _itálico_. Duas etapas:
+//  1. primeiro aviso, assim que o solicitante confirma o endereço (só o local);
+//  2. passagem completa (quem pede, o que é, paciente), avisando se o endereço
+//     mudou desde o primeiro aviso (`local_anterior`).
+// Pedido que já chega completo (sem a etapa 1) sai como um aviso só.
+export function formatAcionamento(a, { segundo = false } = {}) {
+  const quando = fmtWhen(a.created_at || Date.now())
+  if (!a.tipo) {
+    return [
+      `🚁 *ACIONAMENTO AEROMÉDICO — SkyRescue*`,
+      `#${a.id} · ${quando}`,
+      '',
+      ...linhasLocal(a),
+      '',
+      '_Primeiro aviso: endereço confirmado pelo solicitante. A passagem completa do caso chega em seguida._',
+    ].join('\n')
+  }
+  const L = [
+    segundo ? `📋 *PASSAGEM DO CASO — acionamento #${a.id}*` : `🚁 *ACIONAMENTO AEROMÉDICO — SkyRescue*`,
+    `#${a.id} · *${apelido(a)}* · ${quando}`,
+    '',
+  ]
+  if (a.local_anterior) L.push(`⚠️ *ENDEREÇO ALTERADO* — vale o local abaixo. Antes: ${a.local_anterior}`, '')
+  L.push(`🏥 *Central:* SAMU ${a.central}`, `👨‍⚕️ *Médico(a):* ${a.medico}`)
+  const fone = normalizePhone(a.fone)
+  L.push(`📞 *Contato:* ${a.fone}${fone ? `\n   wa.me/${fone}` : ''}`)
+  L.push(`🩺 *Tipo:* ${a.tipo}${a.detalhe ? ` — ${a.detalhe}` : ''}`)
+  if (a.paciente_nome || a.paciente_idade) {
+    L.push(`🧑 *Paciente:* ${a.paciente_nome || 'Ignorado'} · idade ${a.paciente_idade || 'Ignorado'}`)
+  }
+  L.push(...linhasLocal(a))
   L.push('', '_Regulação: ligar para o médico solicitante e abrir o caso no SkyRescue._')
   return L.join('\n')
 }
@@ -409,8 +435,8 @@ export async function broadcast(text) {
 }
 
 // aviso do acionamento público; grava o resultado na própria linha
-export async function notifyAcionamento(row) {
-  const r = await broadcast(formatAcionamento(row))
+export async function notifyAcionamento(row, opts) {
+  const r = await broadcast(formatAcionamento(row, opts))
   await query(
     `UPDATE acionamento SET wa_status = $2, wa_detail = $3, wa_sent_at = CASE WHEN $2 IN ('ok','parcial') THEN now() END
       WHERE id = $1`,
