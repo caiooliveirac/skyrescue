@@ -4,6 +4,8 @@
 const BASE = '/api'
 
 async function req(method, path, body) {
+  // sem `status` no erro = não chegou ao servidor (sem rede). É por isso que a
+  // caixa de saída (lib/outbox.js) distingue "tentar de novo" de "recusado".
   const res = await fetch(BASE + path, {
     method,
     credentials: 'include',
@@ -32,7 +34,8 @@ export const api = {
   // casos
   listCases: () => req('GET', '/cases'),
   getCase: (id) => req('GET', `/cases/${id}`),
-  createCase: (snapshot, clientId) => req('POST', '/cases', { snapshot, clientId }),
+  // opId: repetir a criação com o mesmo opId devolve o caso já criado
+  createCase: (snapshot, clientId, opId) => req('POST', '/cases', { snapshot, clientId, opId }),
   updateCase: (id, snapshot, opts = {}) =>
     req('PUT', `/cases/${id}`, { snapshot, clientId: opts.clientId }),
   // gravação automática da tela ao vivo: só os campos que ESTA tela mudou, para
@@ -44,8 +47,12 @@ export const api = {
   // trafegar no poll de 5 s nem no briefing do bot. Gravação por campo pela
   // mesma razão do patchCase — duas telas escrevendo na mesma ficha.
   getPatient: (id) => req('GET', `/cases/${id}/patient`),
-  patchPatient: (id, fields, clientId) =>
-    req('PATCH', `/cases/${id}/patient`, { fields, clientId }),
+  // Gravação com fusão de três pontas: `base` é como o aparelho via cada campo
+  // na última sincronização. Campo mudado dos dois lados vira divergência.
+  syncPatient: (id, envio) => req('PATCH', `/cases/${id}/patient`, envio),
+  patientConflicts: (id) => req('GET', `/cases/${id}/patient/conflicts`),
+  resolveConflict: (id, cid, chosen) =>
+    req('POST', `/cases/${id}/patient/conflicts/${cid}/resolve`, { chosen }),
   notifyCase: (id) => req('POST', `/cases/${id}/notify`),
   iaStatus: () => req('GET', '/ia/status'),
   iaCriterios: (historia, opcoes) => req('POST', '/ia/criterios', { historia, opcoes }),

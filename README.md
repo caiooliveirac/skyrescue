@@ -146,6 +146,16 @@ Contém dado identificável de paciente, e por isso é a única parte do sistema
 
 Como é guardada em texto no Postgres, **backups e dumps deste banco contêm dado de paciente identificado** — tratar as cópias com o mesmo cuidado do banco de produção.
 
+## Sem rede (offline)
+
+O app abre, cria caso, preenche a ficha e marca horários sem conexão; tudo sobe sozinho quando a rede volta.
+
+- **Abrir sem rede:** `public/sw.js` (service worker) guarda a casca do app — rede primeiro, cópia guardada só quando a rede falha ou não responde em 4 s. É publicado ao lado do `index.html`. Sem rede o app entra com o último usuário autenticado no aparelho; nada sobe antes de `/api/auth/me` confirmar a sessão.
+- **Caixa de saída:** `src/lib/outbox.js` (IndexedDB). Criação de caso, ficha e horários entram numa fila única, com `opId` para o servidor reconhecer reenvio. Caso criado sem rede usa id provisório (`tmp-…`) até o servidor devolver o real. O indicador na barra mostra `offline` / `N itens a enviar` / `sincronizado`.
+- **Divergência:** se o mesmo campo da ficha foi mudado no servidor e num aparelho sem rede, nenhum valor é sobrescrito: o campo fica com o do servidor e a tela do caso mostra "N divergências no prontuário" para alguém da equipe escolher, campo a campo (fica em `case_audit`). O PDF sai com aviso enquanto houver divergência pendente. Regras no servidor: `server/src/patient-merge.js`.
+- **Sem rede não há:** mapa, meteorologia/METAR, rotas, lista de casos, acionamento do grupo.
+- Teste da caixa de saída contra API de desenvolvimento: `node scripts/test-outbox.js` (ver cabeçalho do arquivo).
+
 ## Fluxo de uso na regulação
 
 1. **Local** — busque o endereço/rodovia ou clique no mapa.

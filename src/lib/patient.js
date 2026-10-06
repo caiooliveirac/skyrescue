@@ -13,7 +13,9 @@
 //
 // O localStorage abaixo é ESPELHO OFFLINE, não fonte da verdade: em voo
 // com 4G ruim é ele que segura o que foi digitado até a rede voltar.
-// Ao abrir o caso, a ficha do servidor vence quando tem conteúdo.
+// Ao abrir o caso, a ficha do servidor vence nos campos que este aparelho NÃO
+// mudou; o que ele mudou sem rede sobe pela caixa de saída (lib/outbox.js) e,
+// se o servidor também mudou o mesmo campo, vira divergência — nada some.
 // ------------------------------------------------------------------
 
 // Estrutura compartilhada pelo formulário e pelo documento impresso.
@@ -167,11 +169,50 @@ export function readPatient(userId, caseId) {
   }
 }
 
-export function savePatient(userId, caseId, p) {
+// Espelho completo: a ficha como está na tela, a `base` (como o servidor estava
+// na última sincronização deste aparelho) e a versão. É a base guardada que
+// permite, depois de horas sem rede, mandar só o que ESTE aparelho mudou e
+// deixar o servidor detectar o que mudou dos dois lados. Espelho antigo (sem
+// `version`) vem como `legacy`.
+export function readMirror(userId, caseId) {
+  try {
+    const d = JSON.parse(localStorage.getItem(KEY(userId, caseId)))
+    if (!d || typeof d.patient !== 'object' || !d.patient) return null
+    const legacy = !('version' in d)
+    return {
+      patient: { ...emptyPatient(), ...d.patient },
+      base: !legacy && d.base ? { ...emptyPatient(), ...d.base } : null,
+      version: legacy ? 0 : Number(d.version) || 0,
+      legacy,
+    }
+  } catch (e) {
+    return null
+  }
+}
+
+// O servidor respondeu a um envio da caixa de saída e a tela pode nem estar
+// neste caso: o espelho adota o que o servidor devolveu. Campo em disputa volta
+// a mostrar o valor do servidor (o do aparelho ficou guardado na divergência),
+// a não ser que a pessoa já tenha digitado outra coisa depois do envio.
+export function ackPatient(userId, caseId, sent, fields, version) {
+  try {
+    const key = KEY(userId, caseId)
+    const d = JSON.parse(localStorage.getItem(key))
+    if (!d || !d.patient) return
+    d.base = { ...emptyPatient(), ...(d.base || {}), ...fields }
+    d.version = version
+    for (const k of Object.keys(fields)) {
+      if (String(d.patient[k] ?? '') === String(sent[k] ?? '')) d.patient[k] = fields[k]
+    }
+    localStorage.setItem(key, JSON.stringify(d))
+  } catch (e) { /* ok */ }
+}
+
+export function savePatient(userId, caseId, p, base = null, version = 0) {
   try {
     if (patientWorthKeeping(p)) {
       const key = KEY(userId, caseId)
-      localStorage.setItem(key, JSON.stringify({ at: Date.now(), patient: p }))
+      localStorage.setItem(key, JSON.stringify({ at: Date.now(), patient: p, base, version }))
       prune(userId, key)
     } else {
       // ficha esvaziada de propósito some — mas só a DESTE caso

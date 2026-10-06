@@ -1103,6 +1103,24 @@ input.req-vazio { border-color: rgba(251, 191, 36, 0.55); }
 }
 .pend-list button span:last-child { margin-left: auto; color: var(--muted); font-size: 11px; white-space: nowrap; }
 
+/* ---------- sincronização offline ---------- */
+/* indicador permanente na barra: fica visível também no celular */
+.sync {
+  display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+  font-size: 12px; font-weight: 700; border-radius: 999px; padding: 4px 10px;
+  border: 1px solid transparent;
+}
+.sync::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.sync.ok { color: var(--ok); background: var(--ok-soft); }
+.sync.warn { color: var(--warn); background: var(--warn-soft); }
+.sync.fail { color: var(--fail); background: var(--fail-soft); }
+/* divergências do prontuário: dois valores lado a lado, um botão em cada */
+.conflitos .conflito { margin-top: 10px; padding-top: 8px; border-top: 1px solid rgba(251, 191, 36, 0.2); }
+.conflitos .lados { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.conflitos .lado { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; min-width: 0; }
+.conflitos .valor { color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; width: 100%; }
+@media (max-width: 560px) { .conflitos .lados { grid-template-columns: 1fr; } }
+
 /* desfecho da ocorrência (paciente acolhido / envio cancelado) */
 .desfecho { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
 .desfecho .small { flex-basis: 100%; }

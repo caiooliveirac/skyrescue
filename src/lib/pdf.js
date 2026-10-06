@@ -205,6 +205,19 @@ export async function gerarPdf(conteudo, sel, meta) {
   y += metaLines.length * 4 + 2
   doc.setTextColor(0)
 
+  // prontuário com campo em disputa (editado no servidor e num aparelho sem
+  // rede): o documento sai, mas avisando que ainda pode mudar
+  if (meta.divergencias > 0) {
+    doc.setFont('helvetica', 'bold').setFontSize(9).setTextColor(180, 0, 0)
+    const aviso = doc.splitTextToSize(pdfText(
+      `ATENÇÃO: ${meta.divergencias} divergência(s) pendente(s) no prontuário deste caso. ` +
+      'Há campo(s) da ficha do paciente com dois valores registrados aguardando decisão da equipe; ' +
+      'este documento traz o valor atual do servidor e pode ser alterado.'), W - 2 * M)
+    doc.text(aviso, M, y + 2)
+    y += aviso.length * 4 + 4
+    doc.setFont('helvetica', 'normal').setTextColor(0)
+  }
+
   const grupos = { voo: 'Voo', paciente: 'Paciente' }
   let grupoAtual = null
   for (const s of PRINT_SECTIONS) {

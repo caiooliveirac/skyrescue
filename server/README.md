@@ -23,7 +23,27 @@ BOT_LINK_CODE=...            # código do /vincular — Telegram E WhatsApp
 # WA_AUTH_DIR=/home/ubuntu/skyrescue/server/.wa-auth   # sessão (padrão); fora do rsync do deploy
 # WHATSAPP_DISABLED=1                                   # desliga o bot (dev)
 # WA_LOG_LEVEL=error                                    # log interno do Baileys
+GOA_FEDERACAO_SECRET=...     # passagem para o Painel do portal mnrs.com.br (mesmo valor no porteiro); sem ela, o botão "Painel" some
+# PORTAL_URL=https://mnrs.com.br                        # padrão
 ```
+
+### Internos: Painel do portal sem segunda senha
+
+Usuário marcado com `acesso_portal` vê o botão **Painel** na barra: abre, numa
+aba nova, o Painel do portal mnrs.com.br (Tabela, Destino, Giro, Quadro)
+**só leitura**, de qualquer lugar, sem segunda senha. A Mesa operacional do
+plantões não faz parte. `GET /api/auth/portal`
+assina um handoff de 60 s (`server/src/portal.js`) e o porteiro do mnrs.com.br
+cria/acha a conta `interno` vinculada a este usuário no plantões. Contrato e
+regras no plantões: `docs/internos-goa.md`.
+
+```bash
+node scripts/acesso-portal.js joao.silva on    # libera (off retira)
+node scripts/acesso-portal.js --listar
+```
+
+Ou `PATCH /api/users/:id` com `{"acesso_portal": true}`. Retirar a marca para
+o botão; a conta do plantões é suspensa por lá (`/admin/acessos`).
 
 A sessão do WhatsApp (`.wa-auth/`) são as chaves do chip: trate como segredo, não versione, e apague-a ao desativar o servidor (ou toque em **desconectar** no painel, que também remove o dispositivo no celular).
 
@@ -54,12 +74,17 @@ Ou pela API (autenticado como `admin`): `POST /api/users`, `GET /api/users`, `PA
 | POST | `/api/auth/login` | login → seta cookie de sessão |
 | POST | `/api/auth/logout` | encerra a sessão |
 | GET | `/api/auth/me` | usuário atual (401 se não logado) |
+| GET | `/api/auth/portal` | interno com `acesso_portal`: 302 para o porteiro do mnrs.com.br com handoff de 60 s (`?proximo=tabela`) |
 | POST | `/api/auth/password` | troca a própria senha |
 | GET | `/api/cases` | lista casos (todos, com autoria) |
 | GET | `/api/cases/:id` | caso completo (snapshot) |
-| POST | `/api/cases` | registra caso |
+| POST | `/api/cases` | registra caso (`opId` opcional: repetir o mesmo devolve o caso já criado) |
 | PUT | `/api/cases/:id` | atualiza caso |
 | DELETE | `/api/cases/:id` | exclui caso (auditado) |
+| GET | `/api/cases/:id/patient` | ficha do paciente + `version` (auditado) |
+| PATCH | `/api/cases/:id/patient` | grava a ficha por campo. `{fields}` (formato antigo) ou `{changes, base, baseVersion, opId, clientTs}`: fusão de três pontas — campo mudado nos dois lados para valores diferentes não entra e vira divergência |
+| GET | `/api/cases/:id/patient/conflicts` | divergências pendentes da ficha (PII; auditado) |
+| POST | `/api/cases/:id/patient/conflicts/:cid/resolve` | `{chosen: 'server'｜'client'}` — qualquer usuário autenticado; grava em `case_audit` |
 | GET/POST/PATCH | `/api/users…` | admin de usuários (perfil admin) |
 | POST | `/api/acionamentos` | **público** (tela Acionar GOA): grava o pedido e o bot do WhatsApp avisa; limite por IP/global |
 | GET | `/api/acionamentos` | histórico dos pedidos do site (autenticado) |
@@ -70,6 +95,22 @@ Ou pela API (autenticado como `admin`): `POST /api/users`, `GET /api/users`, `PA
 | POST/PATCH/DELETE | `/api/whatsapp/recipients…` | admin: plantonistas que recebem no privado |
 | DELETE | `/api/whatsapp/group` | admin: desvincula o grupo |
 | GET | `/api/health` | status + conexão ao banco |
+
+## Sincronização offline da ficha
+
+O app funciona sem rede e sobe tudo depois (caixa de saída no aparelho, ver
+`src/lib/outbox.js`). O servidor garante que nada é sobrescrito em silêncio:
+`case_patient.version` sobe a cada gravação; o aparelho manda a versão e os
+valores que via (`base`); `src/patient-merge.js` decide campo a campo. Disputa
+vai para `case_patient_conflict` e espera um usuário escolher. Os valores em
+disputa são PII: só saem pelas rotas `/patient…`; o poll (`/live`) leva só a
+contagem (`patientConflicts`).
+
+```bash
+node scripts/test-patient-merge.js     # unidade, sem banco
+# integração, contra API de desenvolvimento (nunca produção):
+BASE=http://127.0.0.1:PORTA TEST_USER=... TEST_PASS=... node scripts/test-ficha-offline.js
+```
 
 ## Operação (systemd)
 
