@@ -1120,3 +1120,12 @@ input.req-vazio { border-color: rgba(251, 191, 36, 0.55); }
 .conflitos .lado { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; min-width: 0; }
 .conflitos .valor { color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; width: 100%; }
 @media (max-width: 560px) { .conflitos .lados { grid-template-columns: 1fr; } }
+
+/* desfecho da ocorrência (paciente acolhido / envio cancelado) */
+.desfecho { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+.desfecho .small { flex-basis: 100%; }
+.modal.cancel-modal { max-width: 460px; border-color: rgba(251, 113, 133, 0.55); margin-top: 8vh; }
+/* convite a sugerir ponto de pouso: sempre visível junto ao mapa e à lista de LZ */
+.mapmode button.sugerir { color: var(--accent); border: 1px dashed var(--accent-line); }
+.lz-sugerir { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+.print-goa { width: 100%; justify-content: center; margin-bottom: 12px; }

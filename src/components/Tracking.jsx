@@ -14,6 +14,12 @@ export const MILESTONES = [
   { id: 'entrega', label: 'Paciente acolhido na unidade' },
 ]
 
+// Desfecho alternativo, fora da sequência: o envio foi cancelado pela
+// plataforma. Encerra a ocorrência (e a missão no grupo), como "entrega".
+export const CANCELADO = { id: 'cancelado', label: 'Envio do helicóptero cancelado' }
+export const marcoLabel = (id) => MILESTONES.find((m) => m.id === id)?.label || (id === CANCELADO.id ? CANCELADO.label : id)
+export const encerrada = (events) => !!(events.entrega || events.cancelado)
+
 // id do último marco batido (null antes do acionamento) — é a "fase" em que
 // uma intercorrência é registrada
 export const ultimoMarco = (events) => {
@@ -77,7 +83,7 @@ export function MilestoneQuick({ events, onMark, onUndo, className = '' }) {
   const timerRef = useRef(null)
   useEffect(() => () => clearTimeout(timerRef.current), [])
 
-  const next = MILESTONES.find((m) => !events[m.id])
+  const next = encerrada(events) ? null : MILESTONES.find((m) => !events[m.id])
   if (undoInfo) {
     return (
       <div className={'qmark qdone ' + className}>
@@ -113,11 +119,21 @@ function fmtElapsed(ms) {
   return (h ? h + ':' : '') + String(m).padStart(2, '0') + ':' + String(r).padStart(2, '0')
 }
 
-export default function Tracking({ events, onMark, onEdit, mission }) {
-  const nextIdx = MILESTONES.findIndex((m) => !events[m.id])
+export default function Tracking({ events, onMark, onEdit, onCancel, mission }) {
+  // envio cancelado: não há "próximo marco"; paciente acolhido antes da hora:
+  // os horários que faltaram ainda podem ser lançados, mas o relógio para
+  const nextIdx = events.cancelado ? -1 : MILESTONES.findIndex((m) => !events[m.id])
+  const fim = encerrada(events)
+  const [cancelando, setCancelando] = useState(false)
+  const [motivo, setMotivo] = useState('')
+  const acolher = () => {
+    const faltam = MILESTONES.filter((m) => m.id !== 'entrega' && !events[m.id]).length
+    if (faltam && !confirm(`Encerrar a ocorrência com paciente acolhido?\n${faltam} horário(s) anterior(es) ainda sem marcação — dá para lançar depois.`)) return
+    onMark('entrega')
+  }
   // último marco batido: o relógio corre a partir dele até o próximo toque
   const lastTs = Math.max(0, ...MILESTONES.map((m) => events[m.id] || 0))
-  const running = lastTs > 0 && nextIdx >= 0
+  const running = lastTs > 0 && nextIdx >= 0 && !fim
   const [now, setNow] = useState(Date.now())
   useEffect(() => {
     if (!running) return
@@ -165,6 +181,47 @@ export default function Tracking({ events, onMark, onEdit, mission }) {
           </div>
         )
       })}
+      {/* desfecho: sempre à mão depois do acionamento, sem exigir que todos os
+          marcos anteriores tenham sido tocados */}
+      {events.decisao && !fim && (
+        <div className="desfecho">
+          <span className="small">Desfecho da ocorrência</span>
+          <button className="btn xs" onClick={acolher}><IconCheck size={13} /> Paciente acolhido — encerrar</button>
+          <button className="btn xs warn" onClick={() => { setMotivo(''); setCancelando(true) }}>Cancelar envio do helicóptero</button>
+        </div>
+      )}
+      {events.entrega && (
+        <div className="alert ok" style={{ marginTop: 10, marginBottom: 0 }}>
+          <span>Ocorrência encerrada — <b>paciente acolhido às {toTimeStr(events.entrega)}</b>.</span>
+        </div>
+      )}
+      {events.cancelado && (
+        <div className="alert fail" style={{ marginTop: 10, marginBottom: 0 }}>
+          <span>Ocorrência encerrada — <b>envio do helicóptero cancelado às {toTimeStr(events.cancelado)}</b>.</span>
+        </div>
+      )}
+      {cancelando && (
+        <div className="modal-bg" onClick={() => setCancelando(false)}>
+          <div className="modal cancel-modal" onClick={(e) => e.stopPropagation()} role="alertdialog" aria-modal="true">
+            <h3>🛑 Cancelar o envio do helicóptero?</h3>
+            <div className="alert fail">
+              <span>O grupo da missão é avisado <b>na hora</b> de que a aeronave <b>não segue</b> para esta
+                ocorrência, e a missão é encerrada. <b>Não dá para desfazer</b> — para reativar é preciso
+                abrir um caso novo.</span>
+            </div>
+            <label className="small" htmlFor="cancel-motivo">Motivo do cancelamento (obrigatório)</label>
+            <textarea id="cancel-motivo" rows={3} value={motivo} onChange={(e) => setMotivo(e.target.value)} autoFocus
+              placeholder="ex.: óbito na cena, meteorologia fechou, removido por via terrestre…" style={{ width: '100%', marginTop: 4 }} />
+            <div className="row" style={{ marginTop: 14, justifyContent: 'flex-end' }}>
+              <button className="btn sec" onClick={() => setCancelando(false)}>Voltar — manter o envio</button>
+              <button className="btn warn" disabled={motivo.trim().length < 3}
+                onClick={() => { onCancel(motivo.trim()); setCancelando(false) }}>
+                Confirmar cancelamento
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {events.decisao && mission?.airTotal != null && (
         <div className="small" style={{ marginTop: 8 }}>
           Chegada prevista ao destino: <b>{fmtClock(new Date(events.decisao).getTime() + mission.airTotal * 60000)}</b>

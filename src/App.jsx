@@ -13,7 +13,7 @@ import CommunityModal from './components/Community.jsx'
 import { LzPhotoModal } from './components/LzPhotos.jsx'
 import Checklist from './components/Checklist.jsx'
 import PatientForm from './components/PatientForm.jsx'
-import Tracking, { MILESTONES, MilestoneQuick, Intercorrencias, ultimoMarco } from './components/Tracking.jsx'
+import Tracking, { MILESTONES, CANCELADO, MilestoneQuick, Intercorrencias, ultimoMarco, marcoLabel, encerrada } from './components/Tracking.jsx'
 import * as outbox from './lib/outbox.js'
 import SyncBadge from './components/SyncBadge.jsx'
 import PatientConflicts from './components/PatientConflicts.jsx'
@@ -350,7 +350,7 @@ export default function App({ user, onLogout, onRelogin }) {
   // (favorável / marginal / desfavorável) na cena ou na base vira aviso em
   // destaque, para o interno avisar o comandante antes de ele descobrir no ar.
   const WX_REPOLL_MS = 10 * 60_000
-  const missionEmCurso = !!events.decisao && !events.entrega
+  const missionEmCurso = !!events.decisao && !encerrada(events)
   const wxRef = useRef({ scene: null, base: null })
   wxRef.current = { scene: wxScene, base: wxBase }
   useEffect(() => {
@@ -651,7 +651,7 @@ export default function App({ user, onLogout, onRelogin }) {
       setNotifyMsg({ ok: false, text: `Horário gravado, mas o grupo NÃO foi acionado: ${r.missionError || 'falha no Telegram'}` })
     }
   }
-  const pushEvent = (id, ts, delay = 1200) => {
+  const pushEvent = (id, ts, delay = 1200, nota) => {
     if (dbId == null) return // caso ainda não salvo: fica só local, como antes
     clearTimeout(evtTimersRef.current[id])
     // a entrada SAI do mapa ao disparar: enquanto ela existe, o poll de tempo
@@ -661,13 +661,21 @@ export default function App({ user, onLogout, onRelogin }) {
       delete evtTimersRef.current[id]
       // caixa de saída: sem sinal o horário fica no aparelho e sobe depois,
       // com o carimbo original. A resposta chega por outbox.onResult.
-      outbox.sendEvent(user?.id, outbox.resolveId(dbId), id, ts)
+      outbox.sendEvent(user?.id, outbox.resolveId(dbId), id, ts, nota)
     }, delay)
   }
   const markEvent = (id) => {
     const ts = Date.now()
     setEvents((p) => ({ ...p, [id]: ts }))
     pushEvent(id, ts)
+  }
+  // Cancelar o envio é desfecho: encerra a missão no grupo com o motivo. O
+  // motivo fica no caso como intercorrência (sincroniza e sai no PDF).
+  const cancelarEnvio = (motivo) => {
+    const ts = Date.now()
+    setIntercorrencias((p) => [...p, { at: ts, fase: ultimoMarco(events), texto: `Envio do helicóptero cancelado — ${motivo}`, tipo: 'cancelamento' }])
+    setEvents((p) => ({ ...p, cancelado: ts }))
+    pushEvent('cancelado', ts, 0, motivo)
   }
   // marcação rápida (um toque): segura o envio até a janela de "desfazer"
   // fechar, para um toque acidental não ecoar no grupo do Telegram
@@ -807,7 +815,7 @@ export default function App({ user, onLogout, onRelogin }) {
           eventsRef.current = { ...prevEv, ...Object.fromEntries(chegaram) }
           setEvents((p) => ({ ...p, ...Object.fromEntries(chegaram) }))
           chamou.push(...chegaram.map(([id, ts]) =>
-            `${MILESTONES.find((m) => m.id === id)?.label || id} ${fmtClock(ts)}`))
+            `${marcoLabel(id)} ${fmtClock(ts)}`))
         }
 
         // ---- o resto do caso ----
@@ -1405,6 +1413,11 @@ export default function App({ user, onLogout, onRelogin }) {
   const faltamPaciente = pend.filter((p) => p.onde === 'paciente').map((p) => ({ label: p.label.replace('Paciente: ', '') }))
   const ONDE = { caso: 'Caso', fatores: 'Fatores', paciente: 'Paciente', missao: 'Missão' }
   // no celular troca de tela; no desktop (tudo à vista) rola até o bloco
+  // leva ao mapa quem vai clicar nele (no celular ele mora em outra tela)
+  const verMapa = () => {
+    if (!wide) { go('navegar'); window.scrollTo(0, 0); return }
+    document.querySelector('.mapbox')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }
   const irPara = (v) => {
     if (!wide) { go(v); window.scrollTo(0, 0); return }
     document.getElementById('v-' + v)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
@@ -1427,7 +1440,9 @@ export default function App({ user, onLogout, onRelogin }) {
   // autoria (quem abriu, quem autorizou, quem marcou cada horário) vem do
   // servidor na hora de imprimir — é o dado mais fresco e não pesa no poll
   const [printReg, setPrintReg] = useState(null)
-  const abrirImpressao = async () => {
+  const [printGoa, setPrintGoa] = useState(false)
+  const abrirImpressao = async (goa = false) => {
+    setPrintGoa(goa === true)
     let reg = null
     if (dbId != null) { try { reg = (await api.getCase(dbId)).case } catch (e) { /* imprime sem autoria */ } }
     setPrintReg(reg); setShowPrint(true)
@@ -1715,8 +1730,8 @@ export default function App({ user, onLogout, onRelogin }) {
               <button className={mapMode === 'lz' ? 'on' : ''} onClick={() => setMapMode(mapMode === 'lz' ? 'scene' : 'lz')}><IconTarget size={13} /> Marcar LZ</button>
               <button className={showObs ? 'on' : ''} onClick={() => setShowObs(!showObs)}><IconZap size={13} /> Obstáculos</button>
               <button className={showPads ? 'on' : ''} onClick={() => setShowPads(!showPads)} title="Helipontos registrados ANAC/CIAD e pontos da comunidade"><IconHelipadH size={13} /> Helipontos</button>
-              <button className={mapMode === 'suggest' ? 'on' : ''} onClick={() => setShowComm(true)} title="Pontos de pouso sugeridos pela comunidade">
-                <IconUsers size={13} /> {mapMode === 'suggest' ? 'Clique no local do pouso…' : 'Comunidade'}
+              <button className={mapMode === 'suggest' ? 'on' : 'sugerir'} onClick={() => setShowComm(true)} title="Conhece um bom local de pouso? Marque no mapa e sugira — depois de validado entra na base de todos">
+                <IconPlus size={13} /> {mapMode === 'suggest' ? 'Clique no local do pouso…' : 'Sugerir ponto de pouso'}
               </button>
             </div>
             <MapView
@@ -1820,6 +1835,18 @@ export default function App({ user, onLogout, onRelogin }) {
                 onRetry={() => { pendingLzSelRef.current = lzSelId; setScene((s) => (s ? { ...s } : s)) }}
                 mode={mapMode} setMode={setMapMode}
               />
+              {/* sempre visível: marcar a LZ desta ocorrência e sugerir ponto novo para a base */}
+              <div className="lz-sugerir">
+                <span className="small" style={{ flexBasis: '100%' }}>
+                  Nenhuma serve ou conhece um local melhor? Marque no mapa — e sugira para a base, para os próximos casos.
+                </span>
+                <button className={'btn xs ' + (mapMode === 'lz' ? '' : 'sec')} onClick={() => { setMapMode(mapMode === 'lz' ? 'scene' : 'lz'); verMapa() }}>
+                  <IconTarget size={13} /> {mapMode === 'lz' ? 'Clique no mapa…' : 'Marcar LZ no mapa'}
+                </button>
+                <button className="btn xs ghost" onClick={() => { if (manualLz) setCommDraft({ lat: manualLz.lat, lon: manualLz.lon }); setShowComm(true) }}>
+                  <IconPlus size={13} /> {manualLz ? 'Sugerir esta LZ para a base' : 'Sugerir novo ponto de pouso'}
+                </button>
+              </div>
             </div>
           )}
 
@@ -1840,7 +1867,7 @@ export default function App({ user, onLogout, onRelogin }) {
           {show('missao') && scene && (
             <div className="card">
               <h2 id="v-missao"><IconRoute size={14} /> Acompanhamento da missão</h2>
-              <Tracking events={events} onMark={markEvent} onEdit={editEvent} mission={mission} />
+              <Tracking events={events} onMark={markEvent} onEdit={editEvent} onCancel={cancelarEnvio} mission={mission} />
               <Intercorrencias lista={intercorrencias} events={events}
                 onAdd={(texto) => setIntercorrencias((p) => [...p, { at: Date.now(), fase: ultimoMarco(events), texto, tipo: null }])}
                 onRemove={(i) => setIntercorrencias((p) => p.filter((_, k) => k !== i))} />
@@ -1923,7 +1950,8 @@ export default function App({ user, onLogout, onRelogin }) {
                 </button>
                 <button className="btn sec" onClick={() => setShowCases(true)}><IconFolder size={14} /> Casos ({cases.length})</button>
                 <button className="btn sec" onClick={copyResumo}><IconCopy size={14} /> Copiar resumo</button>
-                <button className="btn sec" onClick={abrirImpressao} title="PDF do caso (voo e paciente), escolhendo o que sai — para imprimir, anexar ao e-mail e assinar no gov.br"><IconPrint size={14} /> Imprimir / PDF</button>
+                <button className="btn sec" onClick={() => abrirImpressao()} title="PDF do caso (voo e paciente), escolhendo o que sai — para imprimir, anexar ao e-mail e assinar no gov.br"><IconPrint size={14} /> Imprimir / PDF</button>
+                <button className="btn sec" onClick={() => abrirImpressao(true)} title="PDF só do voo, sem nenhum dado do paciente — para enviar aos bombeiros do GOA"><IconHeli size={14} /> Relatório p/ GOA</button>
                 <button className="btn sec" onClick={exportJSON}><IconDownload size={14} /> Exportar JSON</button>
               </div>
               {saveFlash && (
@@ -1971,7 +1999,7 @@ export default function App({ user, onLogout, onRelogin }) {
         <b>SkyRescue β</b> — ferramenta de apoio à decisão em fase piloto. Não substitui o julgamento do médico regulador, os protocolos do SAMU 192 / SESAB, nem a decisão final do comandante da aeronave (GOA/CBMBA). Meteorologia (Open-Meteo) e áreas de pouso (OpenStreetMap) são indicativas e exigem confirmação operacional. Rotas terrestres via OSRM, sem trânsito em tempo real. Os casos são registrados no servidor do GOA com controle de acesso e autoria. Dados pessoais de paciente só na <b>Ficha do paciente</b>, que é restrita à equipe autorizada e tem todo acesso registrado — fora dela (identificador do caso, observações) não escreva dado identificável.
       </div>
 
-      {showPrint && <PrintModal conteudo={printData()} meta={{ caseId, refMs, refFrozen: refAt != null, divergencias: conflitos }} onClose={() => setShowPrint(false)} />}
+      {showPrint && <PrintModal goa={printGoa} conteudo={printData()} meta={{ caseId, refMs, refFrozen: refAt != null, divergencias: conflitos }} onClose={() => setShowPrint(false)} />}
       {showSamus && <SamuContactsModal user={user} onClose={() => setShowSamus(false)} />}
       {showCfg && <ConfigModal cfg={cfg} user={user} onClose={() => setShowCfg(false)} onSave={(c) => { setCfg(c); saveCfg(c); setShowCfg(false) }} />}
 
@@ -2006,7 +2034,7 @@ export default function App({ user, onLogout, onRelogin }) {
           draft={commDraft}
           onDraftDone={() => setCommDraft(null)}
           onClose={() => { setShowComm(false); setCommDraft(null) }}
-          onPickOnMap={() => { setShowComm(false); setMapMode('suggest') }}
+          onPickOnMap={() => { setShowComm(false); setMapMode('suggest'); verMapa() }}
           refresh={refreshCommunity}
           onFocus={(p) => { setShowComm(false); setFocus({ lat: p.lat, lon: p.lon, ts: Date.now() }) }}
         />
@@ -2111,7 +2139,7 @@ function PrintSheet({ caseId, tag, scene, sceneLabel, score, gates, rec, mission
 
       <h2>Cronologia da missão</h2>
       <table><tbody>
-        {MILESTONES.map((m) => (
+        {[...MILESTONES, ...(events.cancelado ? [CANCELADO] : [])].map((m) => (
           <tr key={m.id}><th>{m.label}</th><td>{events[m.id] ? new Date(events[m.id]).toLocaleTimeString('pt-BR') : '—'}</td></tr>
         ))}
       </tbody></table>

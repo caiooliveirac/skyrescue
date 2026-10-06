@@ -198,10 +198,11 @@ export function setPatientPatch(userId, caseId, changes, base, baseVersion, clie
   notify(); flush()
 }
 
-export function sendEvent(userId, caseId, event, ts) {
+// `nota`: motivo do cancelamento do envio, para o aviso no grupo da missão
+export function sendEvent(userId, caseId, event, ts, nota) {
   const it = items.find((x) => x.type === 'event.save' && String(x.caseId) === String(caseId) && x.event === event && !x.sending && !x.dead)
   if (it) { it.ts = ts; persist(it) }
-  else add({ type: 'event.save', userId, caseId, event, ts })
+  else add({ type: 'event.save', userId, caseId, event, ts, nota })
   notify(); flush()
 }
 
@@ -232,7 +233,7 @@ async function send(it) {
       updatedAt: r.updatedAt, conflicts: r.conflicts || [], pendingConflicts: r.pendingConflicts || 0,
     }
   }
-  const r = await api.saveEvent(it.caseId, it.event, it.ts)
+  const r = await api.saveEvent(it.caseId, it.event, it.ts, it.nota)
   return { type: it.type, caseId: it.caseId, event: it.event, result: r }
 }
 

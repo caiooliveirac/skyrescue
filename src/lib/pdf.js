@@ -11,7 +11,7 @@
 // ------------------------------------------------------------------
 import { fmtMin, fmtClock, fmtCoords, fmtCoordsDDM } from './geo.js'
 import { ageFrom } from './patient.js'
-import { MILESTONES } from '../components/Tracking.jsx'
+import { MILESTONES, CANCELADO } from '../components/Tracking.jsx'
 import { wxHora } from '../components/Results.jsx'
 
 // grupo, título, se vem marcada no padrão
@@ -41,6 +41,10 @@ export const PRINT_PRESETS = [
   { id: 'voo', label: 'Só voo', ids: PRINT_SECTIONS.filter((s) => s.grupo !== 'paciente').map((s) => s.id) },
   { id: 'paciente', label: 'Só paciente', ids: PRINT_SECTIONS.filter((s) => s.grupo !== 'voo').map((s) => s.id) },
 ]
+// Relatório para os bombeiros do GOA: o voo, sem nada do paciente. Fica de
+// fora também o texto livre das observações (pode citar o paciente), as
+// pendências internas de documentação e as assinaturas.
+export const PRINT_GOA = ['responsaveis', 'ocorrencia', 'score', 'tempos', 'trechos', 'pouso', 'condicoes', 'cronologia', 'intervalos', 'intercorrencias']
 
 // ---------------- conteúdo ----------------
 const val = (v) => (v == null ? '' : String(v).trim())
@@ -130,7 +134,7 @@ export function printContent(c) {
       ['Janela diurna', c.daylight?.note],
       ['Gates', c.gates.rows.map((g) => `${g.label}: ${g.effective.toUpperCase()}`).join(' · ')],
     ),
-    cronologia: rows(...MILESTONES.map((mi) => [mi.label, c.events[mi.id] ? `${hhmm(c.events[mi.id])}${por(mi.id) ? ' · por ' + por(mi.id) : ''}` : ''])),
+    cronologia: rows(...[...MILESTONES, CANCELADO].map((mi) => [mi.label, c.events[mi.id] ? `${hhmm(c.events[mi.id])}${por(mi.id) ? ' · por ' + por(mi.id) : ''}` : ''])),
     intervalos: rows(...INTERVALOS.map(([a, b, label]) => {
       const ta = c.events[a], tb = c.events[b]
       return [label, ta && tb && tb >= ta ? fmtMin(Math.round((tb - ta) / 60000)) : '']

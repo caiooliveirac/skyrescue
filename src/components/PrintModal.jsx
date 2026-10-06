@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { PRINT_SECTIONS, PRINT_PRESETS, gerarPdf } from '../lib/pdf.js'
+import { PRINT_SECTIONS, PRINT_PRESETS, PRINT_GOA, gerarPdf } from '../lib/pdf.js'
 import { IconPrint, IconDownload, IconX } from './Icons.jsx'
 
 // Escolha do que sai no PDF do caso. A seleção fica lembrada no aparelho
@@ -20,17 +20,20 @@ const GRUPOS = [
   { id: 'doc', title: 'Documento' },
 ]
 
-export default function PrintModal({ conteudo, meta, onClose }) {
-  const [sel, setSel] = useState(lerSel)
+// `goa`: abre já no relatório para os bombeiros (sem paciente), sem mexer na
+// seleção lembrada de quem imprime o registro completo.
+export default function PrintModal({ conteudo, meta, goa, onClose }) {
+  const [sel, setSel] = useState(goa ? PRINT_GOA : lerSel)
+  const ehGoa = PRINT_GOA.length === sel.length && PRINT_GOA.every((id) => sel.includes(id))
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
 
-  const salvar = (v) => { setSel(v); try { localStorage.setItem(KEY, JSON.stringify(v)) } catch (e) { /* ok */ } }
+  const salvar = (v) => { setSel(v); if (goa) return; try { localStorage.setItem(KEY, JSON.stringify(v)) } catch (e) { /* ok */ } }
   const toggle = (id) => salvar(sel.includes(id) ? sel.filter((x) => x !== id) : [...sel, id])
   const temDado = (id) => (conteudo[id] || []).length > 0
   const saem = PRINT_SECTIONS.filter((s) => sel.includes(s.id) && temDado(s.id))
   const presetAtivo = PRINT_PRESETS.find((p) => p.ids.length === sel.length && p.ids.every((id) => sel.includes(id)))?.id
-  const nome = `skyrescue-${(meta.caseId || 'caso').replace(/[^\w-]+/g, '-')}.pdf`
+  const nome = `skyrescue-${(meta.caseId || 'caso').replace(/[^\w-]+/g, '-')}${ehGoa ? '-goa' : ''}.pdf`
 
   // `baixar`: salva o arquivo; senão abre no visualizador de PDF do navegador.
   // A aba é aberta JÁ no clique — depois do await o navegador (Safari do
@@ -72,6 +75,17 @@ export default function PrintModal({ conteudo, meta, onClose }) {
               documentação — {sel.includes('pendencias') ? 'saem listadas no topo do PDF' : 'a seção de pendências está desmarcada'}.
               Complete o caso antes de arquivar.</span>
           </div>
+        )}
+
+        {ehGoa ? (
+          <div className="alert ok" style={{ marginBottom: 12 }}>
+            <span><b>Relatório para o GOA</b> — só o voo. Dados do paciente, observações livres e pendências
+              internas <b>não saem</b>.</span>
+          </div>
+        ) : (
+          <button className="btn sec print-goa" onClick={() => setSel(PRINT_GOA)}>
+            Relatório para o GOA (sem dados do paciente)
+          </button>
         )}
 
         <div className="print-presets">

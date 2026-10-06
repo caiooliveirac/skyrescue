@@ -56,7 +56,7 @@ export const api = {
   notifyCase: (id) => req('POST', `/cases/${id}/notify`),
   iaStatus: () => req('GET', '/ia/status'),
   iaCriterios: (historia, opcoes) => req('POST', '/ia/criterios', { historia, opcoes }),
-  saveEvent: (id, event, ts) => req('POST', `/cases/${id}/events`, { event, ts }),
+  saveEvent: (id, event, ts, nota) => req('POST', `/cases/${id}/events`, { event, ts, nota }),
   liveCase: (id, since) => req('GET', `/cases/${id}/live${since ? `?since=${encodeURIComponent(since)}` : ''}`),
   // pontos de pouso da comunidade
   listCommunityLz: () => req('GET', '/community-lz'),
@@ -86,6 +86,7 @@ export const api = {
   // acionamento público (tela "Acionar GOA", sem login): o servidor grava e o
   // bot do WhatsApp avisa o grupo e os plantonistas
   acionar: (a) => req('POST', '/acionamentos', a),
+  completarAcionamento: (id, a) => req('PATCH', `/acionamentos/${id}`, a),
   listAcionamentos: () => req('GET', '/acionamentos'),
   // bot do WhatsApp (admin): pareamento do chip, grupo e destinatários
   waStatus: () => req('GET', '/whatsapp/status'),

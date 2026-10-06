@@ -197,6 +197,20 @@ CREATE TABLE IF NOT EXISTS acionamento (
   wa_sent_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS acionamento_created_idx ON acionamento (created_at DESC);
+-- Acionamento em duas etapas (2026-10-05): o primeiro aviso sai só com o
+-- endereço confirmado; central/médico/telefone/tipo chegam na passagem
+-- completa. `token` autoriza quem abriu o pedido (rota pública) a completá-lo;
+-- `local_anterior` guarda o endereço do primeiro aviso quando ele é trocado.
+ALTER TABLE acionamento ALTER COLUMN central DROP NOT NULL;
+ALTER TABLE acionamento ALTER COLUMN medico DROP NOT NULL;
+ALTER TABLE acionamento ALTER COLUMN fone DROP NOT NULL;
+ALTER TABLE acionamento ALTER COLUMN tipo DROP NOT NULL;
+ALTER TABLE acionamento ADD COLUMN IF NOT EXISTS token TEXT;
+ALTER TABLE acionamento ADD COLUMN IF NOT EXISTS paciente_nome TEXT;   -- nome ou "Ignorado"
+ALTER TABLE acionamento ADD COLUMN IF NOT EXISTS paciente_idade TEXT;  -- idade estimada ou "Ignorado"
+ALTER TABLE acionamento ADD COLUMN IF NOT EXISTS local_anterior TEXT;
+ALTER TABLE acionamento ADD COLUMN IF NOT EXISTS completo_at TIMESTAMPTZ;
+ALTER TABLE acionamento ADD COLUMN IF NOT EXISTS revisoes INT NOT NULL DEFAULT 0;
 
 -- ---------- bot do WhatsApp (chip da regulação) ----------
 -- O chip fica pareado ao servidor como "dispositivo conectado" (a sessão em
