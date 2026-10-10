@@ -75,6 +75,8 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/home"
           echo "HOME=$RUNNER_TEMP/home" >> "$GITHUB_ENV"
+          # GNU rsync do Homebrew na frente do openrsync do macOS.
+          echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
 
       - uses: actions/checkout@v4
 
