@@ -10,7 +10,7 @@
 // aceitando qualquer chave que alguém resolvesse mandar.
 export const PATIENT_KEYS = [
   // identificação
-  'nome', 'nascimento', 'sexo', 'nomeMae', 'cpf', 'cns', 'municipio',
+  'nome', 'idade', 'nascimento' /* legado: fichas antigas */, 'sexo', 'nomeMae', 'cpf', 'cns', 'municipio',
   // quadro clínico
   'queixa', 'pa', 'fc', 'fr', 'spo2', 'tax', 'hgt', 'gcs', 'dor',
   'alergias', 'comorbidades', 'medUso',

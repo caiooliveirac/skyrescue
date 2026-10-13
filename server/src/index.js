@@ -332,7 +332,7 @@ app.get('/api/cases', allowService, async (_req, res) => {
             c.air_total_min, c.ground_total_min, c.delta_min, c.gates_ok,
             c.created_at, c.updated_at,
             c.snapshot->>'caseTag' AS case_tag, c.snapshot->'scenePlace' AS scene_place,
-            cp.data->>'sexo' AS vit_sexo, cp.data->>'nascimento' AS vit_nasc,
+            cp.data->>'sexo' AS vit_sexo, cp.data->>'nascimento' AS vit_nasc, cp.data->>'idade' AS vit_idade,
             cu.username AS created_by_username, cu.full_name AS created_by_name
        FROM cases c
        LEFT JOIN users cu ON cu.id = c.created_by
@@ -344,9 +344,9 @@ app.get('/api/cases', allowService, async (_req, res) => {
   // a ficha; integração por token de serviço não recebe nem isso
   const idade = (n) => { const d = new Date(n + 'T00:00:00'); if (isNaN(d)) return null; const a = Math.floor((Date.now() - d) / 31557600000); return a >= 0 && a < 150 ? a : null }
   for (const r of rows) {
-    const partes = _req.user ? [r.vit_sexo, r.vit_nasc ? idade(r.vit_nasc) : null].filter((x) => x != null && x !== '') : []
+    const partes = _req.user ? [r.vit_sexo, /^\d+$/.test(String(r.vit_idade || '').trim()) ? Number(r.vit_idade) : r.vit_nasc ? idade(r.vit_nasc) : null].filter((x) => x != null && x !== '') : []
     r.vitima = partes.length ? partes.map((x) => (typeof x === 'number' ? `${x}a` : x)).join(', ') : null
-    delete r.vit_sexo; delete r.vit_nasc
+    delete r.vit_sexo; delete r.vit_nasc; delete r.vit_idade
   }
   res.json({ cases: rows })
 })

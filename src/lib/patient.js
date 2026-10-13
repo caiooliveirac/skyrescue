@@ -28,7 +28,7 @@ export const PATIENT_SECTIONS = [
     title: 'Identificação do paciente',
     fields: [
       { k: 'nome', req: true, label: 'Nome completo', w: 2 },
-      { k: 'nascimento', req: true, label: 'Data de nascimento', type: 'date' },
+      { k: 'idade', req: true, label: 'Idade (anos)', type: 'number' },
       { k: 'sexo', req: true, label: 'Sexo', type: 'select', opts: ['', 'Feminino', 'Masculino', 'Outro / Não informado'] },
       { k: 'nomeMae', label: 'Nome da mãe', w: 2 },
       { k: 'cpf', label: 'CPF' },
@@ -256,6 +256,14 @@ export function migrateLegacyPatient(userId) {
 }
 
 // ---------------- helpers de apresentação ----------------
+// Idade para exibição: a informada na ficha; fichas antigas (que guardavam a
+// data de nascimento) continuam mostrando a idade calculada.
+export function idadeTexto(p) {
+  const i = String(p?.idade || '').trim()
+  if (i) return `${i} anos`
+  return ageFrom(p?.nascimento)
+}
+
 export function ageFrom(nascimento) {
   if (!nascimento) return ''
   const d = new Date(nascimento + 'T00:00:00')

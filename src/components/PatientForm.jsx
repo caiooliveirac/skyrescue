@@ -1,4 +1,4 @@
-import { PATIENT_SECTIONS, ageFrom } from '../lib/patient.js'
+import { PATIENT_SECTIONS } from '../lib/patient.js'
 
 // Ficha do paciente na tela do médico logado. Mora no servidor, com espelho
 // neste aparelho para funcionar sem rede (ver src/lib/patient.js e outbox.js).
@@ -8,7 +8,6 @@ function Field({ f, value, onChange }) {
     <div className={'field' + (f.req && !String(value || '').trim() ? ' req-vazio' : '')} style={f.w === 2 ? { gridColumn: '1 / -1' } : undefined}>
       <label>
         {f.label}{f.req && <span className="req-mark" title="obrigatório para o caso ficar documentado"> *</span>}
-        {f.k === 'nascimento' && ageFrom(value) && <span className="auto-tag" style={{ fontStyle: 'normal' }}> {ageFrom(value)}</span>}
       </label>
       {f.type === 'textarea' ? (
         <textarea rows={2} {...common} />
@@ -17,7 +16,11 @@ function Field({ f, value, onChange }) {
           {f.opts.map((o) => <option key={o} value={o}>{o || '—'}</option>)}
         </select>
       ) : (
-        <input type={f.type === 'date' ? 'date' : 'text'} {...common} />
+        <input
+          type={f.type === 'date' ? 'date' : f.type === 'number' ? 'number' : 'text'}
+          {...(f.type === 'number' ? { inputMode: 'numeric', min: 0, max: 149 } : {})}
+          {...common}
+        />
       )}
     </div>
   )

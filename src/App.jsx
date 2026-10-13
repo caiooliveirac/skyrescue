@@ -18,7 +18,7 @@ import * as outbox from './lib/outbox.js'
 import SyncBadge from './components/SyncBadge.jsx'
 import PatientConflicts from './components/PatientConflicts.jsx'
 import { makeDraftSaver, readDraft, draftWorthKeeping } from './lib/draft.js'
-import { ageFrom, emptyPatient, readPatient, readMirror, savePatient, clearPatient, movePatient, migrateLegacyPatient, PATIENT_KEYS, patientWorthKeeping } from './lib/patient.js'
+import { idadeTexto, emptyPatient, readPatient, readMirror, savePatient, clearPatient, movePatient, migrateLegacyPatient, PATIENT_KEYS, patientWorthKeeping } from './lib/patient.js'
 import ConfigModal from './components/ConfigModal.jsx'
 import SamuContactsModal from './components/SamuContacts.jsx'
 import PrintModal from './components/PrintModal.jsx'
@@ -452,7 +452,7 @@ export default function App({ user, onLogout, onRelogin }) {
   // fora): é só isto que vai para a IA
   const historiaClinica = () => {
     const L = []
-    const idade = ageFrom(patient.nascimento)
+    const idade = idadeTexto(patient)
     if (patient.sexo || idade) L.push(`Paciente: ${[patient.sexo, idade].filter(Boolean).join(', ')}`)
     if (patient.queixa) L.push(`Queixa / mecanismo: ${patient.queixa}`)
     if (patient.hipotese) L.push(`Hipótese: ${patient.hipotese}`)

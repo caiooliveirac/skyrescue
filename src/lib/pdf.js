@@ -10,7 +10,7 @@
 // de "—"); seção sem nenhuma linha aparece desabilitada no modal.
 // ------------------------------------------------------------------
 import { fmtMin, fmtClock, fmtCoords, fmtCoordsDDM } from './geo.js'
-import { ageFrom } from './patient.js'
+import { idadeTexto } from './patient.js'
 import { MILESTONES, CANCELADO } from '../components/Tracking.jsx'
 import { wxHora } from '../components/Results.jsx'
 
@@ -145,7 +145,7 @@ export function printContent(c) {
     obs: rows(['Observações', c.notes]),
     p_ident: rows(
       ['Nome', p.nome],
-      ['Nascimento / idade', [nasc, ageFrom(p.nascimento)].filter(Boolean).join(' · ')],
+      ['Idade', p.idade ? idadeTexto(p) : [nasc, idadeTexto(p)].filter(Boolean).join(' · ')],
       ['Sexo', p.sexo],
       ['Município', p.municipio],
     ),
