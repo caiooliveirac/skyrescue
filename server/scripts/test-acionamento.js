@@ -86,6 +86,25 @@ async function main() {
   ok('entrega encerra a missão', (await missionStatus(c2)) === 'encerrada', `retorno=${e.r}`)
   ok('encerramento sai com a cronologia', e.out.includes('Missão encerrada'))
 
+  console.log('\n=== caso que já chega com desfecho não aciona o grupo (criação / sync offline) ===')
+  // POST /cases e PUT /cases/:id mandam todos os marcos novos de uma vez: um
+  // caso registrado já cancelado traz 'decisao' e 'cancelado' juntos
+  const viva = await mkCase('teste-acion-viva', snap('teste-acion-viva', { events: { decisao: ts } }))
+  await marcar(viva, [{ id: 'decisao', ts, edited: false }])
+  for (const fim of ['cancelado', 'entrega']) {
+    const cx = await mkCase(`teste-acion-${fim}`, snap(`teste-acion-${fim}`, { events: { decisao: ts, [fim]: ts + 60000 } }))
+    const g = await marcar(cx, [{ id: 'decisao', ts, edited: false }, { id: fim, ts: ts + 60000, edited: false }])
+    ok(`decisao + ${fim} juntos não abrem a missão`, g.r === null, `retorno=${g.r}`)
+    ok(`nenhuma mission_chat ativa para o caso (${fim})`, (await missionStatus(cx)) !== 'ativa', `status=${await missionStatus(cx)}`)
+    ok(`nenhum briefing de voo no grupo (${fim})`, !g.out.includes('MISSÃO —'), g.out.slice(0, 80))
+  }
+  ok('a missão em andamento de outro caso segue ativa', (await missionStatus(viva)) === 'ativa')
+  // 'decisao' sincronizado depois, num caso que já estava cancelado
+  const tarde = await mkCase('teste-acion-tarde', snap('teste-acion-tarde', { events: { decisao: ts, cancelado: ts - 60000 } }))
+  const h = await marcar(tarde, [{ id: 'decisao', ts, edited: false }])
+  ok('acionamento marcado depois do cancelamento não abre a missão', h.r === null && (await missionStatus(tarde)) === null, `retorno=${h.r}`)
+  await query(`UPDATE mission_chat SET status='encerrada' WHERE case_id = $1`, [viva])
+
   console.log('\n=== /caso acha o acionamento órfão (o "absurdo" de 24/07) ===')
   // caso com o acionamento autorizado que nunca virou missão no grupo:
   // é o estado do caso 107 depois do bot ficar mudo

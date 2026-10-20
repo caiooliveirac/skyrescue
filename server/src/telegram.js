@@ -297,12 +297,17 @@ export async function postMilestones(caseId, changed, byName, nota) {
 // registro 'encerrada', o marco é correção de horário de missão velha —
 // ressuscitá-la seria trazer de volta a missão fantasma de 21/07.
 //
+// Também não abre quando o caso já chega com desfecho (cancelado/acolhido
+// junto com o acionamento, na criação ou num sync do modo offline): seria
+// briefing de voo para um envio que não vai acontecer e uma missão 'ativa'
+// que nenhum marco fecharia depois.
+//
 // Devolve 'aberta' quando acionou aqui (o briefing já publica os horários já
 // marcados, então não se ecoa de novo) ou null quando foi só eco.
 export async function echoMilestones(caseId, changed, user, nota) {
   if (changed.some((c) => c.id === 'decisao') && (await missionStatus(caseId)) === null) {
     const { rows } = await query('SELECT id, snapshot FROM cases WHERE id = $1', [caseId])
-    if (rows[0]) {
+    if (rows[0] && !FIM.some((id) => rows[0].snapshot?.events?.[id])) {
       await notifyMission(rows[0], rows[0].snapshot || {}, user)
       return 'aberta'
     }
