@@ -13,6 +13,7 @@ import { mergePatient } from './patient-merge.js'
 import * as wa from './whatsapp.js'
 import { sugerirCriterios, iaDisponivel } from './ia.js'
 import { portalConfigurado, destinoPortal } from './portal.js'
+import * as checklist from './checklist.js'
 
 const app = express()
 app.set('trust proxy', 1) // atrás do nginx/Cloudflare
@@ -20,6 +21,7 @@ app.set('trust proxy', 1) // atrás do nginx/Cloudflare
 // ANTES do parser global — o body-parser marca req._body e o seguinte não reprocessa.
 // O teto de 3 MB é folga: o cliente já manda <500 kB (ver src/lib/photo.js).
 app.use('/api/lz-photos', express.json({ limit: '3mb' }))
+app.use('/api/checklist-goa/nc', express.json({ limit: '4mb' }))
 app.use(express.json({ limit: '1mb' }))
 app.use(cookieParser())
 app.use(authMiddleware)
@@ -1226,6 +1228,50 @@ app.post('/api/ia/criterios', requireAuth, rateLimitIa, async (req, res) => {
 })
 
 // ---------- contatos das centrais SAMU ----------
+// ---------- checklist da base GOA (app checklists.mnrs.com.br) ----------
+app.get('/api/checklist-goa', requireAuth, async (_req, res) => {
+  try { res.json(await checklist.carregar()) }
+  catch (e) { res.status(e.status || 502).json({ error: e.message }) }
+})
+
+app.post('/api/checklist-goa', requireAuth, async (req, res) => {
+  const items = Array.isArray(req.body?.items) ? req.body.items : []
+  const doctorName = String(req.body?.doctorName || req.user.full_name || req.user.username).trim().slice(0, 120)
+  try {
+    const r = await checklist.enviar({
+      doctorName, items,
+      doctorId: req.body?.doctorId, occupancyId: req.body?.occupancyId, shiftLabel: req.body?.shiftLabel,
+    })
+    res.json(r)
+  } catch (e) { res.status(e.status || 502).json({ error: e.message }) }
+})
+
+const falhaChecklist = (res, e) => res.status(e.status || 502).json({ error: e.message })
+
+app.get('/api/checklist-goa/history', requireAuth, async (_req, res) => {
+  try { res.json(await checklist.historico()) } catch (e) { falhaChecklist(res, e) }
+})
+
+app.get('/api/checklist-goa/nc', requireAuth, async (_req, res) => {
+  try { res.json(await checklist.inconformidades()) } catch (e) { falhaChecklist(res, e) }
+})
+
+app.get('/api/checklist-goa/nc/photo/:id', requireAuth, async (req, res) => {
+  if (!/^[0-9a-f-]{36}$/i.test(req.params.id)) return res.status(404).json({ error: 'não encontrada' })
+  try {
+    const f = await checklist.fotoInconformidade(req.params.id)
+    res.set('Content-Type', f.tipo).set('Cache-Control', 'private, max-age=86400').send(f.bytes)
+  } catch (e) { falhaChecklist(res, e) }
+})
+
+app.post('/api/checklist-goa/nc', requireAuth, async (req, res) => {
+  const description = String(req.body?.description || '').trim().slice(0, 500)
+  const photo = String(req.body?.photo || '')
+  if (description.length < 3 || !photo.startsWith('data:image/')) return res.status(400).json({ error: 'Foto e descrição são obrigatórias.' })
+  const doctorName = String(req.body?.doctorName || req.user.full_name || req.user.username).trim().slice(0, 120)
+  try { res.json(await checklist.enviarInconformidade({ doctorName, description, photo })) } catch (e) { falhaChecklist(res, e) }
+})
+
 app.get('/api/samu-contacts', requireAuth, async (_req, res) => {
   const { rows } = await query('SELECT id, samu, person, phone FROM samu_contact ORDER BY lower(samu), lower(coalesce(person, \'\'))')
   res.json({ contacts: rows })

@@ -75,6 +75,12 @@ export const api = {
   reportAircraft: (p) => req('POST', '/aircraft/position', p),
   getAircraft: () => req('GET', '/aircraft/position'),
   // contatos das centrais SAMU (leitura: qualquer login; escrita: admin/gestor)
+  // checklist da base GOA (ponte com checklists.mnrs.com.br)
+  getChecklistGoa: () => req('GET', '/checklist-goa'),
+  sendChecklistGoa: (b) => req('POST', '/checklist-goa', b),
+  historyChecklistGoa: () => req('GET', '/checklist-goa/history'),
+  listNcGoa: () => req('GET', '/checklist-goa/nc'),
+  sendNcGoa: (b) => req('POST', '/checklist-goa/nc', b),
   listSamuContacts: () => req('GET', '/samu-contacts'),
   createSamuContact: (c) => req('POST', '/samu-contacts', c),
   updateSamuContact: (id, c) => req('PUT', `/samu-contacts/${id}`, c),

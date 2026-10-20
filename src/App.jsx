@@ -25,6 +25,7 @@ import { makeDraftSaver, readDraft, draftWorthKeeping } from './lib/draft.js'
 import { idadeTexto, emptyPatient, readPatient, readMirror, savePatient, clearPatient, movePatient, migrateLegacyPatient, PATIENT_KEYS, patientWorthKeeping } from './lib/patient.js'
 import ConfigModal from './components/ConfigModal.jsx'
 import SamuContactsModal from './components/SamuContacts.jsx'
+import ChecklistGoaModal from './components/ChecklistGoa.jsx'
 import PrintModal from './components/PrintModal.jsx'
 import { printContent } from './lib/pdf.js'
 import { pendencias } from './lib/pendencias.js'
@@ -88,9 +89,9 @@ export default function App({ user, onLogout, onRelogin }) {
   const [cfg, setCfg] = useState(loadCfg)
   const [showCfg, setShowCfg] = useState(false)
   const [showSamus, setShowSamus] = useState(false)
+  const [showChecklistGoa, setShowChecklistGoa] = useState(false)
   const [showPrint, setShowPrint] = useState(false)
   const [showCases, setShowCases] = useState(false)
-  const [showChk, setShowChk] = useState(false) // checklist por cima de qualquer tela
 
   // navegação por tela (celular) x tela única (central)
   const view = useHashView()
@@ -1612,6 +1613,7 @@ export default function App({ user, onLogout, onRelogin }) {
         <button className="tbtn" onClick={abrirImpressao} title="Imprimir o caso em PDF, escolhendo o que sai">
           <IconPrint size={14} /> <span className="tlabel">Imprimir</span>
         </button>
+        <button className="tbtn" onClick={() => setShowChecklistGoa(true)} title="Checklist diário da base GOA"><IconCheck size={14} /> <span className="tlabel">Checklist GOA</span></button>
         <button className="tbtn" onClick={() => setShowSamus(true)} title="Contatos das centrais SAMU"><IconAmbulance size={14} /> <span className="tlabel">SAMUs</span></button>
         <button className="tbtn" onClick={() => setShowCfg(true)} title="Configuração"><IconSettings size={14} /> <span className="tlabel">Config</span></button>
         {/* interno(a) marcado pelo admin: abre o portal mnrs.com.br já logado, com os atalhos
@@ -1698,6 +1700,11 @@ export default function App({ user, onLogout, onRelogin }) {
                 : `${Object.keys(events).length} horário${Object.keys(events).length === 1 ? '' : 's'}`}
             </span>
           </button>
+          <button className="tile" onClick={() => setShowChecklistGoa(true)}>
+            <IconCheck size={38} />
+            <span className="t">Checklist</span>
+            <span className="d">base GOA · diário</span>
+          </button>
         </div>
       )}
 
@@ -1709,6 +1716,7 @@ export default function App({ user, onLogout, onRelogin }) {
               <Icon size={17} /> {label}
             </button>
           ))}
+          <button className="vtab" onClick={() => setShowChecklistGoa(true)}><IconCheck size={17} /> Checklist</button>
         </div>
       )}
 
@@ -2175,6 +2183,7 @@ export default function App({ user, onLogout, onRelogin }) {
       </div>
 
       {showPrint && <PrintModal goa={printGoa} conteudo={printData()} meta={{ caseId, refMs, refFrozen: refAt != null, divergencias: conflitos }} onClose={() => setShowPrint(false)} />}
+      {showChecklistGoa && <ChecklistGoaModal user={user} onClose={() => setShowChecklistGoa(false)} />}
       {showSamus && <SamuContactsModal user={user} onClose={() => setShowSamus(false)} />}
       {showRoster && <CrewRosterModal roster={roster} onChanged={refreshRoster} onClose={() => setShowRoster(false)} />}
       {showCfg && <ConfigModal cfg={cfg} user={user} onClose={() => setShowCfg(false)} onSave={(c) => { setCfg(c); saveCfg(c); setShowCfg(false) }} />}
@@ -2198,24 +2207,12 @@ export default function App({ user, onLogout, onRelogin }) {
         <MilestoneQuick events={events} onMark={quickMarkEvent} onUndo={undoEvent} className="qmark-fab" />
       )}
 
-      {/* checklist a um toque de qualquer tela (fora do modo piloto) */}
-      {view !== 'nav' && view !== 'stats' && (
+      {/* checklist da base GOA a um toque de qualquer tela (fora do modo piloto) */}
+      {view !== 'nav' && view !== 'stats' && !showChecklistGoa && (
         <button className={'chk-fab' + (scene && Object.keys(events).length > 0 ? ' above-qmark' : '')}
-          onClick={() => setShowChk(true)} title="Abrir o checklist de critérios">
-          <IconCheck size={15} /> Checklist <b>{score.total} pts</b>
+          onClick={() => setShowChecklistGoa(true)} title="Checklist diário da base GOA">
+          <IconCheck size={15} /> Checklist GOA
         </button>
-      )}
-      {showChk && (
-        <div className="modal-bg" onClick={() => setShowChk(false)}>
-          <div className="modal chk-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="chk-modal-head">
-              <h3><IconCheck size={17} /> Checklist · {score.total} pts{rec ? ` · ${score.band.label}` : ''}</h3>
-              <button className="btn sec" onClick={() => setShowChk(false)}><IconX size={13} /> Fechar</button>
-            </div>
-            <Checklist isChecked={isChecked} isOverridden={isOverridden} onToggle={toggleItem} onReset={resetAuto} score={score}
-              texts={critTexts} onText={(id, v) => setCritTexts((p) => ({ ...p, [id]: v }))} />
-          </div>
-        </div>
       )}
 
       {photoLz && (
