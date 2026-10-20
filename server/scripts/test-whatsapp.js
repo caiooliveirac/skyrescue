@@ -3,6 +3,8 @@
 // dos privados pelo /vincular, e o envio (grupo + destinatários) com um socket
 // falso que registra o que "mandou". Roda contra o banco de dev:
 //   DATABASE_URL=postgres://localhost/skyrescue_dev BOT_LINK_CODE=abc node scripts/test-whatsapp.js
+// e RECUSA qualquer outro: apaga wa_chat e desativa destinatários, o que no
+// banco real desvincularia o grupo e calaria os avisos (trava abaixo).
 // A conexão real (pareamento, código, QR) só se testa no servidor com o chip.
 process.env.BOT_LINK_CODE = process.env.BOT_LINK_CODE || 'teste-123'
 const CODE = process.env.BOT_LINK_CODE
@@ -36,7 +38,20 @@ const msg = (chat, text, extra = {}) => ({
   messages: [{ key: { remoteJid: chat, fromMe: false, id: 'm1', ...extra.key }, pushName: extra.pushName || 'Fulano', message: { conversation: text } }],
 })
 
+// Trava de ambiente: só banco de dev/teste (nome terminado em _dev ou _test,
+// como o skyrescue_dev dos outros test-*.js). Confere no próprio Postgres,
+// antes de qualquer escrita — vale mesmo com DATABASE_URL de produção no .env.
+async function exigirBancoDeTeste() {
+  const { rows } = await query('SELECT current_database() AS db')
+  const db = rows[0].db
+  if (/_(dev|test)$/.test(db)) return
+  console.error(`RECUSADO: o banco "${db}" não é de dev/teste (nome precisa terminar em _dev ou _test). Nada foi alterado.`)
+  await pool.end()
+  process.exit(2)
+}
+
 async function main() {
+  await exigirBancoDeTeste()
   console.log('=== utilitários puros ===')
   ok('normalizePhone com máscara', normalizePhone('(71) 98161-9480') === '5571981619480')
   ok('normalizePhone com DDI', normalizePhone('+55 71 98816-1438') === '5571988161438')
