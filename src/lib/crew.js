@@ -33,6 +33,17 @@ export const CREW_KINDS = [
 const txt = (v) => String(v ?? '').trim()
 export const slotNome = (crew, k) => txt(crew?.[k]?.nome)
 
+// alguém do cadastro com este nome nesta função (sem diferenciar maiúsculas)
+export const acharNoCadastro = (roster, kind, nome) => {
+  const n = txt(nome).toLowerCase()
+  return n ? (roster || []).find((r) => r.kind === kind && r.name.toLowerCase() === n) : null
+}
+
+// nome digitado numa posição → {nome, reg}. O registro (CANAC/CRM/COREN) é da
+// pessoa: vem do cadastro quando o nome bate e, senão, fica vazio para ser
+// digitado — manter o anterior levava o registro de outra pessoa ao PDF.
+export const slotPorNome = (roster, kind, nome) => ({ nome, reg: acharNoCadastro(roster, kind, nome)?.reg || '' })
+
 export function crewFilled(crew) {
   return Boolean(crew) && (CREW_SLOTS.some((s) => slotNome(crew, s.k)) || txt(crew.outros) !== '')
 }

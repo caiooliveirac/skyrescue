@@ -1,13 +1,8 @@
 import { useState } from 'react'
 import { api } from '../lib/backend.js'
-import { CREW_SLOTS, CREW_KINDS, slotNome, crewFilled } from '../lib/crew.js'
+import { CREW_SLOTS, CREW_KINDS, slotNome, crewFilled, acharNoCadastro as achar, slotPorNome } from '../lib/crew.js'
 import { fmtClock } from '../lib/geo.js'
 import { IconHeli, IconUsers, IconEdit, IconX, IconCopy } from './Icons.jsx'
-
-const achar = (roster, kind, nome) => {
-  const n = String(nome || '').trim().toLowerCase()
-  return n ? roster.find((r) => r.kind === kind && r.name.toLowerCase() === n) : null
-}
 
 // Aeronave e equipe DESTE voo. Cada posição escolhe do cadastro (sugestões ao
 // digitar; o registro vem junto) ou aceita nome livre — quem ainda não está
@@ -17,11 +12,8 @@ export function CrewCard({ crew, onChange, roster, onRosterAdd, onOpenRoster, pr
   const [salvando, setSalvando] = useState(null)
   const c = crew || {}
   const setSlot = (k, patch) => onChange({ ...c, [k]: { ...(c[k] || {}), ...patch } })
-  const onNome = (slot, nome) => {
-    // nome do cadastro: o registro vem junto; campo esvaziado leva o registro
-    const m = achar(roster, slot.kind, nome)
-    setSlot(slot.k, m ? { nome, reg: m.reg || '' } : nome.trim() ? { nome } : { nome: '', reg: '' })
-  }
+  // nome do cadastro: o registro vem junto; outro nome leva o registro antigo
+  const onNome = (slot, nome) => setSlot(slot.k, slotPorNome(roster, slot.kind, nome))
   const cadastrar = async (slot) => {
     setSalvando(slot.k)
     try { await onRosterAdd({ kind: slot.kind, name: slotNome(c, slot.k), reg: c[slot.k]?.reg || '' }) }
