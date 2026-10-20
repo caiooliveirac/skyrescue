@@ -190,7 +190,9 @@ app.get('/api/acionamentos', requireAuth, async (_req, res) => {
   const { rows } = await query(
     `SELECT id, created_at, central, medico, fone, tipo, detalhe, local_txt, lat, lon, pin_label,
             paciente_nome, paciente_idade, local_anterior, completo_at, wa_status, wa_detail, wa_sent_at
-       FROM acionamento ORDER BY created_at DESC LIMIT 200`
+       FROM acionamento
+      ${_req.user?.role === 'operador' ? "WHERE (created_at AT TIME ZONE 'America/Bahia')::date = (now() AT TIME ZONE 'America/Bahia')::date" : ''}
+      ORDER BY created_at DESC LIMIT 200`
   )
   res.json({ acionamentos: rows })
 })
@@ -242,9 +244,20 @@ app.delete('/api/whatsapp/group', requireAdmin, async (_req, res) => {
 })
 
 // ---------- auth ----------
+// Senha errada repetida: 5 falhas em 15 min travam aquele usuário (por IP) e
+// 20 travam o IP — força bruta deixa de ser viável. Acerto zera o usuário.
+const LOGIN_FALHAS = new Map()
+const LOGIN_JANELA_MS = 15 * 60_000, LOGIN_MAX_USUARIO = 5, LOGIN_MAX_IP = 20
+const falhasRecentes = (k, now) => (LOGIN_FALHAS.get(k) || []).filter((t) => now - t < LOGIN_JANELA_MS)
+const SENHA_MIN = (role) => (role === 'admin' || role === 'gestor' ? 12 : 8)
+
 app.post('/api/auth/login', async (req, res) => {
   const { username, password } = req.body || {}
   if (!username || !password) return res.status(400).json({ error: 'usuário e senha obrigatórios' })
+  const now = Date.now(), ip = clientIp(req)
+  const kU = `u:${ip}:${String(username).trim().toLowerCase()}`, kI = `i:${ip}`
+  if (falhasRecentes(kU, now).length >= LOGIN_MAX_USUARIO || falhasRecentes(kI, now).length >= LOGIN_MAX_IP)
+    return res.status(429).json({ error: 'muitas tentativas — aguarde 15 minutos' })
   try {
     const { rows } = await query(
       'SELECT id, username, full_name, role, active, acesso_portal, password_hash FROM users WHERE lower(username) = lower($1)',
@@ -253,7 +266,12 @@ app.post('/api/auth/login', async (req, res) => {
     const u = rows[0]
     // verifica a senha mesmo sem usuário (mitiga enumeração por timing)
     const ok = u && u.active && verifyPassword(password, u.password_hash)
-    if (!ok) return res.status(401).json({ error: 'usuário ou senha incorretos' })
+    if (!ok) {
+      for (const k of [kU, kI]) LOGIN_FALHAS.set(k, [...falhasRecentes(k, now), now])
+      if (LOGIN_FALHAS.size > 5000) LOGIN_FALHAS.clear() // mapa não cresce sem limite
+      return res.status(401).json({ error: 'usuário ou senha incorretos' })
+    }
+    LOGIN_FALHAS.delete(kU)
 
     const { token } = await createSession(u.id, { userAgent: req.headers['user-agent'], ip: clientIp(req) })
     await query('UPDATE users SET last_login_at = now() WHERE id = $1', [u.id])
@@ -286,12 +304,15 @@ app.get('/api/auth/portal', requireAuth, (req, res) => {
 // troca da própria senha
 app.post('/api/auth/password', requireAuth, async (req, res) => {
   const { currentPassword, newPassword } = req.body || {}
-  if (!newPassword || String(newPassword).length < 6)
-    return res.status(400).json({ error: 'nova senha deve ter ao menos 6 caracteres' })
+  const min = SENHA_MIN(req.user.role)
+  if (!newPassword || String(newPassword).length < min)
+    return res.status(400).json({ error: `nova senha deve ter ao menos ${min} caracteres` })
   const { rows } = await query('SELECT password_hash FROM users WHERE id = $1', [req.user.id])
   if (!rows[0] || !verifyPassword(currentPassword || '', rows[0].password_hash))
     return res.status(401).json({ error: 'senha atual incorreta' })
   await query('UPDATE users SET password_hash = $1 WHERE id = $2', [hashPassword(newPassword), req.user.id])
+  // derruba as outras sessões (quem tinha a senha antiga sai); a atual segue
+  await query('DELETE FROM sessions WHERE user_id = $1 AND token_hash <> $2', [req.user.id, req.user.sessionHash])
   res.json({ ok: true })
 })
 
@@ -327,6 +348,21 @@ async function nextCaseRef(client) {
   return `${rows[0].dia}-${String(Number(rows[0].n) + 1).padStart(4, '0')}`
 }
 
+// Operador só enxerga a operação corrente: casos criados hoje (Salvador) ou
+// com missão ainda ativa no grupo. Vale para a lista e para TODA rota
+// /api/cases/:id (ler, editar, ficha, horários, excluir) — fora disso, 404.
+const isOperador = (u) => u?.role === 'operador'
+const CASO_DE_HOJE = `((c.created_at AT TIME ZONE 'America/Bahia')::date = (now() AT TIME ZONE 'America/Bahia')::date
+   OR EXISTS (SELECT 1 FROM mission_chat mo WHERE mo.case_id = c.id AND mo.status = 'ativa'))`
+
+app.use('/api/cases/:id', async (req, res, next) => {
+  if (!isOperador(req.user)) return next()
+  if (!/^\d+$/.test(req.params.id)) return res.status(404).json({ error: 'caso não encontrado' })
+  const { rows } = await query(`SELECT 1 FROM cases c WHERE c.id = $1 AND ${CASO_DE_HOJE}`, [req.params.id])
+  if (!rows[0]) return res.status(404).json({ error: 'caso não encontrado' })
+  next()
+})
+
 app.get('/api/cases', allowService, async (_req, res) => {
   const { rows } = await query(
     `SELECT c.id, c.case_ref, c.scene_label, c.scene_lat, c.scene_lon,
@@ -346,6 +382,7 @@ app.get('/api/cases', allowService, async (_req, res) => {
        FROM cases c
        LEFT JOIN users cu ON cu.id = c.created_by
        LEFT JOIN case_patient cp ON cp.case_id = c.id
+      ${isOperador(_req.user) ? `WHERE ${CASO_DE_HOJE}` : ''}
       ORDER BY c.updated_at DESC
       LIMIT 500`
   )
@@ -364,7 +401,7 @@ app.get('/api/cases', allowService, async (_req, res) => {
 // paciente nem texto livre (observações, intercorrências) — só o que entra na
 // conta. Diagnóstico e agregação ficam no cliente (src/lib/stats.js): com
 // dezenas de casos é mais simples filtrar por período lá do que aqui.
-app.get('/api/stats', requireAuth, async (_req, res) => {
+app.get('/api/stats', requireStaff, async (_req, res) => {
   const casos = await query(
     `SELECT c.id, c.case_ref, c.created_at, coalesce(cu.full_name, cu.username) AS autor,
             c.snapshot->>'caseTag' AS tag, c.score_band AS band, c.score_total AS score,
@@ -1272,7 +1309,7 @@ app.post('/api/checklist-goa/nc', requireAuth, async (req, res) => {
   try { res.json(await checklist.enviarInconformidade({ doctorName, description, photo })) } catch (e) { falhaChecklist(res, e) }
 })
 
-app.get('/api/samu-contacts', requireAuth, async (_req, res) => {
+app.get('/api/samu-contacts', requireStaff, async (_req, res) => {
   const { rows } = await query('SELECT id, samu, person, phone FROM samu_contact ORDER BY lower(samu), lower(coalesce(person, \'\'))')
   res.json({ contacts: rows })
 })
@@ -1365,8 +1402,8 @@ app.get('/api/users', requireAdmin, async (_req, res) => {
 app.post('/api/users', requireAdmin, async (req, res) => {
   const { username, password, full_name, role } = req.body || {}
   if (!username || !password) return res.status(400).json({ error: 'usuário e senha obrigatórios' })
-  if (String(password).length < 6) return res.status(400).json({ error: 'senha deve ter ao menos 6 caracteres' })
   const r = ['admin', 'gestor', 'regulador', 'operador'].includes(role) ? role : 'regulador'
+  if (String(password).length < SENHA_MIN(r)) return res.status(400).json({ error: `senha deve ter ao menos ${SENHA_MIN(r)} caracteres` })
   try {
     const { rows } = await query(
       `INSERT INTO users (username, password_hash, full_name, role)
@@ -1389,7 +1426,7 @@ app.patch('/api/users/:id', requireAdmin, async (req, res) => {
   if (role && ['admin', 'gestor', 'regulador', 'operador'].includes(role)) { vals.push(role); sets.push(`role = $${vals.length}`) }
   if (full_name !== undefined) { vals.push(full_name); sets.push(`full_name = $${vals.length}`) }
   if (password) {
-    if (String(password).length < 6) return res.status(400).json({ error: 'senha deve ter ao menos 6 caracteres' })
+    if (String(password).length < 8) return res.status(400).json({ error: 'senha deve ter ao menos 8 caracteres' })
     vals.push(hashPassword(password)); sets.push(`password_hash = $${vals.length}`)
   }
   if (!sets.length) return res.status(400).json({ error: 'nada para atualizar' })

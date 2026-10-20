@@ -67,7 +67,7 @@ export async function authMiddleware(req, _res, next) {
     )
     const s = rows[0]
     if (s && s.active && new Date(s.expires_at) > new Date()) {
-      req.user = { id: s.id, username: s.username, full_name: s.full_name, role: s.role, acesso_portal: s.acesso_portal }
+      req.user = { id: s.id, username: s.username, full_name: s.full_name, role: s.role, acesso_portal: s.acesso_portal, sessionHash: sha256(token) }
     } else if (s) {
       await destroySession(token) // vencida ou usuário inativo
     }

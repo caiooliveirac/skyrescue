@@ -98,6 +98,9 @@ export default function App({ user, onLogout, onRelogin }) {
   const wide = useWide()
   const voltarDe = useRef(null) // tela de onde se abriu Estatísticas, para o Fechar
   const show = (v) => wide || view === v
+  // admin e gestor: Estatísticas e contatos das centrais SAMU (o servidor também barra)
+  const staff = user?.role === 'admin' || user?.role === 'gestor'
+  useEffect(() => { if (view === 'stats' && !staff) go('hub') }, [view, staff])
 
   // ocorrência
   const [scene, setScene] = useState(null)
@@ -1607,14 +1610,16 @@ export default function App({ user, onLogout, onRelogin }) {
         <button className="tbtn" onClick={() => setShowCases(true)} title={`Casos registrados (${cases.length})`}>
           <IconFolder size={14} /> <span className="tlabel">Casos ({cases.length})</span>
         </button>
-        <button className="tbtn" onClick={() => { voltarDe.current = view; go('stats') }} title="Estatísticas das ocorrências e diagnóstico dos horários">
-          <IconChart size={14} /> <span className="tlabel">Estatísticas</span>
-        </button>
+        {staff && (
+          <button className="tbtn" onClick={() => { voltarDe.current = view; go('stats') }} title="Estatísticas das ocorrências e diagnóstico dos horários">
+            <IconChart size={14} /> <span className="tlabel">Estatísticas</span>
+          </button>
+        )}
         <button className="tbtn" onClick={abrirImpressao} title="Imprimir o caso em PDF, escolhendo o que sai">
           <IconPrint size={14} /> <span className="tlabel">Imprimir</span>
         </button>
         <button className="tbtn" onClick={() => setShowChecklistGoa(true)} title="Checklist diário da base GOA"><IconCheck size={14} /> <span className="tlabel">Checklist GOA</span></button>
-        <button className="tbtn" onClick={() => setShowSamus(true)} title="Contatos das centrais SAMU"><IconAmbulance size={14} /> <span className="tlabel">SAMUs</span></button>
+        {staff && <button className="tbtn" onClick={() => setShowSamus(true)} title="Contatos das centrais SAMU"><IconAmbulance size={14} /> <span className="tlabel">SAMUs</span></button>}
         <button className="tbtn" onClick={() => setShowCfg(true)} title="Configuração"><IconSettings size={14} /> <span className="tlabel">Config</span></button>
         {/* interno(a) marcado pelo admin: abre o portal mnrs.com.br já logado, com os atalhos
             dele (Frota e Quadro — só leitura), sem segunda senha (server/src/portal.js); nova aba */}
@@ -2184,11 +2189,11 @@ export default function App({ user, onLogout, onRelogin }) {
 
       {showPrint && <PrintModal goa={printGoa} conteudo={printData()} meta={{ caseId, refMs, refFrozen: refAt != null, divergencias: conflitos }} onClose={() => setShowPrint(false)} />}
       {showChecklistGoa && <ChecklistGoaModal user={user} onClose={() => setShowChecklistGoa(false)} />}
-      {showSamus && <SamuContactsModal user={user} onClose={() => setShowSamus(false)} />}
+      {showSamus && staff && <SamuContactsModal user={user} onClose={() => setShowSamus(false)} />}
       {showRoster && <CrewRosterModal roster={roster} onChanged={refreshRoster} onClose={() => setShowRoster(false)} />}
       {showCfg && <ConfigModal cfg={cfg} user={user} onClose={() => setShowCfg(false)} onSave={(c) => { setCfg(c); saveCfg(c); setShowCfg(false) }} />}
 
-      {view === 'stats' && (
+      {view === 'stats' && staff && (
         <Stats base={cfg.base} onClose={() => go(voltarDe.current && voltarDe.current !== 'stats' ? voltarDe.current : 'hub')} />
       )}
 
