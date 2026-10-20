@@ -172,7 +172,7 @@ a { color: var(--accent); }
   display: grid;
   grid-template-columns: minmax(350px, 470px) 1fr;
   gap: 16px;
-  padding: 16px 20px 48px;
+  padding: 16px 20px 80px; /* espaço do checklist flutuante */
   align-items: start;
   max-width: 1720px;
   margin: 0 auto;
@@ -186,7 +186,7 @@ a { color: var(--accent); }
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
-  padding: 16px 16px 40px;
+  padding: 16px 16px 80px;
 }
 .hub .tile {
   display: flex; flex-direction: column; align-items: flex-start; gap: 4px;
@@ -892,6 +892,23 @@ input[type="checkbox"] { accent-color: #22d3ee; width: 16px; height: 16px; }
   max-width: min(92vw, 440px); white-space: nowrap;
 }
 .qmark.qmark-fab .qm-label, .qmark.qmark-fab .qm-ok { overflow: hidden; text-overflow: ellipsis; }
+
+/* checklist flutuante: abre de qualquer tela */
+.chk-fab {
+  position: fixed; z-index: 1150; right: 14px; bottom: 14px;
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--grad-primary); color: #fff; border: none; cursor: pointer;
+  font-size: 13px; font-weight: 600; border-radius: 999px; padding: 10px 15px;
+  box-shadow: 0 4px 18px rgba(34, 211, 238, 0.35);
+}
+.chk-fab.above-qmark { bottom: 70px; }
+.chk-modal { max-width: 720px; }
+.chk-modal-head {
+  position: sticky; top: -20px; z-index: 1; background: #0d1524;
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  margin: -20px -22px 12px; padding: 14px 22px 10px; border-bottom: 1px solid var(--line-strong);
+}
+.chk-modal-head h3 { margin: 0; }
 
 /* botão que abre o modo navegação, flutuando no mapa principal */
 .navlaunch {

@@ -32,7 +32,7 @@ import { DecisionStrip, wxHora, TimePanel, WeatherPanel, LZPanel, AlertsPanel, G
 import {
   IconHeli, IconPlus, IconFolder, IconPrint, IconSettings, IconSearch, IconPin,
   IconTarget, IconZap, IconCopy, IconSave, IconDownload, IconHelipadH,
-  IconClock, IconCloud, IconAlert, IconRoute, IconX, IconUsers, IconLayers, IconAmbulance, IconChart,
+  IconClock, IconCloud, IconAlert, IconRoute, IconX, IconUsers, IconLayers, IconAmbulance, IconChart, IconCheck,
 } from './components/Icons.jsx'
 
 // Telas do caso. No celular (cabine) o app mostra UMA por vez, escolhida no
@@ -90,6 +90,7 @@ export default function App({ user, onLogout, onRelogin }) {
   const [showSamus, setShowSamus] = useState(false)
   const [showPrint, setShowPrint] = useState(false)
   const [showCases, setShowCases] = useState(false)
+  const [showChk, setShowChk] = useState(false) // checklist por cima de qualquer tela
 
   // navegação por tela (celular) x tela única (central)
   const view = useHashView()
@@ -2195,6 +2196,26 @@ export default function App({ user, onLogout, onRelogin }) {
           registrado e some quando a missão termina (todos os marcos feitos) */}
       {scene && view !== 'nav' && view !== 'stats' && Object.keys(events).length > 0 && (
         <MilestoneQuick events={events} onMark={quickMarkEvent} onUndo={undoEvent} className="qmark-fab" />
+      )}
+
+      {/* checklist a um toque de qualquer tela (fora do modo piloto) */}
+      {view !== 'nav' && view !== 'stats' && (
+        <button className={'chk-fab' + (scene && Object.keys(events).length > 0 ? ' above-qmark' : '')}
+          onClick={() => setShowChk(true)} title="Abrir o checklist de critérios">
+          <IconCheck size={15} /> Checklist <b>{score.total} pts</b>
+        </button>
+      )}
+      {showChk && (
+        <div className="modal-bg" onClick={() => setShowChk(false)}>
+          <div className="modal chk-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="chk-modal-head">
+              <h3><IconCheck size={17} /> Checklist · {score.total} pts{rec ? ` · ${score.band.label}` : ''}</h3>
+              <button className="btn sec" onClick={() => setShowChk(false)}><IconX size={13} /> Fechar</button>
+            </div>
+            <Checklist isChecked={isChecked} isOverridden={isOverridden} onToggle={toggleItem} onReset={resetAuto} score={score}
+              texts={critTexts} onText={(id, v) => setCritTexts((p) => ({ ...p, [id]: v }))} />
+          </div>
+        </div>
       )}
 
       {photoLz && (
