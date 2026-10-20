@@ -185,13 +185,16 @@ app.patch('/api/acionamentos/:id', async (req, res) => {
   }
 })
 
+// usuário logado que não é admin/gestor só vê o dia corrente (casos, acionamentos)
+const soHoje = (u) => Boolean(u) && !isStaff(u)
+
 // a equipe logada vê o que chegou pelo site (auditoria do plantão)
 app.get('/api/acionamentos', requireAuth, async (_req, res) => {
   const { rows } = await query(
     `SELECT id, created_at, central, medico, fone, tipo, detalhe, local_txt, lat, lon, pin_label,
             paciente_nome, paciente_idade, local_anterior, completo_at, wa_status, wa_detail, wa_sent_at
        FROM acionamento
-      ${_req.user?.role === 'operador' ? "WHERE (created_at AT TIME ZONE 'America/Bahia')::date = (now() AT TIME ZONE 'America/Bahia')::date" : ''}
+      ${soHoje(_req.user) ? "WHERE (created_at AT TIME ZONE 'America/Bahia')::date = (now() AT TIME ZONE 'America/Bahia')::date" : ''}
       ORDER BY created_at DESC LIMIT 200`
   )
   res.json({ acionamentos: rows })
@@ -348,15 +351,15 @@ async function nextCaseRef(client) {
   return `${rows[0].dia}-${String(Number(rows[0].n) + 1).padStart(4, '0')}`
 }
 
-// Operador só enxerga a operação corrente: casos criados hoje (Salvador) ou
-// com missão ainda ativa no grupo. Vale para a lista e para TODA rota
-// /api/cases/:id (ler, editar, ficha, horários, excluir) — fora disso, 404.
-const isOperador = (u) => u?.role === 'operador'
+// Passado é só de admin e gestor. Operador e regulador enxergam a operação
+// corrente: casos criados hoje (Salvador) ou com missão ainda ativa no grupo.
+// Vale para a lista e para TODA rota /api/cases/:id (ler, editar, ficha,
+// horários, excluir) — fora disso, 404. Token de serviço (sem usuário) não entra.
 const CASO_DE_HOJE = `((c.created_at AT TIME ZONE 'America/Bahia')::date = (now() AT TIME ZONE 'America/Bahia')::date
    OR EXISTS (SELECT 1 FROM mission_chat mo WHERE mo.case_id = c.id AND mo.status = 'ativa'))`
 
 app.use('/api/cases/:id', async (req, res, next) => {
-  if (!isOperador(req.user)) return next()
+  if (!soHoje(req.user)) return next()
   if (!/^\d+$/.test(req.params.id)) return res.status(404).json({ error: 'caso não encontrado' })
   const { rows } = await query(`SELECT 1 FROM cases c WHERE c.id = $1 AND ${CASO_DE_HOJE}`, [req.params.id])
   if (!rows[0]) return res.status(404).json({ error: 'caso não encontrado' })
@@ -382,7 +385,7 @@ app.get('/api/cases', allowService, async (_req, res) => {
        FROM cases c
        LEFT JOIN users cu ON cu.id = c.created_by
        LEFT JOIN case_patient cp ON cp.case_id = c.id
-      ${isOperador(_req.user) ? `WHERE ${CASO_DE_HOJE}` : ''}
+      ${soHoje(_req.user) ? `WHERE ${CASO_DE_HOJE}` : ''}
       ORDER BY c.updated_at DESC
       LIMIT 500`
   )
