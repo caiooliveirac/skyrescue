@@ -690,6 +690,14 @@ export default function App({ user, onLogout, onRelogin }) {
     setLzSelId(id === lzSelId ? null : id)
     setManualLz(null)
   }
+  // "Usar como LZ" no modal do marcador: candidato da lista vira a escolha;
+  // fora da lista (ponto distante, catálogo omitido), entra como LZ manual
+  const usarPontoComoLz = (p) => {
+    if (lzLock) return
+    const cand = (lzList || []).find((c) => String(c.id) === p.ref)
+    if (cand) { setLzSelId(cand.id); setManualLz(null) }
+    else { setManualLz({ lat: p.lat, lon: p.lon, name: p.name }); setLzSelId(null) }
+  }
   const toggleLzLock = () => {
     if (lzLock) {
       // destravar devolve a mesma LZ como escolha comum — nada se perde. Se o
@@ -2193,6 +2201,11 @@ export default function App({ user, onLogout, onRelogin }) {
         <LzPhotoModal
           point={photoLz}
           user={user}
+          lzUse={scene ? {
+            em: !!lzPoint && Math.abs(lzPoint.lat - photoLz.lat) < 1e-6 && Math.abs(lzPoint.lon - photoLz.lon) < 1e-6,
+            motivo: lzLock ? 'LZ fixada — destrave a LZ para escolher outra.' : null,
+          } : null}
+          onUseLz={usarPontoComoLz}
           onClose={() => setPhotoLz(null)}
           onChanged={() => { refreshPhotoCounts(); refreshCommunity() }}
         />

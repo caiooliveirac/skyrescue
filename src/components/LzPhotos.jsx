@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../lib/backend.js'
 import { preparePhoto } from '../lib/photo.js'
-import { IconCamera, IconCheck, IconX, IconAlert } from './Icons.jsx'
+import { IconCamera, IconCheck, IconX, IconAlert, IconTarget } from './Icons.jsx'
 
 // Fotos do ponto de pouso — "como o local é". Quem já pousou fotografa (a
 // câmera do celular abre direto pelo capture) e a foto fica no ponto, para
@@ -141,8 +141,10 @@ export function LzPhotoStrip({ point, user, onChanged, autoLoad = true }) {
 
 // Aberto ao tocar em QUALQUER ponto de pouso no mapa (heliponto ANAC,
 // hospital, heliponto de apoio, ponto da comunidade, área do OSM): mostra o
-// que se sabe do local e as fotos. `point` = {ref, name, sub}.
-export function LzPhotoModal({ point, user, onClose, onChanged }) {
+// que se sabe do local e as fotos. `point` = {ref, name, sub, lat, lon, pousavel}.
+// `lzUse` = {em: é a LZ em vigor, motivo: por que não dá para escolher} —
+// ausente sem ocorrência no mapa (LZ só existe com cena).
+export function LzPhotoModal({ point, user, onClose, onChanged, lzUse, onUseLz }) {
   return (
     <div className="modal-bg" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
@@ -150,8 +152,15 @@ export function LzPhotoModal({ point, user, onClose, onChanged }) {
         {point.sub && <div className="small" style={{ marginBottom: 10 }}>{point.sub}</div>}
         <LzPhotoStrip point={point} user={user} onChanged={onChanged} />
         <div className="row" style={{ marginTop: 12 }}>
+          {lzUse && point.pousavel && (
+            <button className="btn" disabled={lzUse.em || !!lzUse.motivo} title={lzUse.motivo || undefined}
+              onClick={() => { onUseLz(point); onClose() }}>
+              <IconTarget size={14} /> {lzUse.em ? 'É a LZ desta ocorrência' : 'Usar como LZ'}
+            </button>
+          )}
           <button className="btn sec" onClick={onClose}>Fechar</button>
         </div>
+        {lzUse?.motivo && point.pousavel && <div className="small" style={{ marginTop: 6 }}>{lzUse.motivo}</div>}
         <div className="small" style={{ marginTop: 10 }}>
           As fotos são referência da equipe e podem estar desatualizadas —
           reconhecimento visual pelo piloto continua obrigatório.

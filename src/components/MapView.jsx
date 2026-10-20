@@ -209,11 +209,13 @@ export default function MapView({
     // duplicar a lógica em cada fábrica de ícone. Sem trava de modo — o clique
     // no marcador nunca chegaria ao mapa de qualquer forma (o Leaflet não o
     // propaga), então travar só criava clique morto.
-    const withPhotos = (marker, ref, name, sub) => {
+    // `pousavel` = o local serve de LZ (o modal oferece "Usar como LZ")
+    const withPhotos = (marker, ref, name, sub, pousavel = true) => {
       const n = photoCounts?.[ref] || 0
       marker.on('click', (ev) => {
         L.DomEvent.stop(ev)
-        photoClickRef.current?.({ ref, name, sub, count: n })
+        const { lat, lng } = marker.getLatLng()
+        photoClickRef.current?.({ ref, name, sub, count: n, lat, lon: lng, pousavel })
       })
       marker.on('add', () => {
         if (!n) return
@@ -233,7 +235,8 @@ export default function MapView({
           zIndexOffset: sel ? 400 : 100,
         }).bindTooltip(`${h.name}${h.heliponto ? ' · heliponto próprio' : ' · sem heliponto (transbordo terrestre)'} — toque para ver/pôr foto`),
         `hosp/${h.id}`, h.name,
-        h.heliponto ? 'Hospital com heliponto próprio' : 'Hospital sem heliponto — transbordo terrestre'
+        h.heliponto ? 'Hospital com heliponto próprio' : 'Hospital sem heliponto — transbordo terrestre',
+        !!h.heliponto
       ).addTo(lay)
     }
 
