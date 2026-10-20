@@ -93,6 +93,8 @@ export const api = {
   acionar: (a) => req('POST', '/acionamentos', a),
   completarAcionamento: (id, a) => req('PATCH', `/acionamentos/${id}`, a),
   listAcionamentos: () => req('GET', '/acionamentos'),
+  // tela Estatísticas: uma linha por caso, sem ficha do paciente
+  stats: () => req('GET', '/stats'),
   // bot do WhatsApp (admin): pareamento do chip, grupo e destinatários
   waStatus: () => req('GET', '/whatsapp/status'),
   waPair: (phone) => req('POST', '/whatsapp/pair', { phone }),

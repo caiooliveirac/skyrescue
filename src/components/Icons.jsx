@@ -20,6 +20,13 @@ export const IconHeli = (p) => (
   </S>
 )
 
+export const IconChart = (p) => (
+  <S {...p}>
+    <path d="M3 20h18" />
+    <path d="M6.5 16.5v-5M12 16.5V5.5M17.5 16.5v-8" />
+  </S>
+)
+
 export const IconHospital = (p) => (
   <S {...p}>
     <rect x="4" y="4" width="16" height="16" rx="3" />
