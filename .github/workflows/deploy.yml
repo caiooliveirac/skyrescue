@@ -35,6 +35,9 @@ jobs:
       - name: Testes de unidade (fusão da ficha)
         run: node server/scripts/test-patient-merge.js
 
+      - name: Testes de unidade (estatísticas)
+        run: node scripts/test-stats.js
+
       - name: Build (arquivo único)
         env:
           # opcional: embute a chave Google Maps p/ todos os usuários do site

@@ -88,6 +88,7 @@ Ou pela API (autenticado como `admin`): `POST /api/users`, `GET /api/users`, `PA
 | GET/POST/PATCH | `/api/users…` | admin de usuários (perfil admin) |
 | POST | `/api/acionamentos` | **público** (tela Acionar GOA): grava o pedido e o bot do WhatsApp avisa; limite por IP/global |
 | GET | `/api/acionamentos` | histórico dos pedidos do site (autenticado) |
+| GET | `/api/stats` | uma linha por caso para a tela Estatísticas (horários, tipo, destino, estimativas; sem ficha nem texto livre) + pedidos do site (autenticado) |
 | GET | `/api/whatsapp/status` | admin: estado do bot, código/QR de pareamento, grupo, plantonistas |
 | POST | `/api/whatsapp/pair` | admin: gera código de pareamento (`{phone}`) ou QR (sem phone) |
 | POST | `/api/whatsapp/logout` | admin: desconecta o chip e apaga a sessão |

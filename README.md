@@ -116,6 +116,12 @@ Cada foto é presa ao ponto pelo mesmo identificador que o app já usa nos candi
 
 > As fotos são referência da equipe e envelhecem (obra, cerca nova, mato alto) — reconhecimento visual pelo piloto continua obrigatório. Não fotografe pacientes nem nada que identifique a vítima (LGPD).
 
+## Estatísticas e diagnóstico dos horários
+
+Botão **Estatísticas** na barra (tela `#stats`, qualquer login): números das ocorrências registradas para apresentar o serviço — missão típica (mediana de cada etapa, do acionamento ao paciente acolhido), tempo real × estimativa aérea e terrestre gravada na decisão, tipo de ocorrência, tempo por tipo, faixa da pontuação, critérios, destino, município, distância da base, mês, dia da semana, hora, como os horários foram registrados e os pedidos pela tela "Acionar GOA". Dados de `GET /api/stats` (sem ficha do paciente nem texto livre); contas em `src/lib/stats.js`.
+
+Nem todo horário gravado é o horário do evento. O **Diagnóstico dos dados** marca, caso a caso: marcos tocados com menos de 1 min entre si (hora do clique no fim da missão), marcados dias depois do acionamento, fora de ordem, e marcos faltando. Esses horários ficam fora das contas de tempo — cada etapa só usa o intervalo com as duas pontas confiáveis e dentro de um teto plausível. Caso de teste ou duplicado pode ser desmarcado em "Conta" (vale só no aparelho). Regras cobertas por `node scripts/test-stats.js`.
+
 ## Primeiro uso — calibrar (5 min)
 
 1. Arraste o marcador do helicóptero no mapa até a posição exata da base do GOA.

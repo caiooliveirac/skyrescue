@@ -10,6 +10,7 @@ import { computeScore, caseTag, recommendation, evaluateGates, ITEM_BY_ID, SECTI
 import { rankLZ, parseObstacles } from './lib/lz.js'
 import MapView from './components/MapView.jsx'
 import NavMode from './components/NavMode.jsx'
+import Stats from './components/Stats.jsx'
 import CommunityModal from './components/Community.jsx'
 import { LzPhotoModal } from './components/LzPhotos.jsx'
 import Checklist from './components/Checklist.jsx'
@@ -31,14 +32,14 @@ import { DecisionStrip, wxHora, TimePanel, WeatherPanel, LZPanel, AlertsPanel, G
 import {
   IconHeli, IconPlus, IconFolder, IconPrint, IconSettings, IconSearch, IconPin,
   IconTarget, IconZap, IconCopy, IconSave, IconDownload, IconHelipadH,
-  IconClock, IconCloud, IconAlert, IconRoute, IconX, IconUsers, IconLayers, IconAmbulance,
+  IconClock, IconCloud, IconAlert, IconRoute, IconX, IconUsers, IconLayers, IconAmbulance, IconChart,
 } from './components/Icons.jsx'
 
 // Telas do caso. No celular (cabine) o app mostra UMA por vez, escolhida no
 // hub de ícones; no desktop da central (>= 1020px) todas aparecem juntas como
 // sempre. A "rota" é só o hash da URL — sem router, e o botão voltar do
 // Android já sai da tela sem sair do caso.
-const VIEWS = ['hub', 'caso', 'fatores', 'navegar', 'nav', 'paciente', 'missao']
+const VIEWS = ['hub', 'caso', 'fatores', 'navegar', 'nav', 'paciente', 'missao', 'stats']
 // abas do topo quando o celular está dentro de uma tela: trocar de tela é um
 // toque, sem passar pelo hub
 const VIEW_TABS = [
@@ -93,6 +94,7 @@ export default function App({ user, onLogout, onRelogin }) {
   // navegação por tela (celular) x tela única (central)
   const view = useHashView()
   const wide = useWide()
+  const voltarDe = useRef(null) // tela de onde se abriu Estatísticas, para o Fechar
   const show = (v) => wide || view === v
 
   // ocorrência
@@ -1595,6 +1597,9 @@ export default function App({ user, onLogout, onRelogin }) {
         <button className="tbtn" onClick={() => setShowCases(true)} title={`Casos registrados (${cases.length})`}>
           <IconFolder size={14} /> <span className="tlabel">Casos ({cases.length})</span>
         </button>
+        <button className="tbtn" onClick={() => { voltarDe.current = view; go('stats') }} title="Estatísticas das ocorrências e diagnóstico dos horários">
+          <IconChart size={14} /> <span className="tlabel">Estatísticas</span>
+        </button>
         <button className="tbtn" onClick={abrirImpressao} title="Imprimir o caso em PDF, escolhendo o que sai">
           <IconPrint size={14} /> <span className="tlabel">Imprimir</span>
         </button>
@@ -2165,6 +2170,10 @@ export default function App({ user, onLogout, onRelogin }) {
       {showRoster && <CrewRosterModal roster={roster} onChanged={refreshRoster} onClose={() => setShowRoster(false)} />}
       {showCfg && <ConfigModal cfg={cfg} user={user} onClose={() => setShowCfg(false)} onSave={(c) => { setCfg(c); saveCfg(c); setShowCfg(false) }} />}
 
+      {view === 'stats' && (
+        <Stats base={cfg.base} onClose={() => go(voltarDe.current && voltarDe.current !== 'stats' ? voltarDe.current : 'hub')} />
+      )}
+
       {view === 'nav' && (
         <NavMode
           cfg={cfg} scene={scene} lzPoint={lzPoint} origin={origin}
@@ -2176,7 +2185,7 @@ export default function App({ user, onLogout, onRelogin }) {
 
       {/* chip flutuante de marcação rápida: aparece após o primeiro horário
           registrado e some quando a missão termina (todos os marcos feitos) */}
-      {scene && view !== 'nav' && Object.keys(events).length > 0 && (
+      {scene && view !== 'nav' && view !== 'stats' && Object.keys(events).length > 0 && (
         <MilestoneQuick events={events} onMark={quickMarkEvent} onUndo={undoEvent} className="qmark-fab" />
       )}
 

@@ -358,6 +358,36 @@ app.get('/api/cases', allowService, async (_req, res) => {
   res.json({ cases: rows })
 })
 
+// Estatísticas (tela "Estatísticas"): uma linha enxuta por caso, sem ficha do
+// paciente nem texto livre (observações, intercorrências) — só o que entra na
+// conta. Diagnóstico e agregação ficam no cliente (src/lib/stats.js): com
+// dezenas de casos é mais simples filtrar por período lá do que aqui.
+app.get('/api/stats', requireAuth, async (_req, res) => {
+  const casos = await query(
+    `SELECT c.id, c.case_ref, c.created_at, coalesce(cu.full_name, cu.username) AS autor,
+            c.snapshot->>'caseTag' AS tag, c.score_band AS band, c.score_total AS score,
+            c.hospital_name AS hospital, c.scene_label, c.snapshot->'scenePlace'->>'cidade' AS cidade,
+            c.scene_lat, c.scene_lon, c.snapshot->'events' AS events, c.events_by,
+            c.air_total_min, c.ground_total_min, c.gates_ok,
+            c.snapshot->'manualChecked' AS checked,
+            CASE WHEN jsonb_typeof(c.snapshot->'intercorrencias') = 'array'
+                 THEN jsonb_array_length(c.snapshot->'intercorrencias') ELSE 0 END AS interc
+       FROM cases c LEFT JOIN users cu ON cu.id = c.created_by
+      ORDER BY c.created_at`
+  )
+  const acion = await query(
+    `SELECT created_at, central, tipo, completo_at IS NOT NULL AS completo, wa_status
+       FROM acionamento ORDER BY created_at`
+  )
+  const cases = casos.rows.map(({ events_by, checked, ...r }) => ({
+    ...r,
+    // events_by: só QUANDO cada horário foi marcado (registro ao vivo × depois)
+    marcado_em: Object.fromEntries(Object.entries(events_by || {}).map(([k, v]) => [k, v?.at ?? null])),
+    criterios: Object.entries(checked || {}).filter(([, v]) => v === true).map(([k]) => k),
+  }))
+  res.json({ cases, acionamentos: acion.rows })
+})
+
 app.get('/api/cases/:id', requireAuth, async (req, res) => {
   // mission_status ('ativa' | 'encerrada' | null) para o app mostrar, ao reabrir
   // um caso, se o grupo da missão já foi acionado
