@@ -332,6 +332,13 @@ app.get('/api/cases', allowService, async (_req, res) => {
             c.air_total_min, c.ground_total_min, c.delta_min, c.gates_ok,
             c.created_at, c.updated_at,
             c.snapshot->>'caseTag' AS case_tag, c.snapshot->'scenePlace' AS scene_place,
+            -- ocorrências emendadas: o app sugere decolar de onde o caso
+            -- anterior pousou (ver src/lib/origem.js)
+            c.snapshot->'landingPoint' AS landing_point,
+            -- "mesma equipe do caso anterior" na tela do caso
+            c.snapshot->'crew' AS crew,
+            c.snapshot->'events'->>'pouso_destino' AS pouso_destino_at,
+            c.snapshot->'events'->>'cancelado' AS cancelado_at,
             cp.data->>'sexo' AS vit_sexo, cp.data->>'nascimento' AS vit_nasc, cp.data->>'idade' AS vit_idade,
             cu.username AS created_by_username, cu.full_name AS created_by_name
        FROM cases c
@@ -1223,6 +1230,51 @@ app.put('/api/samu-contacts/:id', requireStaff, async (req, res) => {
 
 app.delete('/api/samu-contacts/:id', requireStaff, async (req, res) => {
   await query('DELETE FROM samu_contact WHERE id = $1', [req.params.id])
+  res.json({ ok: true })
+})
+
+// ---------- cadastro de aeronaves e tripulantes ----------
+// O caso guarda cópia (snapshot.crew); isto aqui é só a lista de onde a tela
+// escolhe. Leitura e escrita para qualquer login (ver schema.sql).
+const CREW_KINDS = ['aeronave', 'piloto', 'tripulante', 'medico', 'enfermeiro']
+const cleanCrew = (b = {}) => ({
+  kind: CREW_KINDS.includes(b.kind) ? b.kind : null,
+  name: String(b.name || '').trim().slice(0, 120),
+  reg: String(b.reg || '').trim().slice(0, 60) || null,
+})
+
+app.get('/api/crew', requireAuth, async (_req, res) => {
+  const { rows } = await query('SELECT id, kind, name, reg FROM crew_member ORDER BY kind, lower(name)')
+  res.json({ members: rows })
+})
+
+app.post('/api/crew', requireAuth, async (req, res) => {
+  const c = cleanCrew(req.body)
+  if (!c.kind || !c.name) return res.status(400).json({ error: 'função e nome são obrigatórios' })
+  // mesmo nome na mesma função: devolve o que já existe (o "+ cadastrar" da
+  // tela do caso pode ser tocado em duas telas ao mesmo tempo)
+  const dup = await query('SELECT id, kind, name, reg FROM crew_member WHERE kind = $1 AND lower(name) = lower($2)', [c.kind, c.name])
+  if (dup.rows[0]) return res.json({ member: dup.rows[0] })
+  const { rows } = await query(
+    `INSERT INTO crew_member (kind, name, reg, created_by) VALUES ($1,$2,$3,$4)
+     RETURNING id, kind, name, reg`, [c.kind, c.name, c.reg, req.user.id]
+  )
+  res.status(201).json({ member: rows[0] })
+})
+
+app.put('/api/crew/:id', requireAuth, async (req, res) => {
+  const c = cleanCrew(req.body)
+  if (!c.kind || !c.name) return res.status(400).json({ error: 'função e nome são obrigatórios' })
+  const { rows } = await query(
+    `UPDATE crew_member SET kind = $1, name = $2, reg = $3, updated_at = now()
+      WHERE id = $4 RETURNING id, kind, name, reg`, [c.kind, c.name, c.reg, req.params.id]
+  )
+  if (!rows[0]) return res.status(404).json({ error: 'cadastro não encontrado' })
+  res.json({ member: rows[0] })
+})
+
+app.delete('/api/crew/:id', requireAuth, async (req, res) => {
+  await query('DELETE FROM crew_member WHERE id = $1', [req.params.id])
   res.json({ ok: true })
 })
 

@@ -60,20 +60,27 @@ const acftSvg =
   '<svg viewBox="0 0 24 24" width="26" height="26"><path d="M12 2 L19.5 21 L12 16.6 L4.5 21 Z" fill="#22d3ee" stroke="#fff" stroke-width="1.4" stroke-linejoin="round"/></svg>'
 const acftIcon = (track) =>
   L.divIcon({ className: 'mk', html: `<div class="mk-acft" style="transform:rotate(${track ?? 0}deg)">${acftSvg}</div>`, iconSize: [26, 26], iconAnchor: [13, 13] })
+// decolagem fora da base (ocorrências emendadas): seta para cima no ponto de
+// onde a aeronave sai
+const originIcon = () =>
+  L.divIcon({ className: 'mk', html: '<div class="mk-origin">▲</div>', iconSize: [24, 24], iconAnchor: [12, 12] })
 const sceneIcon = () =>
   L.divIcon({ className: 'mk', html: '<div class="mk-scene"><span class="ring"></span><span class="core"></span></div>', iconSize: [34, 34], iconAnchor: [17, 17] })
-const lzIcon = (letter, suitKey, sel, isHeli) =>
+const lzIcon = (letter, suitKey, sel, isHeli, locked) =>
   // candidato que é heliponto mantém a identidade círculo-H; a letra vira badge
+  // LZ fixada ganha o cadeado: quem olha o mapa sabe que clicar não a troca
   L.divIcon({
     className: 'mk',
     html: isHeli
-      ? `<div class="mk-lz heli${sel ? ' sel' : ''}">H<span class="lzletter">${letter}</span></div>`
-      : `<div class="mk-lz ${suitKey === 'restrita' ? 'restrita' : suitKey === 'avaliar' ? 'avaliar' : ''}${sel ? ' sel' : ''}">${letter}</div>`,
+      ? `<div class="mk-lz heli${sel ? ' sel' : ''}${locked ? ' locked' : ''}">H<span class="lzletter">${letter}</span></div>`
+      : `<div class="mk-lz ${suitKey === 'restrita' ? 'restrita' : suitKey === 'avaliar' ? 'avaliar' : ''}${sel ? ' sel' : ''}${locked ? ' locked' : ''}">${letter}</div>`,
     iconSize: [25, 25], iconAnchor: [12.5, 12.5],
   })
 
+// lzPoint = a LZ em vigor, já resolvida pelo App (candidato escolhido, LZ
+// manual ou a cópia congelada da LZ fixada); origin = decolagem fora da base
 export default function MapView({
-  cfg, scene, hospitalId, landingHelipad, lz, lzSelId, manualLz, obstacles, route, transferRoute,
+  cfg, scene, origin, hospitalId, landingHelipad, lz, lzPoint, lzLocked, obstacles, route, transferRoute,
   mode, showObs, showPads = true, communityLz, aircraft, focus, baseLayer = 'dark', googleKey = '',
   onPointClick, photoCounts,
   onMapClick,
@@ -315,12 +322,13 @@ export default function MapView({
     }
 
     // candidatos a LZ
+    const lzIsCand = !!lzPoint && lzPoint.id != null && (lz || []).some((c) => c.id === lzPoint.id)
     if (scene && lz) {
       for (const c of lz) {
-        const sel = c.id === lzSelId
+        const sel = lzIsCand && c.id === lzPoint.id
         withPhotos(
-          L.marker([c.lat, c.lon], { icon: lzIcon(c.letter, c.obstFlag ? 'avaliar' : c.suitKey, sel, c.typeKey === 'heli'), zIndexOffset: sel ? 300 : 50 })
-            .bindTooltip(`${c.letter} · ${c.name}${c.icao ? ' [' + c.icao + ']' : ''} (${c.type}) — ${c.distM} m da ocorrência — toque para ver/pôr foto`),
+          L.marker([c.lat, c.lon], { icon: lzIcon(c.letter, c.obstFlag ? 'avaliar' : c.suitKey, sel, c.typeKey === 'heli', sel && lzLocked), zIndexOffset: sel ? 300 : 50 })
+            .bindTooltip(`${sel && lzLocked ? '🔒 LZ fixada · ' : ''}${c.letter} · ${c.name}${c.icao ? ' [' + c.icao + ']' : ''} (${c.type}) — ${c.distM} m da ocorrência — toque para ver/pôr foto`),
           String(c.id), `${c.letter} · ${c.name}`,
           `${c.type} · ${c.distM} m da ocorrência`
         ).addTo(lay)
@@ -334,8 +342,18 @@ export default function MapView({
         }
       }
     }
-    if (manualLz) {
-      L.marker([manualLz.lat, manualLz.lon], { icon: lzIcon('LZ', 'boa', true), zIndexOffset: 300 }).bindTooltip('LZ manual').addTo(lay)
+    // LZ manual, ou a fixada que não está mais entre os candidatos (a cena
+    // mudou e a busca foi refeita) — a LZ em vigor nunca some do mapa
+    if (lzPoint && !lzIsCand) {
+      const nome = lzPoint.id == null ? lzPoint.name || 'LZ manual' : lzPoint.name || 'LZ'
+      L.marker([lzPoint.lat, lzPoint.lon], { icon: lzIcon('LZ', 'boa', true, false, lzLocked), zIndexOffset: 300 })
+        .bindTooltip(lzLocked ? `🔒 LZ fixada · ${nome}` : nome).addTo(lay)
+    }
+
+    // decolagem fora da base
+    if (origin) {
+      L.marker([origin.lat, origin.lon], { icon: originIcon(), zIndexOffset: 550 })
+        .bindTooltip(`Decolagem: ${origin.name}`).addTo(lay)
     }
 
     // obstáculos
@@ -351,8 +369,8 @@ export default function MapView({
     }
 
     // rotas de voo
-    const lzPt = manualLz || (lz || []).find((c) => c.id === lzSelId) || null
-    const airPt = lzPt || scene
+    const airPt = lzPoint || scene
+    const from = origin || cfg.base
     const hosp = cfg.hospitals.find((h) => h.id === hospitalId)
     // ponto onde a aeronave pousa no destino
     const landPt = hosp ? (hosp.heliponto ? hosp : landingHelipad || hosp) : null
@@ -360,13 +378,14 @@ export default function MapView({
     // o que é o traço — as rotas se cruzam e a cor sozinha não conta
     const tip = { sticky: true }
     if (airPt) {
-      const pickup = cfg.ops.pickupEnabled ? cfg.hospitals.find((h) => h.id === cfg.ops.pickupHospitalId && h.heliponto) : null
-      const pts = [[cfg.base.lat, cfg.base.lon]]
+      // mesma regra do computeMission: embarque da equipe só saindo da base
+      const pickup = !origin && cfg.ops.pickupEnabled ? cfg.hospitals.find((h) => h.id === cfg.ops.pickupHospitalId && h.heliponto) : null
+      const pts = [[from.lat, from.lon]]
       if (pickup) pts.push([pickup.lat, pickup.lon])
       pts.push([airPt.lat, airPt.lon])
       L.polyline(pts, { color: '#22d3ee', weight: 7, opacity: 0.15 }).addTo(lay)
       L.polyline(pts, { color: '#22d3ee', weight: 2.5, opacity: 0.9 })
-        .bindTooltip(pickup ? 'Voo: base → embarque da equipe → cena/LZ' : 'Voo: base → cena/LZ', tip).addTo(lay)
+        .bindTooltip(pickup ? 'Voo: base → embarque da equipe → cena/LZ' : origin ? `Voo: ${origin.name} → cena/LZ` : 'Voo: base → cena/LZ', tip).addTo(lay)
       if (landPt) {
         const leg2 = [[airPt.lat, airPt.lon], [landPt.lat, landPt.lon]]
         L.polyline(leg2, { color: '#22d3ee', weight: 7, opacity: 0.12 }).addTo(lay)
@@ -387,17 +406,17 @@ export default function MapView({
     }
 
     // enquadrar quando a cena muda
-    const key = scene ? `${scene.lat.toFixed(4)},${scene.lon.toFixed(4)}|${hospitalId}|${landingHelipad?.id || ''}` : 'nada'
+    const key = scene ? `${scene.lat.toFixed(4)},${scene.lon.toFixed(4)}|${hospitalId}|${landingHelipad?.id || ''}|${origin ? origin.lat.toFixed(4) + ',' + origin.lon.toFixed(4) : ''}` : 'nada'
     if (key !== fitKeyRef.current) {
       fitKeyRef.current = key
       if (scene) {
-        const b = L.latLngBounds([[cfg.base.lat, cfg.base.lon], [scene.lat, scene.lon]])
+        const b = L.latLngBounds([[from.lat, from.lon], [scene.lat, scene.lon]])
         if (hosp) b.extend([hosp.lat, hosp.lon])
         if (landPt) b.extend([landPt.lat, landPt.lon])
         m.fitBounds(b.pad(0.18))
       }
     }
-  }, [cfg, scene, hospitalId, landingHelipad, lz, lzSelId, manualLz, obstacles, route, transferRoute, showObs, showPads, communityLz, aircraft, photoCounts])
+  }, [cfg, scene, origin, hospitalId, landingHelipad, lz, lzPoint, lzLocked, obstacles, route, transferRoute, showObs, showPads, communityLz, aircraft, photoCounts])
 
   return (
     <>
@@ -413,6 +432,7 @@ export default function MapView({
         <span><b className="lg-pad comm">H</b> sugestão da comunidade (a validar)</span>
         <span><b className="lg-samu">S</b> base SAMU (ambulância)</span>
         <span><b className="lg-acft">➤</b> GOA em voo (ao vivo)</span>
+        {origin && <span><b className="lg-origin">▲</b> decolagem fora da base</span>}
         <span><i className="lg-line air" /> voo base → cena</span>
         <span><i className="lg-line air dash" /> voo cena → destino</span>
         <span><i className="lg-line gnd" /> ambulância cena → hospital</span>

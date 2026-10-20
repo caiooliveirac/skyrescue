@@ -4,7 +4,7 @@ import { IconCheck } from './Icons.jsx'
 
 export const MILESTONES = [
   { id: 'decisao', label: 'Acionamento do GOA autorizado' },
-  { id: 'decolagem', label: 'Decolagem da base' },
+  { id: 'decolagem', label: 'Decolagem para a cena' },
   { id: 'pouso_cena', label: 'Pouso na cena / LZ' },
   { id: 'paciente', label: 'Contato com o paciente' },
   { id: 'decolagem2', label: 'Decolagem para o destino' },

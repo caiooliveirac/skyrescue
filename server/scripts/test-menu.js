@@ -60,7 +60,7 @@ async function main() {
   ok('/caso traz o briefing da missão', caso.includes('MISSÃO — Caso teste-menu') && caso.includes('Ponto de encontro'))
 
   const tempos = await rodar('tempos')
-  ok('/tempos lista os marcados', tempos.includes('Acionamento do GOA autorizado') && tempos.includes('Decolagem da base'))
+  ok('/tempos lista os marcados', tempos.includes('Acionamento do GOA autorizado') && tempos.includes('Decolagem para a cena'))
   ok('/tempos aponta o próximo marco', tempos.includes('Próximo') && tempos.includes('Pouso na cena'))
   ok('/tempos não inventa marco não marcado', !tempos.includes('• Paciente entregue'))
 

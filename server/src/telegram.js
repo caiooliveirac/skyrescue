@@ -72,7 +72,7 @@ export async function boundChat() {
 // ---------- marcos ----------
 export const MILESTONES = [
   { id: 'decisao', label: 'Acionamento do GOA autorizado' },
-  { id: 'decolagem', label: 'Decolagem da base' },
+  { id: 'decolagem', label: 'Decolagem para a cena' },
   { id: 'pouso_cena', label: 'Pouso na cena / LZ' },
   { id: 'paciente', label: 'Contato com o paciente' },
   { id: 'decolagem2', label: 'Decolagem para o destino' },
@@ -199,9 +199,19 @@ function briefingHtml(caseRow, snap) {
     L.push(`🤝 <b>Ponto de encontro</b>: ${esc(mp.name)} — <a href="${mapsLink(mp)}">abrir no Maps</a>`)
     L.push(`✈️ <code>${fmtDDM(mp)}</code>`)
   }
+  // decolagem fora da base (ocorrências emendadas): quem está na base precisa
+  // saber que a aeronave não sai de lá
+  if (snap.origin?.name) L.push(`🛫 <b>Decolagem</b>: ${esc(snap.origin.name)} (não da base)`)
   if (snap.hospitalName) {
     L.push(`🏥 <b>Destino</b>: ${esc(snap.hospitalName)}${snap.landingName ? ` — pouso no ${esc(snap.landingName)} + transbordo` : ''}`)
   }
+  // quem voa (card "Aeronave e equipe" do app; sem registro profissional aqui)
+  const nome = (k) => String(snap.crew?.[k]?.nome || '').trim()
+  const voo = [['Cmt', 'comandante'], ['Cop', 'copiloto'], ['OAT', 'tripulante'], ['OAT', 'tripulante2']]
+    .filter(([, k]) => nome(k)).map(([t, k]) => `${t} ${esc(nome(k))}`)
+  if (nome('aeronave') || voo.length) L.push(`🚁 <b>Aeronave</b>: ${[esc(nome('aeronave')), voo.join(' · ')].filter(Boolean).join(' — ')}`)
+  const saude = [['Méd.', 'medico'], ['Enf.', 'enfermeiro']].filter(([, k]) => nome(k)).map(([t, k]) => `${t} ${esc(nome(k))}`)
+  if (saude.length) L.push(`🩺 <b>Equipe de saúde</b>: ${saude.join(' · ')}`)
   if (snap.mission?.airTotal != null) {
     const g = snap.mission.groundTotal != null ? ` · terrestre ~${Math.round(snap.mission.groundTotal)} min` : ''
     L.push(`⏱️ Aéreo ~${Math.round(snap.mission.airTotal)} min${g}`)

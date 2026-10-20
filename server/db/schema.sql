@@ -325,3 +325,20 @@ CREATE TABLE IF NOT EXISTS samu_contact (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- ---------- cadastro de aeronaves e tripulantes ----------
+-- Quem voa e em quê. A tela do caso escolhe daqui (nome e registro vêm
+-- juntos) e o caso guarda uma CÓPIA no snapshot (`crew`): corrigir ou apagar
+-- alguém do cadastro depois não reescreve o registro de missões passadas.
+-- Qualquer pessoa logada cadastra e corrige — a escala muda a cada plantão
+-- e quem sabe o nome é quem está voando.
+CREATE TABLE IF NOT EXISTS crew_member (
+  id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  -- 'aeronave': name = prefixo/indicativo, reg = modelo
+  kind       TEXT NOT NULL CHECK (kind IN ('aeronave', 'piloto', 'tripulante', 'medico', 'enfermeiro')),
+  name       TEXT NOT NULL,
+  reg        TEXT,                          -- CANAC, CRM/UF, COREN/UF, matrícula; modelo da aeronave
+  created_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);

@@ -13,12 +13,15 @@ import { fmtMin, fmtClock, fmtCoords, fmtCoordsDDM } from './geo.js'
 import { idadeTexto } from './patient.js'
 import { MILESTONES, CANCELADO } from '../components/Tracking.jsx'
 import { wxHora } from '../components/Results.jsx'
+import { lzRotulo } from './origem.js'
+import { crewLinhas } from './crew.js'
 
 // grupo, título, se vem marcada no padrão
 export const PRINT_SECTIONS = [
   { id: 'pendencias', grupo: 'doc', title: 'Pendências de documentação', padrao: true },
   { id: 'responsaveis', grupo: 'doc', title: 'Responsáveis', padrao: true },
   { id: 'ocorrencia', grupo: 'voo', title: 'Ocorrência', padrao: true },
+  { id: 'equipe', grupo: 'voo', title: 'Aeronave e equipe', padrao: true },
   { id: 'score', grupo: 'voo', title: 'Pontuação e critérios', padrao: true },
   { id: 'tempos', grupo: 'voo', title: 'Tempos e destino', padrao: true },
   { id: 'trechos', grupo: 'voo', title: 'Tempos por trecho (estimados)', padrao: true },
@@ -44,7 +47,7 @@ export const PRINT_PRESETS = [
 // Relatório para os bombeiros do GOA: o voo, sem nada do paciente. Fica de
 // fora também o texto livre das observações (pode citar o paciente), as
 // pendências internas de documentação e as assinaturas.
-export const PRINT_GOA = ['responsaveis', 'ocorrencia', 'score', 'tempos', 'trechos', 'pouso', 'condicoes', 'cronologia', 'intervalos', 'intercorrencias']
+export const PRINT_GOA = ['responsaveis', 'ocorrencia', 'equipe', 'score', 'tempos', 'trechos', 'pouso', 'condicoes', 'cronologia', 'intervalos', 'intercorrencias']
 
 // ---------------- conteúdo ----------------
 const val = (v) => (v == null ? '' : String(v).trim())
@@ -60,7 +63,7 @@ const INTERVALOS = [
   ['pouso_destino', 'entrega', 'Passagem ao hospital'],
   ['decisao', 'entrega', 'Total (acionamento → paciente acolhido)'],
 ]
-const ONDE_PEND = { caso: 'caso', fatores: 'gates', paciente: 'ficha do paciente', missao: 'horários' }
+const ONDE_PEND = { caso: 'caso', fatores: 'gates', paciente: 'ficha do paciente', equipe: 'aeronave e equipe', missao: 'horários' }
 const MISSAO = { ativa: 'acionado (missão em curso)', encerrada: 'acionado (missão encerrada)' }
 
 // Monta { id: [[rótulo, valor], ...] } a partir do estado do caso.
@@ -84,7 +87,7 @@ export function printContent(c) {
   return {
     // agrupadas pela tela onde se resolvem — uma linha por item enchia meia página
     pendencias: Object.entries((c.pend || []).reduce((acc, x) => {
-      (acc[x.onde] ||= []).push(x.label.replace(/^(Paciente|Horário): /, ''))
+      (acc[x.onde] ||= []).push(x.label.replace(/^(Paciente|Horário|Equipe): /, ''))
       return acc
     }, {})).map(([onde, itens]) => [`Falta (${ONDE_PEND[onde] || onde})`, itens.join('; ')]),
     responsaveis: rows(
@@ -92,9 +95,11 @@ export function printContent(c) {
       ['Última alteração por', reg.updated_by_name],
       ['Acionamento autorizado por', por('decisao')],
       ['Médico regulador', [p.medico || c.medico, p.crm].filter(Boolean).join(' — ')],
+      // fichas antigas: a equipe era texto livre na ficha (hoje: seção Aeronave e equipe)
       ['Equipe de transporte', p.equipe],
       ['Grupo da missão (Telegram)', c.events?.decisao || c.missionStatus ? (MISSAO[c.missionStatus] || 'não acionado') : ''],
     ),
+    equipe: rows(...crewLinhas(c.crew)),
     ocorrencia: rows(
       ['Local', c.sceneLabel],
       ['Caso', c.tag],
@@ -111,7 +116,7 @@ export function printContent(c) {
       ]),
     ),
     trechos: rows(
-      ['Base de saída', c.baseName],
+      ['Decolagem', c.decolagem],
       ...(m?.legs || []).filter((l) => l.min != null).map((l) => [l.label, `${fmtMin(l.min)}${km(l.km)}`]),
       ['Ambulância (terrestre)', c.usa],
       ['Atendimento na cena (terrestre)', g?.toHospMin != null ? fmtMin(g.cenaMin) : ''],
@@ -125,7 +130,7 @@ export function printContent(c) {
       ['Destino', c.hospital ? c.destinoLabel : ''],
     ),
     pouso: rows(
-      ['LZ', c.lzPoint ? `${c.manualLz ? 'Manual' : c.lzPoint.name} — ${coord(c.lzPoint)}` : ''],
+      ['LZ', c.lzPoint ? `${lzRotulo(c.lzPoint)}${c.lzFixada ? ' (fixada)' : ''} — ${coord(c.lzPoint)}` : ''],
       ['Heliponto de desembarque', c.landingHelipad ? `${c.landingHelipad.name} — ${coord(c.landingHelipad)}` : ''],
     ),
     condicoes: rows(

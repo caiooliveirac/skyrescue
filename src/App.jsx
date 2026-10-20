@@ -4,6 +4,7 @@ import { api } from './lib/backend.js'
 import { geocode, reversePlace, placeShort, fetchWeather, fetchMetar, groundRoute, overpass, lzQuery, obstacleQuery, heliRadius } from './lib/api.js'
 import { catalogNear } from './data/helipads-catalog.js'
 import { haversineKm, fmtMin, fmtClock, fmtCoords, fmtCoordsDMS, fmtCoordsDDM, gmapsLink } from './lib/geo.js'
+import { origemOpcoes, origemDoPonto, origemDaAeronave, congelaLz, lzRotulo, sugestaoEmenda } from './lib/origem.js'
 import { computeMission, autoChecks, daylightCheck, rangeCheck, combinedWeatherStatus, classifyWeather } from './lib/mission.js'
 import { computeScore, caseTag, recommendation, evaluateGates, ITEM_BY_ID, SECTIONS } from './lib/score.js'
 import { rankLZ, parseObstacles } from './lib/lz.js'
@@ -13,6 +14,8 @@ import CommunityModal from './components/Community.jsx'
 import { LzPhotoModal } from './components/LzPhotos.jsx'
 import Checklist from './components/Checklist.jsx'
 import PatientForm from './components/PatientForm.jsx'
+import { CrewCard, CrewRosterModal } from './components/Crew.jsx'
+import { crewFilled, crewLinhas } from './lib/crew.js'
 import Tracking, { MILESTONES, CANCELADO, MilestoneQuick, Intercorrencias, ultimoMarco, marcoLabel, encerrada } from './components/Tracking.jsx'
 import * as outbox from './lib/outbox.js'
 import SyncBadge from './components/SyncBadge.jsx'
@@ -142,7 +145,23 @@ export default function App({ user, onLogout, onRelogin }) {
 
   const [lzSelId, setLzSelId] = useState(null)
   const [manualLz, setManualLz] = useState(null)
+  // LZ fixada: cópia congelada da LZ em vigor (ver lib/origem.js). Enquanto
+  // existe, clique no mapa ou na lista não troca o ponto de encontro, e mover
+  // a cena (que refaz a busca de candidatos) não o apaga
+  const [lzLock, setLzLock] = useState(null)
+  // de onde a aeronave decola quando NÃO é da base (null = base). Ocorrências
+  // emendadas saem do heliponto onde deixaram o paciente anterior
+  const [origin, setOrigin] = useState(null)
   const [mapMode, setMapMode] = useState('scene')
+  // aviso curto sobre o mapa quando um clique é ignorado (cena/LZ fixadas) —
+  // antes o clique travado simplesmente não fazia nada, e parecia defeito
+  const [mapHint, setMapHint] = useState(null)
+  const hintTimerRef = useRef(null)
+  const flashMapHint = (text) => {
+    setMapHint(text)
+    clearTimeout(hintTimerRef.current)
+    hintTimerRef.current = setTimeout(() => setMapHint(null), 2800)
+  }
   const [showObs, setShowObs] = useState(false)
   const [showPads, setShowPads] = useState(true) // camada de helipontos ANAC
   const [focus, setFocus] = useState(null)
@@ -153,6 +172,17 @@ export default function App({ user, onLogout, onRelogin }) {
     setBaseLayer(v)
     try { localStorage.setItem('skyrescue_baselayer', v) } catch (e) { /* ok */ }
   }
+
+  // aeronave e equipe deste voo (lib/crew.js) + o cadastro de onde se escolhe
+  const [crew, setCrew] = useState({})
+  const [roster, setRoster] = useState([])
+  const [showRoster, setShowRoster] = useState(false)
+  const refreshRoster = async () => {
+    try { const { members } = await api.listCrew(); setRoster(members) }
+    catch (e) { /* sem rede: os campos aceitam nome livre */ }
+  }
+  useEffect(() => { refreshRoster() }, [])
+  const addToRoster = async (m) => { await api.createCrew(m); await refreshRoster() }
 
   const [events, setEvents] = useState({})
   // intercorrências registradas em texto, cada uma presa à fase em que ocorreu
@@ -407,7 +437,12 @@ export default function App({ user, onLogout, onRelogin }) {
   }, [scene, cfg.ambBases, cfg.ground.trafficFactor, cfg.map?.googleKey]) // eslint-disable-line
 
   // ---------- cálculo ----------
-  const lzPoint = manualLz || (lzList || []).find((c) => c.id === lzSelId) || null
+  const lzLive = manualLz || (lzList || []).find((c) => c.id === lzSelId) || null
+  // fixada, vale a cópia congelada; se o candidato ainda está na lista, o
+  // objeto vivo (contorno da área no mapa, obstáculos da busca atual)
+  const lzPoint = lzLock
+    ? (lzLock.id != null && (lzList || []).find((c) => c.id === lzLock.id)) || lzLock
+    : lzLive
   // sem ETA digitado, usa a melhor rota calculada base SAMU → cena — a
   // comparação terrestre × aéreo sai completa sem depender de estimativa manual
   const ambAuto = ambEta === '' && ambSug?.length ? ambSug[0] : null
@@ -416,6 +451,7 @@ export default function App({ user, onLogout, onRelogin }) {
       computeMission({
         cfg,
         scene,
+        origin,
         hospital,
         lzPoint: lzPoint ? { lat: lzPoint.lat, lon: lzPoint.lon } : null,
         landingHelipad,
@@ -423,7 +459,7 @@ export default function App({ user, onLogout, onRelogin }) {
         transferRoute: xferRoute,
         ambulanceEtaMin: ambEta !== '' ? Number(ambEta) : ambAuto ? ambAuto.min : null,
       }),
-    [cfg, scene, hospital, lzPoint, landingHelipad, route, xferRoute, ambEta, ambAuto]
+    [cfg, scene, origin, hospital, lzPoint, landingHelipad, route, xferRoute, ambEta, ambAuto]
   )
   const autos = useMemo(() => autoChecks(mission), [mission])
 
@@ -517,12 +553,12 @@ export default function App({ user, onLogout, onRelogin }) {
   )
 
   const lzStatus = useMemo(() => {
-    if (manualLz) return 'ok'
+    if (manualLz || lzLock) return 'ok' // o regulador escolheu (e fixou) o ponto
     if (lzErr) return 'unknown'
     if (!lzList) return scene ? 'unknown' : 'unknown'
     if (!lzList.length) return 'fail'
     return lzList.some((c) => c.suitKey !== 'restrita' && !c.obstFlag) ? 'ok' : 'warn'
-  }, [lzList, lzErr, manualLz, scene])
+  }, [lzList, lzErr, manualLz, lzLock, scene])
 
   const autoStatus = {
     weather: !scene ? 'unknown' : (!wxScene && !wxErr ? 'unknown' : combinedWeatherStatus(wxScene, wxBase)),
@@ -576,8 +612,9 @@ export default function App({ user, onLogout, onRelogin }) {
     if (cfg.ops.pickupEnabled && scene && mission && !mission.pickup) out.push({ level: 'warn', text: 'Embarque de equipe SAMU habilitado, mas o heliponto de embarque configurado não é válido (hospital sem heliponto próprio?). Ajuste em Config.' })
     if (mission && mission.delta != null && mission.delta <= 0) out.push({ level: 'info', text: 'Neste cenário a via terrestre chega antes — o aéreo tende a não compensar.' })
     if (rangeCheck(mission?.missionKm, cfg.aircraft).status === 'fail') out.push({ level: 'fail', text: rangeCheck(mission.missionKm, cfg.aircraft).note })
+    if (origin && scene) out.push({ level: 'info', text: `Decolagem de ${origin.name}, não da base: o voo de ida sai de lá${origin.airborne ? ' e sem tempo de decolagem (aeronave já em voo)' : ''}; o retorno no fim da missão segue para a base. Autonomia: o voo anterior não entra na conta — confirme o combustível com o comandante.` })
     return out
-  }, [cfg, hospital, landingHelipad, lzPoint, scene, daylight, autoStatus.weather, routeErr, mission, xferRoute])
+  }, [cfg, hospital, landingHelipad, lzPoint, scene, daylight, autoStatus.weather, routeErr, mission, xferRoute, origin])
 
   // ---------- ações ----------
   const doSearch = async () => {
@@ -615,12 +652,23 @@ export default function App({ user, onLogout, onRelogin }) {
       setCommDraft({ lat, lon })
       setShowComm(true)
       setMapMode('scene')
+    } else if (mode === 'origin') {
+      setOrigin(origemDoPonto(lat, lon))
+      setMapMode('scene')
     } else if (mode === 'lz') {
+      setMapMode('scene')
+      if (lzLock) { flashMapHint('LZ fixada — destrave a LZ para marcar outra.'); return }
       setManualLz({ lat, lon })
       setLzSelId(null)
-      setMapMode('scene')
     } else {
-      if (sceneLock && scene) return // local fixado: clique no mapa não move a cena
+      // local fixado — ou LZ fixada, que pressupõe a cena definida: clique
+      // acidental no mapa não move a ocorrência (a busca continua movendo)
+      if (scene && (sceneLock || lzLock)) {
+        flashMapHint(sceneLock
+          ? 'Local fixado — o clique não move a ocorrência. Destrave em "Local da ocorrência" ou use a busca.'
+          : 'LZ fixada — o clique não move a ocorrência. Destrave a LZ para mudar o local.')
+        return
+      }
       const seq = ++revGeoRef.current
       setScene({ lat, lon })
       setSceneLabel('Ponto marcado no mapa')
@@ -631,6 +679,52 @@ export default function App({ user, onLogout, onRelogin }) {
       if (seq !== revGeoRef.current) return
       if (r.label) setSceneLabel(r.label)
       setScenePlace(r.place)
+    }
+  }
+
+  // escolha da LZ pela lista: travada, não troca (o painel mostra o porquê)
+  const selectLz = (id) => {
+    if (lzLock) return
+    setLzSelId(id === lzSelId ? null : id)
+    setManualLz(null)
+  }
+  const toggleLzLock = () => {
+    if (lzLock) {
+      // destravar devolve a mesma LZ como escolha comum — nada se perde. Se o
+      // candidato saiu da lista (a cena mudou), ela volta como LZ manual
+      const cand = lzLock.id != null && (lzList || []).find((c) => c.id === lzLock.id)
+      if (cand) { setLzSelId(cand.id); setManualLz(null) }
+      else { setManualLz({ lat: lzLock.lat, lon: lzLock.lon, name: lzLock.name }); setLzSelId(null) }
+      setLzLock(null)
+    } else if (lzPoint) {
+      setLzLock(congelaLz(lzPoint))
+    }
+  }
+
+  // "mesma equipe do caso anterior": no plantão a equipe costuma ser a mesma
+  const crewAnterior = useMemo(() => {
+    for (const c of cases) { // mais recente primeiro
+      if (dbId != null && String(c.id) === String(dbId)) continue
+      const at = new Date(c.updated_at).getTime()
+      if (Date.now() - at > 24 * 3600_000) break
+      if (crewFilled(c.crew)) return { ref: c.case_ref || `#${c.id}`, at, crew: c.crew }
+    }
+    return null
+  }, [cases, dbId])
+
+  // ---------- decolagem ----------
+  const opcoesOrigem = useMemo(() => origemOpcoes(cfg), [cfg])
+  const emenda = useMemo(
+    () => (origin || !scene ? null : sugestaoEmenda(cases, dbId, opcoesOrigem)),
+    [cases, dbId, opcoesOrigem, origin, scene]
+  )
+  const escolherOrigem = (v) => {
+    if (v === 'base') setOrigin(null)
+    else if (v === 'acft') { if (acft) setOrigin(origemDaAeronave(acft)) }
+    else if (v === 'mapa') { setMapMode('origin'); verMapa() }
+    else {
+      const o = opcoesOrigem.find((x) => x.key === v)
+      if (o) setOrigin({ key: o.key, kind: o.kind, name: o.name, lat: o.lat, lon: o.lon })
     }
   }
 
@@ -709,7 +803,7 @@ export default function App({ user, onLogout, onRelogin }) {
   // ---------- a ocorrência ao vivo, em todas as telas ----------
   // A mesma ocorrência é acompanhada em vários lugares ao mesmo tempo: a
   // regulação no PC, o médico no celular, o piloto no modo navegação. Quando um
-  // toca "Decolagem da base", tem que aparecer nas outras telas — sem F5, e não
+  // toca "Decolagem para a cena", tem que aparecer nas outras telas — sem F5, e não
   // só no grupo do Telegram.
   //
   // Poll de 5 s do estado mínimo do caso, mesma escolha do rastreamento:
@@ -729,11 +823,11 @@ export default function App({ user, onLogout, onRelogin }) {
   const CAMPOS_VIVOS = [
     'id', 'scene', 'sceneLabel', 'scenePlace', 'notes', 'hospitalId', 'landingSel', 'ambEta',
     'manualChecked', 'autoOverrides', 'critTexts', 'gateManual', 'gateOverrides', 'gateJust', 'lzSelId', 'manualLz',
-    'intercorrencias',
+    'intercorrencias', 'lzLock', 'origin', 'crew',
   ]
   // calculados por cada tela a partir da SUA Config; viajam junto na gravação
   // (alimentam a lista de casos e o relatório) mas nunca disparam gravação
-  const DERIVADOS = ['ts', 'hospitalName', 'lzPoint', 'landingName', 'scoreTotal',
+  const DERIVADOS = ['ts', 'hospitalName', 'lzPoint', 'landingName', 'landingPoint', 'scoreTotal',
     'band', 'recommendation', 'gatesOk', 'mission', 'caseTag']
   const mesmo = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null)
   // assinatura do que é AUTORAL no caso — muda => há o que gravar
@@ -747,6 +841,7 @@ export default function App({ user, onLogout, onRelogin }) {
     manualChecked: setManualChecked, autoOverrides: setAutoOverrides, critTexts: setCritTexts,
     gateManual: setGateManual, gateOverrides: setGateOverrides, gateJust: setGateJust,
     lzSelId: setLzSelId, manualLz: setManualLz, intercorrencias: setIntercorrencias,
+    lzLock: setLzLock, origin: setOrigin, crew: setCrew,
   }
   const ROTULOS = {
     id: 'identificador', scene: 'local da ocorrência', sceneLabel: 'local da ocorrência', scenePlace: 'local da ocorrência',
@@ -754,12 +849,14 @@ export default function App({ user, onLogout, onRelogin }) {
     ambEta: 'tempo da ambulância', manualChecked: 'pontuação', autoOverrides: 'pontuação', critTexts: 'pontuação',
     gateManual: 'condições operacionais', gateOverrides: 'condições operacionais', gateJust: 'condições operacionais',
     lzSelId: 'LZ escolhida', manualLz: 'LZ escolhida', intercorrencias: 'intercorrências',
+    lzLock: 'LZ fixada', origin: 'local de decolagem', crew: 'aeronave e equipe',
   }
   // vazio de cada campo: input controlado do React não aceita null
   const VAZIO = {
     id: '', sceneLabel: '', scenePlace: null, notes: '', ambEta: '', landingSel: 'auto',
     hospitalId: cfg.hospitals[0]?.id || '', scene: null, lzSelId: null, manualLz: null,
     manualChecked: {}, autoOverrides: {}, critTexts: {}, gateManual: {}, gateOverrides: {}, gateJust: {}, intercorrencias: [],
+    lzLock: null, origin: null, crew: {},
   }
   const clientIdRef = useRef(Math.random().toString(36).slice(2, 10) + Date.now().toString(36))
   const ultimoSalvoRef = useRef(null)   // assinatura viva que já está no servidor
@@ -882,8 +979,11 @@ export default function App({ user, onLogout, onRelogin }) {
     if (!gates.ok) L.push(`IMPEDITIVOS: ${gates.fails.map((f) => f.label).join('; ')}`)
     if (mission?.airTotal != null) L.push(`Tempo aéreo estimado: ${fmtMin(mission.airTotal)}${mission.ground.total != null ? ` × terrestre ${fmtMin(mission.ground.total)} (Δ ${fmtMin(Math.abs(mission.delta))})` : ''}`)
     if (hospital) L.push(`Destino: ${destinoLabel()}`)
+    const eq = crewLinhas(crew)
+    if (eq.length) L.push(`Equipe: ${eq.map(([k, v]) => `${k} ${v}`).join(' · ')}`)
     if (landingHelipad) L.push(`Heliponto de desembarque: ${landingHelipad.name} — ${fmtCoordsDDM(landingHelipad)} (dec ${fmtCoords(landingHelipad)})`)
-    if (lzPoint) L.push(`LZ: ${manualLz ? 'manual' : `${lzPoint.letter} — ${lzPoint.name}`} — ${fmtCoordsDDM(lzPoint)} (dec ${fmtCoords(lzPoint)})${lzPoint.obstFlag ? ' ⚠ obstáculo próximo' : ''}`)
+    if (origin) L.push(`Decolagem: ${origin.name} (não da base) — ${fmtCoordsDDM(origin)}`)
+    if (lzPoint) L.push(`LZ${lzLock ? ' (fixada)' : ''}: ${lzRotulo(lzPoint, true)} — ${fmtCoordsDDM(lzPoint)} (dec ${fmtCoords(lzPoint)})${lzPoint.obstFlag ? ' ⚠ obstáculo próximo' : ''}`)
     if (wxScene) {
       const c = classifyWeather(wxScene)
       L.push(`Meteo cena${wxScene.at ? ` (aferida ${wxHora(wxScene)})` : ''}: ${c.level === 'ok' ? 'favorável' : c.level === 'warn' ? 'MARGINAL' : 'DESFAVORÁVEL'} — vento ${Math.round(wxScene.windKmh || 0)} km/h, vis ${wxScene.visM != null ? (wxScene.visM / 1000).toFixed(1) + ' km' : 's/ dado'}`)
@@ -916,11 +1016,14 @@ export default function App({ user, onLogout, onRelogin }) {
     sunsetISO: sunsetISO || null,
     scene, sceneLabel, scenePlace, hospitalId, hospitalName: hospital?.name || null, landingSel, ambEta, notes,
     manualChecked, autoOverrides, critTexts, gateManual, gateOverrides, gateJust, caseTag: tag,
-    lzSelId, manualLz, events, intercorrencias,
+    lzSelId, manualLz, events, intercorrencias, lzLock, origin, crew,
     // ponto de encontro nomeado p/ o bot da missão (lzSelId sozinho não
     // resolve fora do app: o candidato vem do Overpass e não fica no snapshot)
-    lzPoint: lzPoint ? { name: manualLz ? 'LZ manual' : lzPoint.name || 'LZ', lat: lzPoint.lat, lon: lzPoint.lon } : null,
+    lzPoint: lzPoint ? { name: lzRotulo(lzPoint), lat: lzPoint.lat, lon: lzPoint.lon } : null,
     landingName: landingHelipad?.name || null,
+    // onde a aeronave pousa no destino: é dali que sai o caso seguinte quando
+    // as ocorrências são emendadas (ver sugestaoEmenda)
+    landingPoint: mission?.landing ? { name: mission.landing.name, lat: mission.landing.lat, lon: mission.landing.lon } : null,
     scoreTotal: score.total, band: score.band.key,
     recommendation: rec?.title || null, gatesOk: gates.ok,
     mission: mission ? { airTotal: mission.airTotal, groundTotal: mission.ground.total, delta: mission.delta } : null,
@@ -1156,7 +1259,7 @@ export default function App({ user, onLogout, onRelogin }) {
   const draftSig = JSON.stringify([
     caseId, scene, sceneLabel, notes, hospitalId, landingSel, ambEta,
     manualChecked, autoOverrides, gateManual, gateOverrides, gateJust,
-    lzSelId, manualLz, events, dbId,
+    lzSelId, manualLz, events, dbId, lzLock, origin, crew,
   ])
   useEffect(() => {
     if (!booted.current) return
@@ -1329,6 +1432,7 @@ export default function App({ user, onLogout, onRelogin }) {
     setManualChecked(c.manualChecked || {}); setAutoOverrides(c.autoOverrides || {}); setCritTexts(c.critTexts || {})
     setGateManual(c.gateManual || {}); setGateOverrides(c.gateOverrides || {}); setGateJust(c.gateJust || {})
     setLzSelId(c.lzSelId || null); setManualLz(c.manualLz || null); setEvents(c.events || {})
+    setLzLock(c.lzLock || null); setOrigin(c.origin || null); setCrew(c.crew || {})
     setIntercorrencias(Array.isArray(c.intercorrencias) ? c.intercorrencias : []); setWxChange(null)
     // congela a avaliação na hora original do caso (casos antigos, sem refAt,
     // caem no ts da gravação)
@@ -1408,10 +1512,10 @@ export default function App({ user, onLogout, onRelogin }) {
 
   // o que falta para o caso ficar documentado (não bloqueia nada — ver lib/pendencias.js)
   const pend = pendencias({
-    scene, hits: Object.values(score.perSection).flatMap((s) => s.hits), gates, gateJust, patient, events,
+    scene, hits: Object.values(score.perSection).flatMap((s) => s.hits), gates, gateJust, patient, events, crew,
   })
   const faltamPaciente = pend.filter((p) => p.onde === 'paciente').map((p) => ({ label: p.label.replace('Paciente: ', '') }))
-  const ONDE = { caso: 'Caso', fatores: 'Fatores', paciente: 'Paciente', missao: 'Missão' }
+  const ONDE = { caso: 'Caso', fatores: 'Fatores', paciente: 'Paciente', missao: 'Missão', equipe: 'Missão' }
   // no celular troca de tela; no desktop (tudo à vista) rola até o bloco
   // leva ao mapa quem vai clicar nele (no celular ele mora em outra tela)
   const verMapa = () => {
@@ -1419,7 +1523,8 @@ export default function App({ user, onLogout, onRelogin }) {
     document.querySelector('.mapbox')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
   }
   const irPara = (v) => {
-    if (!wide) { go(v); window.scrollTo(0, 0); return }
+    // a equipe mora na tela Missão do celular; no desktop rola até o card dela
+    if (!wide) { go(v === 'equipe' ? 'missao' : v); window.scrollTo(0, 0); return }
     document.getElementById('v-' + v)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
 
@@ -1428,10 +1533,10 @@ export default function App({ user, onLogout, onRelogin }) {
   const printData = () => printContent({
     tag: tagFull, scene, sceneLabel, score, gates, rec, mission, hospital, destinoLabel: destinoLabel(),
     meio: rec ? (rec.key === 'blocked' ? 'Terrestre (aéreo inviável no momento)' : rec.key === 'green' ? 'Transporte terrestre' : 'Aeromédico (helicóptero)') : '',
-    landingHelipad, lzPoint, manualLz, wxScene, metar, daylight, events, intercorrencias, notes,
+    landingHelipad, lzPoint, lzFixada: !!lzLock, crew, wxScene, metar, daylight, events, intercorrencias, notes,
     patient, medico: user?.full_name || '',
     gateJust, pend, missionStatus: missionOpen, registro: printReg,
-    baseName: cfg.base?.name,
+    decolagem: origin ? `${origin.name} (não a base)` : cfg.base?.name,
     usa: (() => {
       const u = ambEta ? ambSug?.find((x) => String(x.min) === ambEta) : ambAuto
       return u ? `${u.code} ${u.name} — ${u.min} min até a cena` : ambEta ? `${ambEta} min até a cena (informado)` : ''
@@ -1464,6 +1569,7 @@ export default function App({ user, onLogout, onRelogin }) {
     setScene(null); setSceneLabel(''); setScenePlace(null); setSceneLock(false); setQ(''); setCaseId(''); setNotes(''); setGeoResults(null)
     setManualChecked({}); setAutoOverrides({}); setCritTexts({}); setGateManual({}); setGateOverrides({}); setGateJust({})
     setAmbEta(''); setLzSelId(null); setManualLz(null); setEvents({}); setLandingSel('auto'); setIntercorrencias([]); setWxChange(null)
+    setLzLock(null); setOrigin(null); setCrew({})
     setCaseRefAt(null); setRefSunset(null); setNowTick(Date.now())
     setHospitalId(cfg.hospitals[0]?.id || '')
     setWxScene(null); setWxBase(null); setMetar(null); setLzList(null); setObstacles(null); setRoute(null)
@@ -1570,7 +1676,7 @@ export default function App({ user, onLogout, onRelogin }) {
           <button className="tile" onClick={() => go('missao')}>
             <IconClock size={38} />
             <span className="t">Missão</span>
-            <span className="d">horários · grupo · registro</span>
+            <span className="d">equipe · horários · registro</span>
             {pend.length > 0 && <span className="badge warn">{pend.length} pendência{pend.length > 1 ? 's' : ''} no registro</span>}
             <span className={'badge ' + (missionOpen === 'ativa' ? 'ok' : dbId == null ? 'warn' : '')}>
               {missionOpen === 'ativa' ? 'grupo acionado'
@@ -1727,16 +1833,30 @@ export default function App({ user, onLogout, onRelogin }) {
           <div className="card mapbox">
             <div className="mapmode">
               <button className={mapMode === 'scene' ? 'on' : ''} onClick={() => setMapMode('scene')}><IconPin size={13} /> Ocorrência</button>
-              <button className={mapMode === 'lz' ? 'on' : ''} onClick={() => setMapMode(mapMode === 'lz' ? 'scene' : 'lz')}><IconTarget size={13} /> Marcar LZ</button>
+              <button className={mapMode === 'lz' ? 'on' : ''}
+                onClick={() => (lzLock ? flashMapHint('LZ fixada — destrave a LZ para marcar outra.') : setMapMode(mapMode === 'lz' ? 'scene' : 'lz'))}>
+                <IconTarget size={13} /> Marcar LZ
+              </button>
+              {/* trava da LZ à mão no próprio mapa — é aqui que o clique errado acontece */}
+              {lzPoint && (
+                <button className={lzLock ? 'on' : ''} onClick={toggleLzLock}
+                  title={lzLock ? 'LZ fixada: clique no mapa ou na lista não a troca. Toque para destravar.' : 'Fixar a LZ: clique acidental no mapa deixa de trocar o ponto de encontro'}>
+                  {lzLock ? '🔒 LZ fixada' : '🔓 Fixar LZ'}
+                </button>
+              )}
+              {mapMode === 'origin' && (
+                <button className="on" onClick={() => setMapMode('scene')} title="Cancelar">▲ Toque no local de decolagem… ✕</button>
+              )}
               <button className={showObs ? 'on' : ''} onClick={() => setShowObs(!showObs)}><IconZap size={13} /> Obstáculos</button>
               <button className={showPads ? 'on' : ''} onClick={() => setShowPads(!showPads)} title="Helipontos registrados ANAC/CIAD e pontos da comunidade"><IconHelipadH size={13} /> Helipontos</button>
               <button className={mapMode === 'suggest' ? 'on' : 'sugerir'} onClick={() => setShowComm(true)} title="Conhece um bom local de pouso? Marque no mapa e sugira — depois de validado entra na base de todos">
                 <IconPlus size={13} /> {mapMode === 'suggest' ? 'Clique no local do pouso…' : 'Sugerir ponto de pouso'}
               </button>
             </div>
+            {mapHint && <div className="maphint" role="status">{mapHint}</div>}
             <MapView
-              cfg={cfg} scene={scene} hospitalId={hospitalId} landingHelipad={landingHelipad}
-              lz={lzList} lzSelId={lzSelId} manualLz={manualLz}
+              cfg={cfg} scene={scene} origin={origin} hospitalId={hospitalId} landingHelipad={landingHelipad}
+              lz={lzList} lzPoint={lzPoint} lzLocked={!!lzLock}
               obstacles={obstacles} route={route} transferRoute={xferRoute} mode={mapMode} showObs={showObs} showPads={showPads}
               communityLz={communityLz} aircraft={acft}
               focus={focus}
@@ -1758,6 +1878,40 @@ export default function App({ user, onLogout, onRelogin }) {
           {show('caso') && (
           <div className="card">
             <h2><span className="step-num">4</span> Destino e operação</h2>
+            <div className="field">
+              <label>Decolagem da aeronave</label>
+              <select value={origin ? origin.key : 'base'} onChange={(e) => escolherOrigem(e.target.value)}>
+                <option value="base">{cfg.base.name} — base (padrão)</option>
+                {/* origem gravada que esta Config não conhece (outra tela, caso antigo) */}
+                {origin && !['acft', 'mapa'].includes(origin.key) && !opcoesOrigem.some((o) => o.key === origin.key) && (
+                  <option value={origin.key}>{origin.name}</option>
+                )}
+                {['Hospitais com heliponto', 'Helipontos de apoio'].map((g) => (
+                  <optgroup key={g} label={g}>
+                    {opcoesOrigem.filter((o) => o.grupo === g).map((o) => <option key={o.key} value={o.key}>{o.name}</option>)}
+                  </optgroup>
+                ))}
+                {origin?.key === 'acft' ? <option value="acft">{origin.name}</option>
+                  : acft ? <option value="acft">Posição atual do GOA (GPS, {fmtClock(new Date(acft.reported_at).getTime())})</option> : null}
+                <option value="mapa">{origin?.key === 'mapa' ? `Ponto marcado no mapa (${fmtCoords(origin)})` : 'Outro ponto — marcar no mapa…'}</option>
+              </select>
+              {mapMode === 'origin' ? (
+                <div className="small"><b>Toque no mapa</b> no ponto de onde a aeronave vai decolar.</div>
+              ) : origin ? (
+                <div className="small">
+                  Voo de ida calculado a partir de <b>{origin.name}</b>{origin.airborne ? ', sem tempo de decolagem (já em voo)' : ''}; o retorno no fim da missão segue para a base.{' '}
+                  <button className="btn xs sec" onClick={() => setOrigin(null)}>voltar para a base</button>
+                </div>
+              ) : (
+                <div className="small">Emendou ocorrências ou a aeronave já está fora? Troque aqui e o voo de ida sai de lá.</div>
+              )}
+              {emenda && (
+                <button className="btn xs" style={{ marginTop: 6 }} onClick={() => setOrigin(emenda.origem)}
+                  title="A aeronave está onde pousou a ocorrência anterior">
+                  ▲ Emendando com o caso {emenda.caseRef}? Decolar de {emenda.origem.name} (pouso às {fmtClock(emenda.at)})
+                </button>
+              )}
+            </div>
             <div className="field">
               <label>Hospital de destino</label>
               <select value={hospitalId} onChange={(e) => { setHospitalId(e.target.value); setLandingSel('auto') }}>
@@ -1828,10 +1982,11 @@ export default function App({ user, onLogout, onRelogin }) {
             <div className="card">
               <h2><IconTarget size={14} /> Áreas de pouso próximas à ocorrência</h2>
               <LZPanel
-                lz={lzList} lzErr={lzErr} lzLoading={lzLoading} lzSelId={lzSelId} manualLz={manualLz}
-                onSelect={(id) => { setLzSelId(id === lzSelId ? null : id); setManualLz(null) }}
+                lz={lzList} lzErr={lzErr} lzLoading={lzLoading} lzPoint={lzPoint} manualLz={manualLz}
+                locked={!!lzLock} onToggleLock={toggleLzLock}
+                onSelect={selectLz}
                 onFocus={(c) => setFocus({ lat: c.lat, lon: c.lon, ts: Date.now() })}
-                onClearManual={() => setManualLz(null)}
+                onClearManual={() => { if (!lzLock) setManualLz(null) }}
                 onRetry={() => { pendingLzSelRef.current = lzSelId; setScene((s) => (s ? { ...s } : s)) }}
                 mode={mapMode} setMode={setMapMode}
               />
@@ -1840,11 +1995,12 @@ export default function App({ user, onLogout, onRelogin }) {
                 <span className="small" style={{ flexBasis: '100%' }}>
                   Nenhuma serve ou conhece um local melhor? Marque no mapa — e sugira para a base, para os próximos casos.
                 </span>
-                <button className={'btn xs ' + (mapMode === 'lz' ? '' : 'sec')} onClick={() => { setMapMode(mapMode === 'lz' ? 'scene' : 'lz'); verMapa() }}>
+                <button className={'btn xs ' + (mapMode === 'lz' ? '' : 'sec')} disabled={!!lzLock} title={lzLock ? 'LZ fixada — destrave para marcar outra' : undefined}
+                  onClick={() => { setMapMode(mapMode === 'lz' ? 'scene' : 'lz'); verMapa() }}>
                   <IconTarget size={13} /> {mapMode === 'lz' ? 'Clique no mapa…' : 'Marcar LZ no mapa'}
                 </button>
-                <button className="btn xs ghost" onClick={() => { if (manualLz) setCommDraft({ lat: manualLz.lat, lon: manualLz.lon }); setShowComm(true) }}>
-                  <IconPlus size={13} /> {manualLz ? 'Sugerir esta LZ para a base' : 'Sugerir novo ponto de pouso'}
+                <button className="btn xs ghost" onClick={() => { if (lzPoint?.id == null && lzPoint) setCommDraft({ lat: lzPoint.lat, lon: lzPoint.lon }); setShowComm(true) }}>
+                  <IconPlus size={13} /> {lzPoint && lzPoint.id == null ? 'Sugerir esta LZ para a base' : 'Sugerir novo ponto de pouso'}
                 </button>
               </div>
             </div>
@@ -1862,6 +2018,11 @@ export default function App({ user, onLogout, onRelogin }) {
               <h2><IconAlert size={14} /> Alertas de segurança</h2>
               <AlertsPanel alerts={alerts} />
             </div>
+          )}
+
+          {show('missao') && (
+            <CrewCard crew={crew} onChange={setCrew} roster={roster} onRosterAdd={addToRoster}
+              onOpenRoster={() => setShowRoster(true)} prev={crewAnterior} cobrar={!!events.decisao && !events.cancelado} />
           )}
 
           {show('missao') && scene && (
@@ -2001,11 +2162,12 @@ export default function App({ user, onLogout, onRelogin }) {
 
       {showPrint && <PrintModal goa={printGoa} conteudo={printData()} meta={{ caseId, refMs, refFrozen: refAt != null, divergencias: conflitos }} onClose={() => setShowPrint(false)} />}
       {showSamus && <SamuContactsModal user={user} onClose={() => setShowSamus(false)} />}
+      {showRoster && <CrewRosterModal roster={roster} onChanged={refreshRoster} onClose={() => setShowRoster(false)} />}
       {showCfg && <ConfigModal cfg={cfg} user={user} onClose={() => setShowCfg(false)} onSave={(c) => { setCfg(c); saveCfg(c); setShowCfg(false) }} />}
 
       {view === 'nav' && (
         <NavMode
-          cfg={cfg} scene={scene} lzPoint={lzPoint}
+          cfg={cfg} scene={scene} lzPoint={lzPoint} origin={origin}
           hospital={hospital} landingHelipad={landingHelipad}
           events={events} onQuickMark={quickMarkEvent} onUndoMark={undoEvent}
           onClose={() => go(wide ? 'caso' : 'navegar')}
@@ -2083,7 +2245,7 @@ export default function App({ user, onLogout, onRelogin }) {
 
       <PrintSheet
         caseId={caseId} tag={tagFull} scene={scene} sceneLabel={sceneLabel} score={score} gates={gates} rec={rec}
-        mission={mission} hospital={hospital} landingHelipad={landingHelipad} lzPoint={lzPoint} manualLz={manualLz} wxScene={wxScene}
+        mission={mission} hospital={hospital} landingHelipad={landingHelipad} lzPoint={lzPoint} wxScene={wxScene} origin={origin}
         metar={metar} events={events} intercorrencias={intercorrencias} notes={notes} daylight={daylight} destinoLabel={destinoLabel()}
         refMs={refMs} refFrozen={refAt != null}
       />
@@ -2091,7 +2253,7 @@ export default function App({ user, onLogout, onRelogin }) {
   )
 }
 
-function PrintSheet({ caseId, tag, scene, sceneLabel, score, gates, rec, mission, hospital, landingHelipad, lzPoint, manualLz, wxScene, metar, events, intercorrencias, notes, daylight, destinoLabel, refMs, refFrozen }) {
+function PrintSheet({ caseId, tag, scene, sceneLabel, score, gates, rec, mission, hospital, landingHelipad, lzPoint, wxScene, origin, metar, events, intercorrencias, notes, daylight, destinoLabel, refMs, refFrozen }) {
   const hits = Object.values(score.perSection).flatMap((s) => s.hits)
   const printedAt = new Date()
   const assessedAt = new Date(refMs)
@@ -2124,9 +2286,10 @@ function PrintSheet({ caseId, tag, scene, sceneLabel, score, gates, rec, mission
         <tr><th>Aeromédico (total)</th><td>{fmtMin(mission?.airTotal)}</td></tr>
         <tr><th>Terrestre (total)</th><td>{fmtMin(mission?.ground?.total)}</td></tr>
         <tr><th>Diferença</th><td>{mission?.delta != null ? (mission.delta > 0 ? `aéreo ${fmtMin(mission.delta)} mais rápido` : `terrestre ${fmtMin(-mission.delta)} mais rápido`) : '—'}</td></tr>
+        {origin && <tr><th>Decolagem</th><td>{origin.name} (não a base)</td></tr>}
         <tr><th>Destino</th><td>{destinoLabel}</td></tr>
         {landingHelipad && <tr><th>Heliponto desemb.</th><td>{landingHelipad.name} · {fmtCoordsDDM(landingHelipad)} <span style={{ color: '#666' }}>(dec {fmtCoords(landingHelipad)})</span></td></tr>}
-        <tr><th>LZ</th><td>{lzPoint ? <>{manualLz ? 'Manual' : lzPoint.name} · {fmtCoordsDDM(lzPoint)} <span style={{ color: '#666' }}>(dec {fmtCoords(lzPoint)})</span></> : 'não definida'}</td></tr>
+        <tr><th>LZ</th><td>{lzPoint ? <>{lzRotulo(lzPoint)} · {fmtCoordsDDM(lzPoint)} <span style={{ color: '#666' }}>(dec {fmtCoords(lzPoint)})</span></> : 'não definida'}</td></tr>
       </tbody></table>
 
       <h2>Condições</h2>

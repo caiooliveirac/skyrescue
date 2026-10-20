@@ -10,11 +10,12 @@
 // ------------------------------------------------------------------
 import { PATIENT_SECTIONS } from './patient.js'
 import { MILESTONES } from '../components/Tracking.jsx'
+import { CREW_SLOTS, slotNome } from './crew.js'
 
 const vazio = (v) => String(v ?? '').trim() === ''
 export const REQ_PACIENTE = PATIENT_SECTIONS.flatMap((s) => s.fields.filter((f) => f.req))
 
-export function pendencias({ scene, hits, gates, gateJust, patient, events }) {
+export function pendencias({ scene, hits, gates, gateJust, patient, events, crew }) {
   const out = []
   if (!scene) out.push({ id: 'cena', label: 'Local da ocorrência', onde: 'caso' })
   if (!hits.length) out.push({ id: 'criterios', label: 'Critérios de gravidade (nenhum marcado)', onde: 'caso' })
@@ -30,6 +31,10 @@ export function pendencias({ scene, hits, gates, gateJust, patient, events }) {
   // terrestre não tem voo para documentar
   // envio cancelado: os marcos que não aconteceram não são pendência
   if (events?.decisao && !events.cancelado) {
+    // quem voou: mesma regra dos horários — só existe depois do acionamento
+    for (const sl of CREW_SLOTS) {
+      if (sl.req && !slotNome(crew, sl.k)) out.push({ id: 'e_' + sl.k, label: `Equipe: ${sl.label}`, onde: 'equipe' })
+    }
     for (const m of MILESTONES) {
       if (!events[m.id]) out.push({ id: 'h_' + m.id, label: `Horário: ${m.label}`, onde: 'missao' })
     }

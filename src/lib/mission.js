@@ -1,16 +1,21 @@
 import { haversineKm } from './geo.js'
 
 // ---------------- Modelo de tempos ----------------
-// AÉREO  = acionamento + [pickup equipe] + voo(base→cena) + embarque
+// AÉREO  = acionamento + [pickup equipe] + voo(origem→cena) + embarque
 //          + voo(cena→ponto de pouso) + desembarque (heliponto próprio)
 //          OU transbordo (heliponto de apoio / LZ → ambulância → hospital)
 // TERRESTRE = ETA ambulância→cena + atendimento na cena + rota(cena→hospital)×fator trânsito
 // transferRoute: rota terrestre heliponto de desembarque → hospital (quando o
 // hospital não tem heliponto). Sem ela, vale o transbordoMin fixo da Config.
-export function computeMission({ cfg, scene, hospital, lzPoint, landingHelipad, groundRoute, transferRoute, ambulanceEtaMin }) {
+// origin: de onde a aeronave decola quando NÃO é da base — ocorrências
+// emendadas (deixou o paciente no HS e segue de lá) ou desvio em voo. Sem ele
+// o voo de ida saía sempre de Simões Filho e o tempo aéreo ficava
+// superestimado. O retorno no fim da missão continua sendo para a base.
+export function computeMission({ cfg, scene, origin, hospital, lzPoint, landingHelipad, groundRoute, transferRoute, ambulanceEtaMin }) {
   if (!scene) return null
   const { base, aircraft: ac, times: t, ground, ops } = cfg
   const p1 = lzPoint || scene
+  const from = origin || base
   const legs = []
 
   // ponto onde a aeronave pousa no destino:
@@ -20,7 +25,9 @@ export function computeMission({ cfg, scene, hospital, lzPoint, landingHelipad, 
   let dOut = 0
   let flightOutMin = 0
   let pickup = null
-  if (ops.pickupEnabled && ops.pickupHospitalId) {
+  // a equipe SAMU embarca no heliponto intermediário só quando a aeronave sai
+  // da base: emendando ocorrências, ela já está a bordo
+  if (!origin && ops.pickupEnabled && ops.pickupHospitalId) {
     pickup = cfg.hospitals.find((h) => h.id === ops.pickupHospitalId && h.heliponto) || null
   }
   if (pickup) {
@@ -32,10 +39,12 @@ export function computeMission({ cfg, scene, hospital, lzPoint, landingHelipad, 
     legs.push({ k: 'pickup', label: 'Embarque da equipe SAMU', min: t.pickupStopMin })
     legs.push({ k: 'voo_ida', label: 'Voo → cena', min: (d2 / ac.cruiseKmh) * 60, km: d2 })
   } else {
-    dOut = haversineKm(base, p1) * ac.routeFactor
+    dOut = haversineKm(from, p1) * ac.routeFactor
     flightOutMin = (dOut / ac.cruiseKmh) * 60
-    legs.push({ k: 'voo_ida', label: 'Voo base → cena', min: flightOutMin, km: dOut })
+    legs.push({ k: 'voo_ida', label: `Voo ${origin ? origin.name : 'base'} → cena`, min: flightOutMin, km: dOut })
   }
+  // já em voo (desvio de rota): não há acionamento → decolagem a esperar
+  const acionMin = origin?.airborne ? 0 : t.acionamentoMin
 
   const dSH = landing ? haversineKm(p1, landing) * ac.routeFactor : null
   const flightBackMin = dSH != null ? (dSH / ac.cruiseKmh) * 60 : null
@@ -49,11 +58,11 @@ export function computeMission({ cfg, scene, hospital, lzPoint, landingHelipad, 
 
   const airTotal =
     hospital != null && flightBackMin != null
-      ? t.acionamentoMin + flightOutMin + t.embarqueMin + flightBackMin + finalMin
+      ? acionMin + flightOutMin + t.embarqueMin + flightBackMin + finalMin
       : null
 
   const allLegs = [
-    { k: 'acionamento', label: 'Acionamento → decolagem', min: t.acionamentoMin },
+    { k: 'acionamento', label: origin?.airborne ? 'Aeronave já em voo — sem tempo de decolagem' : 'Acionamento → decolagem', min: acionMin },
     ...legs,
     { k: 'embarque', label: 'Pouso na cena + embarque do paciente', min: t.embarqueMin },
   ]
@@ -82,7 +91,7 @@ export function computeMission({ cfg, scene, hospital, lzPoint, landingHelipad, 
 
   const delta = airTotal != null && gTotal != null ? gTotal - airTotal : null
   // sem ponto de pouso resolvido, assume retorno da cena (piso realista p/ autonomia)
-  const dReturn = landing ? haversineKm(landing, base) * ac.routeFactor : dOut
+  const dReturn = landing ? haversineKm(landing, base) * ac.routeFactor : origin ? haversineKm(p1, base) * ac.routeFactor : dOut
   const missionKm = dOut + (dSH || 0) + dReturn
   const returnMin = (dReturn / ac.cruiseKmh) * 60
   const missionEndMin = airTotal != null ? airTotal + returnMin : null // aeronave de volta à base
@@ -93,6 +102,7 @@ export function computeMission({ cfg, scene, hospital, lzPoint, landingHelipad, 
     returnMin,
     missionEndMin,
     flightOutMin,
+    origin: origin ? { name: origin.name, lat: origin.lat, lon: origin.lon } : null,
     pickup,
     landing: landing ? { lat: landing.lat, lon: landing.lon, name: landing.name, isHelipad: !!(hospital?.heliponto || landingHelipad) } : null,
     landingHelipad: landingHelipad || null,

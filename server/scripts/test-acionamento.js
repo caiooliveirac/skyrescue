@@ -66,7 +66,7 @@ async function main() {
   console.log('\n=== marcos seguintes: eco normal, sem reabrir nada ===')
   const b = await marcar(c1, [{ id: 'decolagem', ts: ts + 60000, edited: false }])
   ok('marco seguinte só ecoa', b.r === null, `retorno=${b.r}`)
-  ok('eco traz o marco e o autor', b.out.includes('Decolagem da base') && b.out.includes('Médico de teste'), b.out.slice(0, 80))
+  ok('eco traz o marco e o autor', b.out.includes('Decolagem para a cena') && b.out.includes('Médico de teste'), b.out.slice(0, 80))
   ok('missão continua ativa', (await missionStatus(c1)) === 'ativa')
 
   console.log('\n=== acionar um caso novo encerra a missão anterior (uma aeronave só) ===')

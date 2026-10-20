@@ -132,6 +132,20 @@ No plantão ninguém clica em "Salvar" antes de sair — o tablet dorme, a bater
 
 Cobre recarregar a página, fechar a aba, fechar o navegador, crash/queda de energia e aba descartada pelo sistema em segundo plano. O rascunho é **por usuário** (o computador da regulação é compartilhado: o rascunho de um plantonista não aparece para o próximo que logar) e expira em 36 h, para trabalho antigo não ressuscitar. Ele não substitui a gravação no servidor — continua sendo o "Salvar/Atualizar caso" que registra o caso para a equipe e para o bot; é rede de segurança contra perder o que foi digitado. Implementação em `src/lib/draft.js`.
 
+## Aeronave e equipe do voo
+
+Card **Aeronave e equipe** na tela Missão: prefixo da aeronave, comandante, copiloto, operador(es) aerotático(s), médico e enfermeiro de bordo — cada um com o registro (CANAC, CRM, COREN) — e "outros a bordo". As posições escolhem do **cadastro compartilhado** (tabela `crew_member`, `GET/POST/PUT/DELETE /api/crew`, qualquer login lê e escreve): ao digitar aparecem as sugestões e o registro vem junto; nome novo entra no cadastro com "+ cadastro". "Mesma equipe do caso X" repete a equipe de um caso das últimas 24 h.
+
+O caso guarda uma **cópia** em `snapshot.crew` (não um id): corrigir ou apagar alguém do cadastro não reescreve missões passadas. Sai no PDF (seção "Aeronave e equipe", inclusa no Relatório p/ GOA), no resumo e no briefing do Telegram (sem registro profissional). Depois do acionamento, comandante e médico de bordo viram pendência de documentação. O antigo campo livre "Equipe de transporte" da ficha do paciente só aparece em fichas que já o tinham. Código: `src/lib/crew.js`, `src/components/Crew.jsx`.
+
+## Decolagem fora da base (ocorrências emendadas)
+
+Em **Destino e operação → Decolagem da aeronave** o regulador troca de onde a aeronave sai: base (padrão), hospital com heliponto (HS, Metropolitano…), heliponto de apoio, **posição atual do GOA** (GPS do modo navegação — acima de ~50 km/h conta como em voo e zera o acionamento → decolagem) ou um ponto marcado no mapa. O voo de ida passa a sair desse ponto; o retorno no fim da missão continua para a base. Se o caso anterior pousou no destino há menos de 3 h, o app sugere "Emendando com o caso X? Decolar de…" (lê `snapshot.landingPoint` e o horário de pouso pela lista de casos). Embarque da equipe SAMU em heliponto intermediário só vale saindo da base. A autonomia não conhece o voo anterior — o alerta pede para confirmar o combustível com o comandante. Fica em `snapshot.origin` (cópia de nome + coordenadas) e sincroniza entre as telas; sai no mapa (▲), no modo navegação, no PDF e no briefing. O marco "Decolagem da base" passou a se chamar **"Decolagem para a cena"**.
+
+## LZ fixada
+
+**🔒 Fixar LZ** (no mapa e no painel de áreas de pouso) congela a LZ em vigor em `snapshot.lzLock`: clique no mapa ou na lista não troca o ponto de encontro e o clique no mapa também não move a ocorrência (aparece um aviso de clique ignorado — vale também para o "fixar local" da cena). Mover a cena pela busca refaz a lista de candidatos, mas a LZ fixada continua; destravar a devolve como escolha comum (LZ manual, se saiu da lista). Sincroniza entre as telas. Código: `src/lib/origem.js`.
+
 ## Ficha do paciente (prontuário)
 
 Preenchida durante a ocorrência e exportada como HTML → PDF, assinável no gov.br. É **do caso**, não do aparelho: fica no servidor (tabela `case_patient`) e sincroniza ao vivo, então o que o médico acrescenta no celular aparece para quem está na regulação, e reabrir o caso em qualquer aparelho traz a ficha de volta.

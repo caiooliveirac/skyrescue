@@ -25,7 +25,7 @@ O SAMU 192 Salvador passou a contar com o Grupamento de Operações Aéreas do C
 
 ### 4.1 Tempos (minutos; parâmetros configuráveis)
 
-- **Aéreo** = acionamento→decolagem (10) + [voo base→heliponto de pickup + embarque equipe SAMU (7), se habilitado] + voo base→cena + pouso/embarque paciente (10) + voo cena→hospital + desembarque em heliponto (5) OU pouso em LZ + transbordo (15).
+- **Aéreo** = acionamento→decolagem (10; 0 se a aeronave já está em voo) + [voo base→heliponto de pickup + embarque equipe SAMU (7), se habilitado e saindo da base] + voo origem→cena (origem = base, ou o ponto de decolagem escolhido no caso quando as ocorrências são emendadas) + pouso/embarque paciente (10) + voo cena→hospital + desembarque em heliponto (5) OU pouso em LZ + transbordo (15).
 - Voo = distância haversine × fator de rota (1,05) ÷ cruzeiro (200 km/h AS350) × 60.
 - **Terrestre** = ETA ambulância→cena + atendimento na cena (15) + rota OSRM cena→hospital × fator de trânsito (1,25).
 - Δ = terrestre − aéreo. Exibir barras comparativas por etapa.
