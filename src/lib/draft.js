@@ -13,6 +13,8 @@
 // A chave é POR USUÁRIO: o computador da regulação é compartilhado e o
 // rascunho de um plantonista não pode aparecer para o próximo que logar.
 
+import { crewFilled } from './crew.js'
+
 const KEY = (userId) => `skyrescue_draft_v1_${userId ?? 'anon'}`
 const DEBOUNCE_MS = 700
 // depois disso o rascunho é história, não trabalho em curso — não volta
@@ -24,7 +26,8 @@ export function draftWorthKeeping(snap) {
   const filled = (o) => o && Object.keys(o).length > 0
   return Boolean(
     snap.scene || snap.notes || snap.ambEta ||
-    filled(snap.events) || filled(snap.manualChecked) || filled(snap.gateManual)
+    filled(snap.events) || filled(snap.manualChecked) || filled(snap.gateManual) ||
+    crewFilled(snap.crew)
   )
 }
 

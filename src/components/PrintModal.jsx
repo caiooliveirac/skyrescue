@@ -4,7 +4,7 @@ import { IconPrint, IconDownload, IconX } from './Icons.jsx'
 
 // Escolha do que sai no PDF do caso. A seleção fica lembrada no aparelho
 // (conveniência de quem imprime); "Padrão" volta ao pré-selecionado.
-const KEY = 'skyrescue_print_v2' // v2: seções novas (pendências, responsáveis, trechos, intervalos)
+const KEY = 'skyrescue_print_v3' // v3: seção Aeronave e equipe (v2: pendências, responsáveis, trechos, intervalos)
 const PADRAO = PRINT_PRESETS[0].ids
 const lerSel = () => {
   try {

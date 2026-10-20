@@ -65,7 +65,7 @@ export default function PatientForm({ patient, onChange, sync, soLocal, onEnviar
         <div key={s.id} style={{ marginBottom: 6 }}>
           <div className="groupname">{s.title}</div>
           <div className="pfgrid">
-            {s.fields.map((f) => (
+            {s.fields.filter((f) => !f.legado || String(patient[f.k] || '').trim()).map((f) => (
               <Field key={f.k} f={f} value={patient[f.k]} onChange={onChange} />
             ))}
           </div>

@@ -443,6 +443,8 @@ input[type="checkbox"] { accent-color: #22d3ee; width: 16px; height: 16px; }
 .lzrow:hover { background: rgba(148, 163, 184, 0.05); }
 .lzrow.sel { background: var(--accent-soft); border: 1px solid var(--accent-line); border-radius: var(--radius-sm); }
 .lzrow.sel + .lzrow { border-top-color: transparent; }
+/* LZ fixada: as outras áreas ficam à vista para consulta, esmaecidas */
+.lzrow.travada { opacity: 0.55; }
 .lztile {
   position: relative; width: 40px; height: 40px; border-radius: 11px; flex: none;
   display: flex; align-items: center; justify-content: center;
@@ -713,6 +715,39 @@ input[type="checkbox"] { accent-color: #22d3ee; width: 16px; height: 16px; }
   font-size: 9px; font-weight: 800;
   display: flex; align-items: center; justify-content: center;
   border: 1.5px solid #0b1220;
+}
+/* LZ fixada: cadeado no canto — clicar no mapa não a troca */
+.mk-lz.locked { position: relative; }
+.mk-lz.locked::after {
+  content: '🔒'; position: absolute; bottom: -9px; left: -9px;
+  font-size: 11px; line-height: 1; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.8));
+}
+/* decolagem fora da base (ocorrências emendadas) */
+.mk-origin {
+  width: 24px; height: 24px; border-radius: 50%;
+  background: #0b1220; color: #22d3ee;
+  font-size: 11px; font-weight: 800;
+  display: flex; align-items: center; justify-content: center;
+  border: 2px solid #22d3ee;
+  box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.22);
+}
+.maplegend .lg-origin {
+  width: 13px; height: 13px; border-radius: 50%; flex: none;
+  font-size: 7px; font-weight: 800;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: #0b1220; color: #22d3ee; border: 1.5px solid #22d3ee;
+}
+/* aviso de clique ignorado (cena/LZ fixadas) — some sozinho */
+.maphint {
+  position: absolute; z-index: 950; top: 64px; left: 50%; transform: translateX(-50%);
+  max-width: min(90%, 420px); text-align: center;
+  background: rgba(8, 13, 24, 0.94); color: var(--ink);
+  border: 1px solid var(--warn); border-radius: 9px; padding: 7px 12px;
+  font-size: 12.5px; font-weight: 600; pointer-events: none;
+  box-shadow: 0 6px 18px rgba(2, 6, 17, 0.5);
+}
+@media (max-width: 1019px) {
+  .maphint { position: static; order: 2; transform: none; max-width: none; }
 }
 
 /* ---------- timeline ---------- */
@@ -1129,3 +1164,18 @@ input.req-vazio { border-color: rgba(251, 191, 36, 0.55); }
 .mapmode button.sugerir { color: var(--accent); border: 1px dashed var(--accent-line); }
 .lz-sugerir { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
 .print-goa { width: 100%; justify-content: center; margin-bottom: 12px; }
+
+/* ---------- aeronave e equipe ---------- */
+.crew-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+.crew-grid .field { margin-bottom: 8px; }
+.crew-inputs { display: flex; gap: 6px; align-items: center; }
+.crew-inputs input { flex: 1 1 60%; min-width: 0; }
+.crew-inputs input.crew-reg { flex: 1 1 35%; }
+.crew-inputs .btn { flex: none; }
+.crew-roster-row { display: flex; align-items: center; gap: 6px; padding: 4px 0; border-top: 1px solid var(--line); }
+@media (max-width: 1019px) {
+  .crew-grid { grid-template-columns: 1fr; }
+  /* com o "+ cadastro" ao lado, o nome desce para a linha toda */
+  .crew-inputs:has(.btn) { flex-wrap: wrap; }
+  .crew-inputs:has(.btn) input:first-child { flex-basis: 100%; }
+}

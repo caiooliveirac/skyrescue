@@ -188,26 +188,52 @@ const SUIT_BADGE = {
   valid: ['ok', 'Validada — pouso de rotina'],
 }
 
-export function LZPanel({ lz, lzErr, lzLoading, lzSelId, manualLz, onSelect, onFocus, onClearManual, onRetry, mode, setMode }) {
+// lzPoint = LZ em vigor (candidato, manual ou a fixada); `locked` = fixada:
+// a lista continua à vista para consulta, mas tocar nela não troca nada
+export function LZPanel({ lz, lzErr, lzLoading, lzPoint, manualLz, locked, onToggleLock, onSelect, onFocus, onClearManual, onRetry, mode, setMode }) {
   const [filter, setFilter] = useState('all')
   const list = lz || []
   const counts = Object.fromEntries(LZ_FILTERS.map((f) => [f.key, f.key === 'all' ? list.length : list.filter((c) => c.typeKey === f.key).length]))
   // filtro herdado de outra cena sem correspondência cai para 'Todas'
   const active = counts[filter] > 0 ? filter : 'all'
   const shown = active === 'all' ? list : list.filter((c) => c.typeKey === active)
+  const selId = lzPoint?.id ?? null
+  // fixada fora da lista: a cena mudou, a busca foi refeita e o candidato não
+  // veio — ou era manual e a troca de cena limpou a LZ manual
+  const fixadaFora = locked && lzPoint && (lzPoint.id == null ? !manualLz : !list.some((c) => c.id === lzPoint.id))
   return (
     <div>
       <div className="row" style={{ marginBottom: 8 }}>
-        <button className={'btn xs ' + (mode === 'lz' ? '' : 'sec')} onClick={() => setMode(mode === 'lz' ? 'scene' : 'lz')}>
+        <button className={'btn xs ' + (mode === 'lz' ? '' : 'sec')} disabled={locked} onClick={() => setMode(mode === 'lz' ? 'scene' : 'lz')}>
           <IconTarget size={13} /> {mode === 'lz' ? 'Clique no mapa para marcar a LZ…' : 'Definir LZ manual no mapa'}
         </button>
-        {manualLz && <button className="btn xs sec" onClick={onClearManual}>Remover LZ manual</button>}
+        {manualLz && !locked && <button className="btn xs sec" onClick={onClearManual}>Remover LZ manual</button>}
+        {lzPoint && (
+          <button className={'btn xs ' + (locked ? '' : 'sec')} onClick={onToggleLock}
+            title={locked ? 'Toque para destravar e poder trocar a LZ' : 'Fixar: clique acidental no mapa ou na lista deixa de trocar a LZ'}>
+            {locked ? '🔒 LZ fixada' : 'fixar LZ'}
+          </button>
+        )}
       </div>
+      {locked && (
+        <div className="alert info" style={{ marginBottom: 8 }}>
+          <span>🔒 <b>LZ fixada</b> — cliques no mapa e na lista não trocam o ponto de encontro nem movem a ocorrência. Para trocar, toque em “LZ fixada”.</span>
+        </div>
+      )}
+      {fixadaFora && (
+        <div className="lzrow sel" style={{ cursor: 'default' }}>
+          <div className="lztile suit-ideal"><IconTarget size={20} /><span className="letter">{lzPoint.letter || 'LZ'}</span></div>
+          <div className="lzmain">
+            <div className="n">{lzPoint.id == null ? lzPoint.name || 'LZ manual' : lzPoint.name} <span className="type">fixada{lzPoint.type ? ` · ${lzPoint.type}` : ''}</span></div>
+            <CoordReadout point={lzPoint} />
+          </div>
+        </div>
+      )}
       {manualLz && (
         <div className="lzrow sel" style={{ cursor: 'default' }}>
           <div className="lztile suit-ideal"><IconTarget size={20} /><span className="letter">LZ</span></div>
           <div className="lzmain">
-            <div className="n">LZ manual <span className="type">marcada no mapa</span></div>
+            <div className="n">{manualLz.name || 'LZ manual'} <span className="type">marcada no mapa{locked ? ' · fixada' : ''}</span></div>
             <CoordReadout point={manualLz} />
           </div>
         </div>
@@ -235,13 +261,13 @@ export function LZPanel({ lz, lzErr, lzLoading, lzSelId, manualLz, onSelect, onF
         const Icon = LZ_TYPE_ICON[c.type] || IconHelipadH
         const suitCls = c.obstFlag && c.suitKey !== 'restrita' ? 'avaliar' : c.suitKey
         const [bcls, blabel] = SUIT_BADGE[c.suitKey] || ['', c.suit]
-        const sel = c.id === lzSelId
+        const sel = c.id === selId
         return (
           <div
             key={c.id}
-            className={'lzrow' + (sel ? ' sel' : '')}
+            className={'lzrow' + (sel ? ' sel' : '') + (locked && !sel ? ' travada' : '')}
             onClick={() => { onSelect(c.id); onFocus && onFocus(c) }}
-            title="Clique para usar esta área e centralizar no mapa"
+            title={locked ? 'LZ fixada — toque centraliza no mapa, não troca a LZ' : 'Clique para usar esta área e centralizar no mapa'}
           >
             <div className={'lztile suit-' + suitCls}>
               <Icon size={20} />
@@ -267,8 +293,8 @@ export function LZPanel({ lz, lzErr, lzLoading, lzSelId, manualLz, onSelect, onF
                 <div className="ob"><IconAlert size={12} /> {c.obstWhat} a ~{c.obstNear} m{c.obstFlag ? ' — reconhecimento obrigatório' : ''}</div>
               )}
             </div>
-            <button className={'btn xs ' + (sel ? '' : 'sec')} onClick={(e) => { e.stopPropagation(); onSelect(c.id); if (!sel && onFocus) onFocus(c) }}>
-              {sel ? 'Selecionada ✓' : 'Usar'}
+            <button className={'btn xs ' + (sel ? '' : 'sec')} disabled={locked} onClick={(e) => { e.stopPropagation(); onSelect(c.id); if (!sel && onFocus) onFocus(c) }}>
+              {sel ? (locked ? '🔒 Fixada' : 'Selecionada ✓') : 'Usar'}
             </button>
           </div>
         )

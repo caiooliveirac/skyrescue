@@ -19,7 +19,7 @@ const ownshipSvg =
 
 const wptHtml = (cls, label) => `<div class="nav-wpt ${cls}">${label}</div>`
 
-export default function NavMode({ cfg, scene, lzPoint, hospital, landingHelipad, events, onQuickMark, onUndoMark, onClose }) {
+export default function NavMode({ cfg, scene, lzPoint, origin, hospital, landingHelipad, events, onQuickMark, onUndoMark, onClose }) {
   const divRef = useRef(null)
   const mapRef = useRef(null)
   const tileRef = useRef(null)
@@ -45,6 +45,8 @@ export default function NavMode({ cfg, scene, lzPoint, hospital, landingHelipad,
 
   // pouso no destino: heliponto do hospital, apoio associado, ou o próprio hospital (LZ)
   const landPt = hospital ? (hospital.heliponto ? hospital : landingHelipad || hospital) : null
+  // de onde a missão decola: a base, ou o ponto escolhido no caso (emendada)
+  const from = origin || cfg.base
 
   // alvos navegáveis da missão, na ordem operacional
   const targets = useMemo(() => {
@@ -102,8 +104,8 @@ export default function NavMode({ cfg, scene, lzPoint, hospital, landingHelipad,
         zIndexOffset: 100,
       }).bindTooltip(t.label).addTo(lay)
     }
-    // rota planejada: base -> cena/LZ -> destino
-    const legPts = [[cfg.base.lat, cfg.base.lon]]
+    // rota planejada: decolagem -> cena/LZ -> destino
+    const legPts = [[from.lat, from.lon]]
     const first = targets.find((t) => t.id === 'lz' || t.id === 'cena')
     if (first) legPts.push([first.lat, first.lon])
     if (landPt) legPts.push([landPt.lat, landPt.lon])
@@ -112,14 +114,14 @@ export default function NavMode({ cfg, scene, lzPoint, hospital, landingHelipad,
       L.circleMarker([scene.lat, scene.lon], { radius: 6, color: '#fb7185', fillOpacity: 0.9 }).bindTooltip('Ocorrência').addTo(lay)
     }
     // eslint-disable-next-line
-  }, [targets])
+  }, [targets, from.lat, from.lon])
 
   // ---------- posição: GPS real ou simulador ----------
   useEffect(() => {
     lastFixRef.current = null
     if (sim) {
-      // simulador (dev): decola da base rumo ao alvo na velocidade de cruzeiro
-      let pos = { lat: cfg.base.lat, lon: cfg.base.lon }
+      // simulador (dev): decola da origem rumo ao alvo na velocidade de cruzeiro
+      let pos = { lat: from.lat, lon: from.lon }
       setGpsErr(null)
       simRef.current = setInterval(() => {
         const tgt = targetRef.current

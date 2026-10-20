@@ -79,6 +79,11 @@ export const api = {
   createSamuContact: (c) => req('POST', '/samu-contacts', c),
   updateSamuContact: (id, c) => req('PUT', `/samu-contacts/${id}`, c),
   deleteSamuContact: (id) => req('DELETE', `/samu-contacts/${id}`),
+  // cadastro de aeronaves e tripulantes (qualquer login lê e escreve)
+  listCrew: () => req('GET', '/crew'),
+  createCrew: (m) => req('POST', '/crew', m),
+  updateCrew: (id, m) => req('PUT', `/crew/${id}`, m),
+  deleteCrew: (id) => req('DELETE', `/crew/${id}`),
   // admin
   listUsers: () => req('GET', '/users'),
   createUser: (u) => req('POST', '/users', u),

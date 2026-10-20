@@ -73,7 +73,10 @@ export const PATIENT_SECTIONS = [
     fields: [
       { k: 'medico', req: true, label: 'Médico regulador' },
       { k: 'crm', req: true, label: 'CRM / UF' },
-      { k: 'equipe', req: true, label: 'Equipe de transporte (enfermeiro, piloto…)', w: 2 },
+      // a equipe do voo passou para o card "Aeronave e equipe" (snapshot.crew,
+      // lib/crew.js). O campo fica só para fichas antigas que o preencheram:
+      // `legado` some do formulário quando vazio e não é cobrado
+      { k: 'equipe', legado: true, label: 'Equipe de transporte (registro antigo — hoje no card Aeronave e equipe)', w: 2 },
     ],
   },
 ]
