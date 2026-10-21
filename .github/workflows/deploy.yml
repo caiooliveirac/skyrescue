@@ -35,7 +35,7 @@ jobs:
       - name: Testes de unidade (fusão da ficha)
         run: node server/scripts/test-patient-merge.js
 
-      - name: Testes de unidade (acionamento público: limite e IP)
+      - name: Testes de unidade (acionamento público, limite e IP)
         run: node server/scripts/test-acionamento-publico.js
 
       - name: Testes de unidade (estatísticas)
