@@ -5,6 +5,7 @@
 // atropela as defesas contra missão fantasma. Roda contra skyrescue_dev, em
 // dry-run (sem TELEGRAM_BOT_TOKEN as mensagens só vão para o console).
 import { query, pool } from '../src/db.js'
+import { exigirBancoDeTeste } from './banco-de-teste.js'
 import { echoMilestones, missionStatus, currentMission } from '../src/telegram.js'
 
 let falhas = 0
@@ -36,6 +37,7 @@ async function mkCase(ref, s) {
 }
 
 async function main() {
+  await exigirBancoDeTeste()
   await query(`INSERT INTO bot_chat (id, chat_id, title) VALUES (1, -1, 'grupo de teste')
                ON CONFLICT (id) DO UPDATE SET chat_id = -1`)
   await query(`UPDATE mission_chat SET status = 'encerrada'`)

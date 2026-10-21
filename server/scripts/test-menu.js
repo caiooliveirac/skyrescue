@@ -2,6 +2,7 @@
 // ativa e não quebrar (nem inventar dados) sem missão — que é como o grupo
 // passa a maior parte do tempo. Roda contra skyrescue_dev em dry-run.
 import { query, pool } from '../src/db.js'
+import { exigirBancoDeTeste } from './banco-de-teste.js'
 import { HANDLERS, CMDS_GRUPO, notifyMission } from '../src/telegram.js'
 
 let falhas = 0
@@ -27,6 +28,7 @@ async function rodar(cmd) {
 const CENA = { lat: -12.9714, lon: -38.5014 }
 
 async function main() {
+  await exigirBancoDeTeste()
   await query(`INSERT INTO bot_chat (id, chat_id, title) VALUES (1, -1, 'grupo de teste')
                ON CONFLICT (id) DO UPDATE SET chat_id = -1`)
 
@@ -86,7 +88,8 @@ async function main() {
 
   await query(`DELETE FROM cases WHERE id = $1`, [caseId])
   await query(`DELETE FROM aircraft_position WHERE aircraft_id = 'goa'`)
-  await query(`DELETE FROM bot_chat WHERE chat_id = -1`)
+  // ::text: o skyrescue_dev antigo tem chat_id TEXT (o schema atual é BIGINT)
+  await query(`DELETE FROM bot_chat WHERE chat_id::text = '-1'`)
   await pool.end()
 
   console.log(`\n${falhas === 0 ? 'TODOS OS TESTES PASSARAM' : `${falhas} TESTE(S) FALHARAM`}`)
