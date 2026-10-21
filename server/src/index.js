@@ -14,6 +14,7 @@ import * as wa from './whatsapp.js'
 import { sugerirCriterios, iaDisponivel } from './ia.js'
 import { portalConfigurado, destinoPortal } from './portal.js'
 import * as checklist from './checklist.js'
+import { clientIp, str, lerAcionamento, cadeiaAcionamento } from './acionamento-publico.js'
 
 const app = express()
 app.set('trust proxy', 1) // atrás do nginx/Cloudflare
@@ -26,7 +27,6 @@ app.use(express.json({ limit: '1mb' }))
 app.use(cookieParser())
 app.use(authMiddleware)
 
-const clientIp = (req) => (req.headers['x-forwarded-for']?.split(',')[0]?.trim()) || req.ip
 // `portal`: o botão "Painel" aparece (usuário marcado e servidor com a chave)
 const publicUser = (u) => ({
   id: u.id, username: u.username, full_name: u.full_name, role: u.role,
@@ -60,50 +60,8 @@ app.get('/api/expand-url', requireAuth, async (req, res) => {
 // Quem cai no site e pede o helicóptero não tem conta. O pedido é gravado e o
 // bot do WhatsApp (whatsapp.js) avisa o grupo e os plantonistas; a resposta
 // diz se o aviso chegou, para a tela oferecer o WhatsApp da própria pessoa
-// como plano B quando não chegou. Rota pública ⇒ limite por IP e global,
-// para ninguém inundar o grupo da regulação a partir de um script.
-const rl = { byIp: new Map(), global: [] }
-const RL_IP_MAX = 5, RL_IP_WINDOW_MS = 10 * 60_000
-const RL_GLOBAL_MAX = 40, RL_GLOBAL_WINDOW_MS = 60 * 60_000
-function rateLimitAcionamento(req, res, next) {
-  const now = Date.now()
-  const ip = clientIp(req)
-  const hits = (rl.byIp.get(ip) || []).filter((t) => now - t < RL_IP_WINDOW_MS)
-  rl.global = rl.global.filter((t) => now - t < RL_GLOBAL_WINDOW_MS)
-  if (hits.length >= RL_IP_MAX || rl.global.length >= RL_GLOBAL_MAX) {
-    return res.status(429).json({ error: 'muitos acionamentos em sequência — ligue para a regulação' })
-  }
-  hits.push(now); rl.byIp.set(ip, hits); rl.global.push(now)
-  if (rl.byIp.size > 5000) rl.byIp.clear()   // mapa não cresce sem limite
-  next()
-}
-
-const str = (v, max) => (v == null ? '' : String(v)).trim().slice(0, max)
-const CENTRAIS_OK = /^[\wÀ-ÿ .'-]{2,40}$/
-
-// Lê e valida o corpo. O LOCAL é o mínimo: com ele o primeiro aviso já sai.
-// `completo` exige também quem pede e o que é (a passagem do caso).
-function lerAcionamento(b, completo) {
-  const v = {
-    central: str(b.central, 40), medico: str(b.medico, 120), fone: str(b.fone, 30),
-    tipo: str(b.tipo, 40), detalhe: str(b.detalhe, 300), localTxt: str(b.local, 300),
-    pinLabel: str(b.pinLabel, 300), pacNome: str(b.pacienteNome, 120), pacIdade: str(b.pacienteIdade, 40),
-    lat: null, lon: null,
-  }
-  if (!v.localTxt) return { error: 'local da ocorrência obrigatório' }
-  if (b.lat != null || b.lon != null) {
-    v.lat = Number(b.lat); v.lon = Number(b.lon)
-    if (!Number.isFinite(v.lat) || !Number.isFinite(v.lon) || Math.abs(v.lat) > 90 || Math.abs(v.lon) > 180)
-      return { error: 'coordenadas inválidas' }
-  }
-  if (completo) {
-    if (!CENTRAIS_OK.test(v.central)) return { error: 'central inválida' }
-    if (v.medico.length < 2) return { error: 'nome do médico obrigatório' }
-    if (v.fone.replace(/\D/g, '').length < 10) return { error: 'telefone de contato inválido' }
-    if (!v.tipo) return { error: 'tipo de ocorrência obrigatório' }
-  }
-  return { v }
-}
+// como plano B quando não chegou. Validação, limite por IP/global e IP do
+// cliente: acionamento-publico.js.
 
 // o aviso é a razão de ser da rota: espera por ele, mas com teto — o médico
 // da rua não pode ficar olhando um spinner por causa do WhatsApp
@@ -130,12 +88,9 @@ async function avisarAcionamento(row, opts) {
 }
 
 // Etapa 1 (ou pedido já completo, quando a etapa 1 não conseguiu sair): grava
-// e avisa. Sem `tipo` no corpo é o primeiro aviso, só com o endereço.
-app.post('/api/acionamentos', rateLimitAcionamento, async (req, res) => {
-  const b = req.body || {}
-  const completo = !!str(b.tipo, 40)
-  const { v, error } = lerAcionamento(b, completo)
-  if (error) return res.status(400).json({ error })
+// e avisa.
+app.post('/api/acionamentos', ...cadeiaAcionamento(), async (req, res) => {
+  const { v, completo } = req.acionamento
   try {
     const token = crypto.randomBytes(18).toString('base64url')
     const { rows } = await query(
