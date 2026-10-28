@@ -21,7 +21,7 @@ async function call(path, opts = {}) {
 
 // Itens do checklist + situação de hoje da base GOA (médico de plantão, último envio).
 export async function carregar() {
-  const [def, board] = await Promise.all([call('/api/checklist'), call('/api/board')])
+  const [def, board] = await Promise.all([call(`/api/checklist?base=${BASE_CODE}`), call('/api/board')])
   const base = board.bases.find((b) => b.code === BASE_CODE) || null
   return {
     base: BASE_CODE,
