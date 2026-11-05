@@ -122,6 +122,12 @@ Botão **Estatísticas** na barra (tela `#stats`, qualquer login): números das 
 
 Nem todo horário gravado é o horário do evento. O **Diagnóstico dos dados** marca, caso a caso: marcos tocados com menos de 1 min entre si (hora do clique no fim da missão), marcados dias depois do acionamento, fora de ordem, e marcos faltando. Esses horários ficam fora das contas de tempo — cada etapa só usa o intervalo com as duas pontas confiáveis e dentro de um teto plausível. Caso de teste ou duplicado pode ser desmarcado em "Conta" (vale só no aparelho). Regras cobertas por `node scripts/test-stats.js`.
 
+## Escala dos internos
+
+Botão **Escala** na barra (tela `#escala`): a semana dos internos de medicina, de segunda a domingo, com os turnos **Diurno**, **Manhã** e **Tarde**. O **admin** aloca: em cada turno de cada dia escolhe o interno em "+ interno" e tira com o ×. O **interno** consulta e cumpre, sem editar: vê a semana com o próprio nome em destaque e a lista dos próximos plantões dele. O gestor também só consulta; regulador e operador que não são internos não veem a tela. É só o acompanhamento: não há troca, confirmação nem registro de presença.
+
+Interno é o usuário marcado com `acesso_portal` (o mesmo que libera o Painel do portal — `node scripts/acesso-portal.js <usuário> on`). Só internos ativos entram na lista de quem pode ser alocado. "Diurno" ocupa o dia inteiro: o mesmo interno não fica em Diurno e Manhã/Tarde no mesmo dia (Manhã + Tarde pode). O servidor confere tudo (`/api/escala`, tabela `escala_interno`); regras cobertas por `node server/scripts/test-escala.js`.
+
 ## Primeiro uso — calibrar (5 min)
 
 1. Arraste o marcador do helicóptero no mapa até a posição exata da base do GOA.

@@ -90,6 +90,10 @@ export const api = {
   createCrew: (m) => req('POST', '/crew', m),
   updateCrew: (id, m) => req('PUT', `/crew/${id}`, m),
   deleteCrew: (id) => req('DELETE', `/crew/${id}`),
+  // escala dos internos (leitura: internos, admin e gestor; escrita: admin)
+  escala: (de, ate) => req('GET', `/escala?de=${de}&ate=${ate}`),
+  escalar: (p) => req('POST', '/escala', p),
+  desescalar: (id) => req('DELETE', `/escala/${id}`),
   // admin
   listUsers: () => req('GET', '/users'),
   createUser: (u) => req('POST', '/users', u),

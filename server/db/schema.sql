@@ -342,3 +342,20 @@ CREATE TABLE IF NOT EXISTS crew_member (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- ---------- escala dos internos ----------
+-- O admin aloca os internos de medicina (users.acesso_portal) nos turnos do
+-- dia; eles consultam e cumprem, sem editar. É só o acompanhamento: não há
+-- troca, confirmação nem ponto. `dia` é a data de Salvador (DATE, sem fuso).
+-- Usuário não é apagado (só desativado), então a escala passada fica de pé.
+CREATE TABLE IF NOT EXISTS escala_interno (
+  id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  dia        DATE   NOT NULL,
+  turno      TEXT   NOT NULL CHECK (turno IN ('manha', 'tarde', 'diurno')),
+  user_id    BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (dia, turno, user_id)
+);
+CREATE INDEX IF NOT EXISTS escala_interno_dia_idx  ON escala_interno (dia);
+CREATE INDEX IF NOT EXISTS escala_interno_user_idx ON escala_interno (user_id, dia);

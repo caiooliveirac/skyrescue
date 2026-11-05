@@ -66,6 +66,13 @@ export const IconClock = (p) => (
   </S>
 )
 
+export const IconCalendar = (p) => (
+  <S {...p}>
+    <rect x="3.5" y="5" width="17" height="15.5" rx="2.5" />
+    <path d="M3.5 10h17M8 3v4M16 3v4" />
+  </S>
+)
+
 export const IconCloud = (p) => (
   <S {...p}>
     <path d="M7 18a4.5 4.5 0 1 1 .6-8.96A6 6 0 0 1 19 10.5 3.75 3.75 0 0 1 18.25 18H7z" />

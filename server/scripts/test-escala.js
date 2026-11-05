@@ -1,0 +1,124 @@
+// Escala dos internos (/api/escala): quem vê, quem edita e as regras de
+// alocação. Roda contra a API de desenvolvimento ligada no MESMO banco de
+// dev/teste (a trava recusa outro banco):
+//   BASE=http://127.0.0.1:3012 DATABASE_URL=postgres://localhost/skyrescue_dev node scripts/test-escala.js
+// Usa usuários próprios (prefixo t-escala-) e datas em 2099; apaga os
+// plantões deles no começo e no fim.
+import { query, pool } from '../src/db.js'
+import { hashPassword } from '../src/auth.js'
+import { exigirBancoDeTeste } from './banco-de-teste.js'
+
+const BASE = process.env.BASE || 'http://127.0.0.1:3012'
+const SENHA = 'senha-de-teste-da-escala'
+
+let falhas = 0
+const ok = (nome, cond, detalhe = '') => {
+  console.log(`${cond ? '  OK  ' : ' FALHA'} ${nome}${detalhe ? ` — ${detalhe}` : ''}`)
+  if (!cond) falhas++
+}
+
+async function usuario(username, role, interno) {
+  const { rows } = await query(
+    `INSERT INTO users (username, password_hash, full_name, role, acesso_portal)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (username) DO UPDATE
+       SET password_hash = EXCLUDED.password_hash, role = EXCLUDED.role,
+           acesso_portal = EXCLUDED.acesso_portal, active = TRUE
+     RETURNING id`,
+    [username, hashPassword(SENHA), `Teste ${username}`, role, interno]
+  )
+  return rows[0].id
+}
+
+// sessão HTTP de um usuário: devolve (método, rota, corpo) → {status, body}
+async function sessao(username) {
+  const r = await fetch(`${BASE}/api/auth/login`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password: SENHA }),
+  })
+  if (!r.ok) throw new Error(`login ${username}: HTTP ${r.status}`)
+  const cookie = r.headers.get('set-cookie').split(';')[0]
+  return async (method, path, body) => {
+    const res = await fetch(`${BASE}/api${path}`, {
+      method,
+      headers: { cookie, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+      body: body ? JSON.stringify(body) : undefined,
+    })
+    return { status: res.status, body: await res.json().catch(() => null) }
+  }
+}
+
+async function main() {
+  await exigirBancoDeTeste()
+  const ids = {
+    admin: await usuario('t-escala-admin', 'admin', false),
+    gestor: await usuario('t-escala-gestor', 'gestor', false),
+    reg: await usuario('t-escala-reg', 'regulador', false),
+    int1: await usuario('t-escala-int1', 'operador', true),
+    int2: await usuario('t-escala-int2', 'regulador', true),
+    inativo: await usuario('t-escala-inativo', 'operador', true),
+  }
+  await query('UPDATE users SET active = FALSE WHERE id = $1', [ids.inativo])
+  const limpar = () => query('DELETE FROM escala_interno WHERE user_id = ANY($1)', [Object.values(ids)])
+  await limpar()
+
+  const admin = await sessao('t-escala-admin')
+  const gestor = await sessao('t-escala-gestor')
+  const reg = await sessao('t-escala-reg')
+  const int1 = await sessao('t-escala-int1')
+  const SEM = '?de=2099-01-05&ate=2099-01-11'
+
+  console.log('=== quem vê ===')
+  ok('interno: /auth/me marca interno', (await int1('GET', '/auth/me')).body?.user?.interno === true)
+  ok('regulador sem a marca: /auth/me não marca', (await reg('GET', '/auth/me')).body?.user?.interno === false)
+  ok('interno lê a escala', (await int1('GET', `/escala${SEM}`)).status === 200)
+  ok('gestor lê a escala', (await gestor('GET', `/escala${SEM}`)).status === 200)
+  ok('regulador sem a marca não lê (403)', (await reg('GET', `/escala${SEM}`)).status === 403)
+  const ga = await admin('GET', `/escala${SEM}`)
+  ok('admin lê e recebe a lista de internos ativos',
+    ga.status === 200 && ga.body.internos.some((i) => i.id === ids.int1) && !ga.body.internos.some((i) => i.id === ids.inativo))
+  ok('interno não recebe a lista para alocar', (await int1('GET', `/escala${SEM}`)).body.internos.length === 0)
+
+  console.log('=== quem edita ===')
+  const novo = { dia: '2099-01-05', turno: 'manha', user_id: ids.int1 }
+  ok('interno não escala (403)', (await int1('POST', '/escala', novo)).status === 403)
+  ok('gestor não escala (403)', (await gestor('POST', '/escala', novo)).status === 403)
+  const p1 = await admin('POST', '/escala', novo)
+  ok('admin escala (201)', p1.status === 201 && p1.body.plantao.dia === '2099-01-05', JSON.stringify(p1.body))
+  ok('interno não tira da escala (403)', (await int1('DELETE', `/escala/${p1.body.plantao.id}`)).status === 403)
+
+  console.log('=== regras de alocação ===')
+  ok('mesmo turno de novo (409)', (await admin('POST', '/escala', novo)).status === 409)
+  ok('diurno no dia em que já tem manhã (409)', (await admin('POST', '/escala', { ...novo, turno: 'diurno' })).status === 409)
+  ok('manhã + tarde no mesmo dia (201)', (await admin('POST', '/escala', { ...novo, turno: 'tarde' })).status === 201)
+  ok('dois internos no mesmo turno (201)', (await admin('POST', '/escala', { ...novo, user_id: ids.int2 })).status === 201)
+  ok('usuário que não é interno (400)', (await admin('POST', '/escala', { ...novo, user_id: ids.reg })).status === 400)
+  ok('interno inativo (400)', (await admin('POST', '/escala', { ...novo, user_id: ids.inativo })).status === 400)
+  ok('turno inexistente (400)', (await admin('POST', '/escala', { ...novo, turno: 'noite' })).status === 400)
+  ok('dia que não existe, 31/02 (400)', (await admin('POST', '/escala', { ...novo, dia: '2099-02-31' })).status === 400)
+  ok('mês 13 (400, sem derrubar a API)', (await admin('POST', '/escala', { ...novo, dia: '2099-13-01' })).status === 400)
+  ok('período invertido (400)', (await admin('GET', '/escala?de=2099-01-11&ate=2099-01-05')).status === 400)
+  ok('período acima de 62 dias (400)', (await admin('GET', '/escala?de=2099-01-01&ate=2099-06-01')).status === 400)
+
+  console.log('=== o que o interno vê ===')
+  const gi = await int1('GET', `/escala${SEM}`)
+  const meus = gi.body.plantoes.filter((p) => p.user_id === ids.int1)
+  ok('vê os próprios plantões da semana', meus.length === 2 && meus.every((p) => p.dia === '2099-01-05'))
+  ok('vê os colegas escalados', gi.body.plantoes.some((p) => p.user_id === ids.int2 && p.nome))
+  ok('próximos plantões trazem os dele', gi.body.proximos.length === 2)
+
+  console.log('=== tirar da escala ===')
+  ok('admin tira (200)', (await admin('DELETE', `/escala/${p1.body.plantao.id}`)).status === 200)
+  const depois = await int1('GET', `/escala${SEM}`)
+  ok('some da escala', !depois.body.plantoes.some((p) => p.id === p1.body.plantao.id))
+  ok('API segue de pé', (await fetch(`${BASE}/api/health`)).ok)
+
+  await limpar()
+  // não deixa os usuários de teste na lista de internos da tela de dev
+  await query('UPDATE users SET active = FALSE WHERE id = ANY($1)', [Object.values(ids)])
+  console.log(falhas ? `\n${falhas} FALHA(S)` : '\ntudo ok')
+  await pool.end()
+  process.exit(falhas ? 1 : 0)
+}
+
+main().catch(async (e) => { console.error(e); await pool.end(); process.exit(1) })

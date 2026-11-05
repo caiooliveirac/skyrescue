@@ -45,6 +45,10 @@ node scripts/acesso-portal.js --listar
 Ou `PATCH /api/users/:id` com `{"acesso_portal": true}`. Retirar a marca para
 o botão; a conta do plantões é suspensa por lá (`/admin/acessos`).
 
+A mesma marca define quem é interno na **Escala dos internos** (`/api/escala`):
+só usuário marcado e ativo pode ser alocado pelo admin e enxerga a escala.
+O botão Escala não depende do `GOA_FEDERACAO_SECRET` (`interno` no `/auth/me`).
+
 A sessão do WhatsApp (`.wa-auth/`) são as chaves do chip: trate como segredo, não versione, e apague-a ao desativar o servidor (ou toque em **desconectar** no painel, que também remove o dispositivo no celular).
 
 ## Banco (criado uma vez no servidor)
@@ -85,6 +89,9 @@ Ou pela API (autenticado como `admin`): `POST /api/users`, `GET /api/users`, `PA
 | PATCH | `/api/cases/:id/patient` | grava a ficha por campo. `{fields}` (formato antigo) ou `{changes, base, baseVersion, opId, clientTs}`: fusão de três pontas — campo mudado nos dois lados para valores diferentes não entra e vira divergência |
 | GET | `/api/cases/:id/patient/conflicts` | divergências pendentes da ficha (PII; auditado) |
 | POST | `/api/cases/:id/patient/conflicts/:cid/resolve` | `{chosen: 'server'｜'client'}` — qualquer usuário autenticado; grava em `case_audit` |
+| GET | `/api/escala?de=AAAA-MM-DD&ate=AAAA-MM-DD` | escala dos internos no período (máx. 62 dias): admin, gestor e internos (`acesso_portal`). Admin recebe também `internos` (quem pode alocar); interno recebe `proximos` (os plantões dele a partir de hoje) |
+| POST | `/api/escala` | admin: `{dia, turno: 'diurno'｜'manha'｜'tarde', user_id}` — só interno ativo; mesmo turno ou Diurno somado a outro turno no dia → 409 |
+| DELETE | `/api/escala/:id` | admin: tira o interno do turno |
 | GET/POST/PATCH | `/api/users…` | admin de usuários (perfil admin) |
 | POST | `/api/acionamentos` | **público** (tela Acionar GOA): grava o pedido e o bot do WhatsApp avisa; limite por IP/global |
 | GET | `/api/acionamentos` | histórico dos pedidos do site (autenticado) |

@@ -28,9 +28,11 @@ app.use(cookieParser())
 app.use(authMiddleware)
 
 // `portal`: o botão "Painel" aparece (usuário marcado e servidor com a chave)
+// `interno`: interno(a) de medicina (acesso_portal) — vê a Escala dos internos
 const publicUser = (u) => ({
   id: u.id, username: u.username, full_name: u.full_name, role: u.role,
   portal: Boolean(u.acesso_portal) && portalConfigurado(),
+  interno: Boolean(u.acesso_portal),
 })
 
 // ---------- health ----------
@@ -1347,6 +1349,91 @@ app.put('/api/crew/:id', requireAuth, async (req, res) => {
 app.delete('/api/crew/:id', requireAuth, async (req, res) => {
   await query('DELETE FROM crew_member WHERE id = $1', [req.params.id])
   res.json({ ok: true })
+})
+
+// ---------- escala dos internos ----------
+// O admin aloca; o interno (acesso_portal) e o gestor só consultam. Regulador
+// e operador sem a marca não veem — a escala é assunto da coordenação com os
+// internos. Ver schema.sql (escala_interno).
+const TURNOS_ESCALA = ['manha', 'tarde', 'diurno']
+const podeVerEscala = (u) => isStaff(u) || Boolean(u?.acesso_portal)
+function requireEscala(req, res, next) {
+  if (!req.user) return res.status(401).json({ error: 'não autenticado' })
+  if (!podeVerEscala(req.user)) return res.status(403).json({ error: 'escala restrita aos internos e à coordenação' })
+  next()
+}
+// AAAA-MM-DD que existe no calendário (31/02 não passa) — validado aqui para
+// a data inválida não virar erro do Postgres numa rota async sem catch
+const diaValido = (s) => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false
+  const t = Date.parse(s + 'T00:00:00Z')
+  return !Number.isNaN(t) && new Date(t).toISOString().slice(0, 10) === s
+}
+const NOME_U = 'coalesce(u.full_name, u.username)'
+
+app.get('/api/escala', requireEscala, async (req, res) => {
+  const de = String(req.query.de || ''), ate = String(req.query.ate || '')
+  if (!diaValido(de) || !diaValido(ate) || ate < de) return res.status(400).json({ error: 'período inválido (de/ate em AAAA-MM-DD)' })
+  if ((Date.parse(ate) - Date.parse(de)) / 86400_000 > 62) return res.status(400).json({ error: 'período máximo de 62 dias' })
+  try {
+    const { rows: plantoes } = await query(
+      `SELECT e.id, e.dia::text AS dia, e.turno, e.user_id, ${NOME_U} AS nome
+         FROM escala_interno e JOIN users u ON u.id = e.user_id
+        WHERE e.dia BETWEEN $1 AND $2
+        ORDER BY e.dia, e.turno, lower(${NOME_U})`, [de, ate]
+    )
+    // admin: de quem pode alocar. Interno: os próximos plantões dele, que podem
+    // cair fora da semana aberta na tela.
+    const internos = req.user.role === 'admin'
+      ? (await query(`SELECT u.id, ${NOME_U} AS nome FROM users u WHERE u.acesso_portal AND u.active ORDER BY lower(${NOME_U})`)).rows
+      : []
+    const proximos = req.user.acesso_portal
+      ? (await query(
+          `SELECT id, dia::text AS dia, turno FROM escala_interno
+            WHERE user_id = $1 AND dia >= (now() AT TIME ZONE 'America/Bahia')::date
+            ORDER BY dia, turno LIMIT 8`, [req.user.id])).rows
+      : []
+    res.json({ plantoes, internos, proximos })
+  } catch (e) {
+    console.error('escala get:', e)
+    res.status(500).json({ error: 'erro ao carregar a escala' })
+  }
+})
+
+app.post('/api/escala', requireAdmin, async (req, res) => {
+  const dia = String(req.body?.dia || ''), turno = String(req.body?.turno || '')
+  const userId = Number(req.body?.user_id)
+  if (!diaValido(dia)) return res.status(400).json({ error: 'dia inválido' })
+  if (!TURNOS_ESCALA.includes(turno)) return res.status(400).json({ error: 'turno inválido' })
+  if (!Number.isSafeInteger(userId) || userId <= 0) return res.status(400).json({ error: 'interno inválido' })
+  try {
+    const u = (await query('SELECT id, acesso_portal, active FROM users WHERE id = $1', [userId])).rows[0]
+    if (!u || !u.acesso_portal || !u.active) return res.status(400).json({ error: 'usuário não é interno ativo' })
+    // "diurno" cobre manhã e tarde: não soma com nenhum outro turno do mesmo dia
+    const ja = (await query('SELECT turno FROM escala_interno WHERE dia = $1 AND user_id = $2', [dia, userId])).rows.map((r) => r.turno)
+    if (ja.includes(turno) || (ja.length && (turno === 'diurno' || ja.includes('diurno'))))
+      return res.status(409).json({ error: 'interno já escalado neste dia' })
+    const { rows } = await query(
+      `INSERT INTO escala_interno (dia, turno, user_id, created_by) VALUES ($1,$2,$3,$4)
+       RETURNING id, dia::text AS dia, turno, user_id`, [dia, turno, userId, req.user.id]
+    )
+    res.status(201).json({ plantao: rows[0] })
+  } catch (e) {
+    if (e.code === '23505') return res.status(409).json({ error: 'interno já escalado neste turno' })
+    console.error('escala post:', e)
+    res.status(500).json({ error: 'erro ao gravar a escala' })
+  }
+})
+
+app.delete('/api/escala/:id', requireAdmin, async (req, res) => {
+  if (!/^\d+$/.test(req.params.id)) return res.status(404).json({ error: 'plantão não encontrado' })
+  try {
+    await query('DELETE FROM escala_interno WHERE id = $1', [req.params.id])
+    res.json({ ok: true })
+  } catch (e) {
+    console.error('escala delete:', e)
+    res.status(500).json({ error: 'erro ao remover da escala' })
+  }
 })
 
 // ---------- admin de usuários ----------

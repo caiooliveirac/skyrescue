@@ -11,6 +11,7 @@ import { rankLZ, parseObstacles } from './lib/lz.js'
 import MapView from './components/MapView.jsx'
 import NavMode from './components/NavMode.jsx'
 import Stats from './components/Stats.jsx'
+import Escala from './components/Escala.jsx'
 import CommunityModal from './components/Community.jsx'
 import { LzPhotoModal } from './components/LzPhotos.jsx'
 import Checklist from './components/Checklist.jsx'
@@ -33,14 +34,16 @@ import { DecisionStrip, wxHora, TimePanel, WeatherPanel, LZPanel, AlertsPanel, G
 import {
   IconHeli, IconPlus, IconFolder, IconPrint, IconSettings, IconSearch, IconPin,
   IconTarget, IconZap, IconCopy, IconSave, IconDownload, IconHelipadH,
-  IconClock, IconCloud, IconAlert, IconRoute, IconX, IconUsers, IconLayers, IconAmbulance, IconChart, IconCheck,
+  IconClock, IconCloud, IconAlert, IconRoute, IconX, IconUsers, IconLayers, IconAmbulance, IconChart, IconCheck, IconCalendar,
 } from './components/Icons.jsx'
 
 // Telas do caso. No celular (cabine) o app mostra UMA por vez, escolhida no
 // hub de ícones; no desktop da central (>= 1020px) todas aparecem juntas como
 // sempre. A "rota" é só o hash da URL — sem router, e o botão voltar do
 // Android já sai da tela sem sair do caso.
-const VIEWS = ['hub', 'caso', 'fatores', 'navegar', 'nav', 'paciente', 'missao', 'stats']
+const VIEWS = ['hub', 'caso', 'fatores', 'navegar', 'nav', 'paciente', 'missao', 'stats', 'escala']
+// telas cheias por cima do caso (sem os botões flutuantes de marcação/checklist)
+const TELA_CHEIA = ['nav', 'stats', 'escala']
 // abas do topo quando o celular está dentro de uma tela: trocar de tela é um
 // toque, sem passar pelo hub
 const VIEW_TABS = [
@@ -100,7 +103,12 @@ export default function App({ user, onLogout, onRelogin }) {
   const show = (v) => wide || view === v
   // admin e gestor: Estatísticas e contatos das centrais SAMU (o servidor também barra)
   const staff = user?.role === 'admin' || user?.role === 'gestor'
-  useEffect(() => { if (view === 'stats' && !staff) go('hub') }, [view, staff])
+  // Escala dos internos: o admin aloca; interno e gestor só consultam
+  const veEscala = staff || Boolean(user?.interno)
+  useEffect(() => {
+    if ((view === 'stats' && !staff) || (view === 'escala' && !veEscala)) go('hub')
+  }, [view, staff, veEscala])
+  const voltar = (de) => go(voltarDe.current && voltarDe.current !== de ? voltarDe.current : 'hub')
 
   // ocorrência
   const [scene, setScene] = useState(null)
@@ -1615,6 +1623,11 @@ export default function App({ user, onLogout, onRelogin }) {
             <IconChart size={14} /> <span className="tlabel">Estatísticas</span>
           </button>
         )}
+        {veEscala && (
+          <button className="tbtn" onClick={() => { voltarDe.current = view; go('escala') }} title="Escala dos internos">
+            <IconCalendar size={14} /> <span className="tlabel">Escala</span>
+          </button>
+        )}
         <button className="tbtn" onClick={abrirImpressao} title="Imprimir o caso em PDF, escolhendo o que sai">
           <IconPrint size={14} /> <span className="tlabel">Imprimir</span>
         </button>
@@ -2194,8 +2207,10 @@ export default function App({ user, onLogout, onRelogin }) {
       {showCfg && <ConfigModal cfg={cfg} user={user} onClose={() => setShowCfg(false)} onSave={(c) => { setCfg(c); saveCfg(c); setShowCfg(false) }} />}
 
       {view === 'stats' && staff && (
-        <Stats base={cfg.base} onClose={() => go(voltarDe.current && voltarDe.current !== 'stats' ? voltarDe.current : 'hub')} />
+        <Stats base={cfg.base} onClose={() => voltar('stats')} />
       )}
+
+      {view === 'escala' && veEscala && <Escala user={user} onClose={() => voltar('escala')} />}
 
       {view === 'nav' && (
         <NavMode
@@ -2208,12 +2223,12 @@ export default function App({ user, onLogout, onRelogin }) {
 
       {/* chip flutuante de marcação rápida: aparece após o primeiro horário
           registrado e some quando a missão termina (todos os marcos feitos) */}
-      {scene && view !== 'nav' && view !== 'stats' && Object.keys(events).length > 0 && (
+      {scene && !TELA_CHEIA.includes(view) && Object.keys(events).length > 0 && (
         <MilestoneQuick events={events} onMark={quickMarkEvent} onUndo={undoEvent} className="qmark-fab" />
       )}
 
       {/* checklist da base GOA a um toque de qualquer tela (fora do modo piloto) */}
-      {view !== 'nav' && view !== 'stats' && !showChecklistGoa && (
+      {!TELA_CHEIA.includes(view) && !showChecklistGoa && (
         <button className={'chk-fab' + (scene && Object.keys(events).length > 0 ? ' above-qmark' : '')}
           onClick={() => setShowChecklistGoa(true)} title="Checklist diário da base GOA">
           <IconCheck size={15} /> Checklist GOA
