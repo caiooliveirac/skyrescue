@@ -1,20 +1,29 @@
 name: Deploy
 
+# Deploy no servidor magalu sem SSH e sem runner no Mac:
+#
+#   1. aqui, na VM do GitHub: testes de unidade + build + smoke do bundle;
+#   2. verde: move a branch `live` para esse SHA (só avança, fast-forward);
+#   3. no servidor: o auto-promote.timer (a cada minuto) vê a `live` andar e
+#      roda `labctl promote skyrescue <sha>` → scripts/deploy-magalu.sh do
+#      próprio commit (build do front num checkout à parte, backend com
+#      migrate idempotente, front em /var/www/goa, health e rollback);
+#   4. aqui: espera https://goa.mnrs.com.br/versao.txt mostrar esse SHA.
+#
+# Funciona de qualquer aparelho: merge/push na main pelo celular basta.
+
 on:
   push:
     branches: [main]
+  # Revalida e libera a ponta da main de novo (ex.: a `live` não andou).
   workflow_dispatch:
 
 concurrency:
   group: skyrescue-deploy
   cancel-in-progress: false
 
-env:
-  REMOTE: ${{ secrets.PROD_SSH_USER }}@${{ secrets.PROD_SSH_HOST }}
-  # servidor magalu: frontend em /var/www/goa (nginx), API via systemd
-  # (skyrescue-api.service) rodando de /home/ubuntu/skyrescue/server
-  WEBROOT: /var/www/goa
-  API_DIR: /home/ubuntu/skyrescue/server
+permissions:
+  contents: read
 
 jobs:
   test:
@@ -47,6 +56,7 @@ jobs:
       - name: Build (arquivo único)
         env:
           # opcional: embute a chave Google Maps p/ todos os usuários do site
+          # (o build de produção, no servidor, lê a mesma chave do .env.production de lá)
           VITE_GMAPS_KEY: ${{ secrets.VITE_GMAPS_KEY }}
         run: npm run build
 
@@ -63,162 +73,62 @@ jobs:
           fi
           echo "bundle OK ($size bytes)"
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: dist
-          path: |
-            dist/index.html
-            dist/sw.js
-          retention-days: 7
+      - name: Script de deploy (sintaxe)
+        run: bash -n scripts/deploy-magalu.sh
 
-  deploy:
-    name: Deploy (rsync + healthcheck + auto-rollback)
+  liberar:
+    name: Liberar para o LIVE (branch live)
     needs: test
-    runs-on: [self-hosted, macOS, mac-deploy]
-    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      contents: write
     steps:
-      # Runner self-hosted no Mac do Caio (label mac-deploy): a porta 22 do magalu só
-      # aceita as redes de trabalho e o tailnet, então a VM do GitHub não entra mais.
-      # HOME isolado para o job não gravar chave nem known_hosts no ~/.ssh real do Mac.
-      - name: Isolar HOME do job
+      # Pela API: o GitHub confere o fast-forward do lado dele (re-run de um
+      # run antigo não faz a live voltar; rollback é revert na main).
+      - name: Mover a live para o SHA testado
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          mkdir -p "$RUNNER_TEMP/home"
-          echo "HOME=$RUNNER_TEMP/home" >> "$GITHUB_ENV"
-          # GNU rsync do Homebrew na frente do openrsync do macOS.
-          echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
+          set -euo pipefail
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/live" >/dev/null 2>&1; then
+            gh api -X PATCH "repos/${GITHUB_REPOSITORY}/git/refs/heads/live" \
+              -f sha="${GITHUB_SHA}" -F force=false >/dev/null
+          else
+            gh api -X POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f ref=refs/heads/live -f sha="${GITHUB_SHA}" >/dev/null
+          fi
+          echo "live -> ${GITHUB_SHA}" >> "$GITHUB_STEP_SUMMARY"
 
-      - uses: actions/checkout@v4
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: dist
-          path: dist
-
-      - name: Setup SSH
+  aguardar:
+    name: Esperar o servidor publicar
+    needs: liberar
+    runs-on: ubuntu-latest
+    # Timer de 1 min + build (~1–2 min) + fila de outros apps no auto-promote.
+    timeout-minutes: 25
+    steps:
+      # O deploy-magalu.sh grava versao.txt só depois de backend e front
+      # saudáveis e do git do servidor alinhado.
+      - name: versao.txt público com o SHA novo
         run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.PROD_SSH_KEY }}" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -H ${{ secrets.PROD_SSH_HOST }} >> ~/.ssh/known_hosts
-
-      # ---- backend primeiro: garante a API pronta antes do novo frontend ----
-      - name: Deploy backend (skyrescue-api)
-        run: |
-          # .env.production, node_modules e a sessão do WhatsApp (.wa-auth/, as
-          # chaves do chip pareado) ficam só no servidor (não sobrescreve)
-          rsync -az --delete \
-            --exclude 'node_modules/' --exclude '.env' --exclude '.env.production' --exclude '*.log' \
-            --exclude '.wa-auth/' \
-            -e "ssh -o StrictHostKeyChecking=accept-new -i ~/.ssh/id_ed25519" \
-            server/ ${{ env.REMOTE }}:${{ env.API_DIR }}/
-          ssh -i ~/.ssh/id_ed25519 ${{ env.REMOTE }} bash -s << 'EOF'
-            set -euo pipefail
-            cd /home/ubuntu/skyrescue/server
-            npm ci --omit=dev
-            set -a; . ./.env; set +a
-            node scripts/migrate.js          # idempotente (schema IF NOT EXISTS)
-            sudo -n systemctl restart skyrescue-api
-          EOF
-
-      - name: Healthcheck da API
-        run: |
-          ssh -i ~/.ssh/id_ed25519 ${{ env.REMOTE }} bash -s << 'EOF'
-            set -euo pipefail
-            for i in $(seq 1 10); do
-              code=$(curl -sk -o /dev/null -w "%{http_code}" --resolve goa.mnrs.com.br:443:127.0.0.1 https://goa.mnrs.com.br/api/health || echo 000)
-              [ "$code" = "200" ] && { echo "API OK (200)"; exit 0; }
-              echo "tentativa $i: http=$code — aguardando"; sleep 2
-            done
-            echo "ERRO: API não respondeu 200 em /api/health"; exit 1
-          EOF
-
-      - name: Backup da versão atual (rollback rápido)
-        run: |
-          ssh -i ~/.ssh/id_ed25519 ${{ env.REMOTE }} \
-            "sudo -n cp -f ${{ env.WEBROOT }}/index.html ${{ env.WEBROOT }}/index.html.prev 2>/dev/null || true"
-
-      - name: Publicar
-        run: |
-          # WEBROOT pertence ao root: sobe para o home e instala com sudo
-          # (--chmod/install -m 644: o www-data do nginx precisa ler o arquivo)
-          # sw.js vai junto: é o service worker que faz o app abrir sem rede
-          # (não dá para embutir no index.html — o navegador exige arquivo próprio)
-          rsync -az --chmod=F644 \
-            -e "ssh -o StrictHostKeyChecking=accept-new -i ~/.ssh/id_ed25519" \
-            dist/index.html ${{ env.REMOTE }}:/tmp/skyrescue-index.html
-          rsync -az --chmod=F644 \
-            -e "ssh -o StrictHostKeyChecking=accept-new -i ~/.ssh/id_ed25519" \
-            dist/sw.js ${{ env.REMOTE }}:/tmp/skyrescue-sw.js
-          ssh -i ~/.ssh/id_ed25519 ${{ env.REMOTE }} \
-            "sudo -n install -m 644 -o root -g root /tmp/skyrescue-sw.js ${{ env.WEBROOT }}/sw.js && sudo -n install -m 644 -o root -g root /tmp/skyrescue-index.html ${{ env.WEBROOT }}/index.html && rm -f /tmp/skyrescue-index.html /tmp/skyrescue-sw.js"
-
-      - name: Healthcheck (com auto-rollback)
-        run: |
-          ssh -i ~/.ssh/id_ed25519 ${{ env.REMOTE }} bash -s << 'EOF'
-            set -euo pipefail
-            code=$(curl -sk -o /dev/null -w "%{http_code}" --resolve goa.mnrs.com.br:443:127.0.0.1 https://goa.mnrs.com.br/ || echo "curl-fail")
-            body_ok=0
-            # corpo em arquivo antes do grep: `curl | grep -q` morre de SIGPIPE
-            # no primeiro match e o pipefail reprovaria um site saudável
-            tmp=$(mktemp)
-            curl -sk --resolve goa.mnrs.com.br:443:127.0.0.1 -o "$tmp" https://goa.mnrs.com.br/ || true
-            grep -q "SkyRescue" "$tmp" && body_ok=1
-            rm -f "$tmp"
-            perms=$(stat -c '%a %U:%G' /var/www/goa/index.html)
-            echo "diagnóstico: http=$code conteúdo=$body_ok perms=$perms"
-            if [ "$code" = "200" ] && [ "$body_ok" = "1" ]; then
-              echo "healthcheck OK (200 + conteúdo)"
-            else
-              echo "ERRO: healthcheck falhou — restaurando versão anterior"
-              sudo -n cp -f /var/www/goa/index.html.prev /var/www/goa/index.html 2>/dev/null || true
-              exit 1
+          set -u
+          url=https://goa.mnrs.com.br/versao.txt
+          while true; do
+            no_ar="$(curl -fsS -m 10 "${url}?t=$(date +%s)" 2>/dev/null | head -c 64 | tr -d '[:space:]' || true)"
+            if [ "${no_ar}" = "${GITHUB_SHA}" ]; then
+              echo "No ar: ${no_ar}"
+              break
             fi
-          EOF
+            echo "Ainda em ${no_ar:0:7}; esperando ${GITHUB_SHA:0:7}..."
+            sleep 20
+          done
 
-      # O deploy publica por rsync/install e nunca tocava no git de
-      # /home/ubuntu/skyrescue: o checkout do servidor ficava parado no commit
-      # antigo com os arquivos novos por cima, parecendo "produção editada à
-      # mão". Alinhar aqui mantém `git log`/`labctl status` dizendo a verdade
-      # sobre o que está no ar.
-      - name: Alinhar git do servidor com o commit publicado
+      - name: Resumo
+        if: always()
         run: |
-          ssh -i ~/.ssh/id_ed25519 ${{ env.REMOTE }} bash -s << 'EOF'
-            set -euo pipefail
-            cd /home/ubuntu/skyrescue
-            git fetch --quiet origin
-            # reset --hard e não checkout: o rsync do backend deixa o working
-            # tree modificado e o checkout recusaria. .env e node_modules são
-            # ignorados pelo git, então sobrevivem.
-            git checkout -q -B main
-            git reset --hard --quiet "${{ github.sha }}"
-            echo "servidor agora em $(git rev-parse --short HEAD)"
-          EOF
-
-      - name: Notify Telegram (success)
-        if: success()
-        env:
-          TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TG_CHAT: ${{ secrets.TELEGRAM_ADMIN_CHAT_ID }}
-          GIT_SHA: ${{ github.sha }}
-        run: |
-          if [ -z "${TG_TOKEN:-}" ] || [ -z "${TG_CHAT:-}" ]; then
-            echo "telegram secrets ausentes, pulando notificacao"; exit 0
-          fi
-          curl -sS -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
-            --data-urlencode "chat_id=${TG_CHAT}" \
-            --data-urlencode "text=SkyRescue deploy OK -- goa.mnrs.com.br -- ${GIT_SHA}" || true
-
-      - name: Notify Telegram (failure)
-        if: failure()
-        env:
-          TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TG_CHAT: ${{ secrets.TELEGRAM_ADMIN_CHAT_ID }}
-          GIT_SHA: ${{ github.sha }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          if [ -z "${TG_TOKEN:-}" ] || [ -z "${TG_CHAT:-}" ]; then
-            echo "telegram secrets ausentes, pulando notificacao"; exit 0
-          fi
-          curl -sS -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
-            --data-urlencode "chat_id=${TG_CHAT}" \
-            --data-urlencode "text=SkyRescue deploy FALHOU -- ${GIT_SHA} -- ${RUN_URL}" || true
+          {
+            echo "### Deploy goa.mnrs.com.br (magalu, auto-promote)"
+            echo "- Commit: ${GITHUB_SHA}"
+            echo "- Público: https://goa.mnrs.com.br/versao.txt"
+            echo "- Se não publicou: \`ssh magalu journalctl -u auto-promote -n 80\` e \`labctl history skyrescue\`"
+          } >> "$GITHUB_STEP_SUMMARY"

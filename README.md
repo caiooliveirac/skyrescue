@@ -27,7 +27,7 @@ npm run build    # gera dist/index.html (arquivo único, servido pelo nginx)
 
 ## Deploy (produção)
 
-`git push` na `main` dispara o GitHub Actions ([`.github/workflows/deploy.yml`](.github/workflows/deploy.yml)): publica no servidor **magalu** o backend (`skyrescue-api` via systemd, porta 3012, código em `/home/ubuntu/skyrescue/server`) e o frontend estático em `/var/www/goa`, com healthcheck e auto-rollback. Detalhes de infra e criação de usuários em [`server/README.md`](server/README.md).
+`git push` (ou merge, de qualquer aparelho) na `main` dispara o GitHub Actions ([`.github/workflows/deploy.yml`](.github/workflows/deploy.yml)), que roda os testes e o build numa VM do GitHub e, verde, move a branch `live` para o commit. Nada entra no servidor por SSH: no **magalu**, o `auto-promote.timer` vê a `live` andar (a cada minuto) e roda `labctl promote skyrescue <sha>`, que executa o [`scripts/deploy-magalu.sh`](scripts/deploy-magalu.sh) do próprio commit — build do front num checkout à parte (`/home/ubuntu/deploy-src/skyrescue`), backend (`skyrescue-api` via systemd, porta 3012, código em `/home/ubuntu/skyrescue/server`), frontend estático em `/var/www/goa`, healthcheck e auto-rollback. O job `aguardar` do Actions fica verde quando `https://goa.mnrs.com.br/versao.txt` mostra o commit. A chave do Google Maps do build de produção fica no `.env.production` do servidor (fora do git). Se não publicou: `journalctl -u auto-promote -n 80` e `labctl history skyrescue` no servidor; rollback: revert na `main` ou `labctl rollback skyrescue`. Detalhes de infra e criação de usuários em [`server/README.md`](server/README.md).
 
 ## Modelo de helipontos (Salvador/RMS)
 

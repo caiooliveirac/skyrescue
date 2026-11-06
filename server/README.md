@@ -121,4 +121,4 @@ sudo journalctl -u skyrescue-api -f
 sudo systemctl restart skyrescue-api
 ```
 
-O deploy é automático via GitHub Actions (`.github/workflows/deploy.yml`): rsync do `server/`, `npm ci`, `migrate`, `systemctl restart` e healthcheck de `/api/health`. O `server/.env` e o `node_modules/` ficam apenas no servidor (não são versionados nem sobrescritos).
+O deploy é automático: o GitHub Actions (`.github/workflows/deploy.yml`) testa e move a branch `live`, e o auto-promote do próprio servidor roda `scripts/deploy-magalu.sh` (ver o README da raiz): rsync local do `server/`, `npm ci` (só se o lockfile mudou), `migrate`, `systemctl restart` e healthcheck de `/api/health`, com rollback se falhar. O `server/.env` e o `node_modules/` ficam apenas no servidor (não são versionados nem sobrescritos).
