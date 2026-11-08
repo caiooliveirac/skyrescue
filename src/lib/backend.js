@@ -94,6 +94,7 @@ export const api = {
   escala: (de, ate) => req('GET', `/escala?de=${de}&ate=${ate}`),
   escalar: (p) => req('POST', '/escala', p),
   desescalar: (id) => req('DELETE', `/escala/${id}`),
+  trocarEscala: (id, userId) => req('PUT', `/escala/${id}`, { user_id: userId }),
   // admin
   listUsers: () => req('GET', '/users'),
   createUser: (u) => req('POST', '/users', u),

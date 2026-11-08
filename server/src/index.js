@@ -1360,7 +1360,8 @@ app.delete('/api/crew/:id', requireAuth, async (req, res) => {
 })
 
 // ---------- escala dos internos ----------
-// O admin e os internos (acesso_portal) alocam; o gestor só consulta. Regulador
+// O admin e os internos (acesso_portal) alocam, tiram e trocam; o gestor só
+// consulta. Toda mudança fica em escala_log, visível na própria tela. Regulador
 // e operador sem a marca não veem — a escala é assunto da coordenação com os
 // internos. Ver schema.sql (escala_interno).
 const TURNOS_ESCALA = ['manha', 'tarde', 'diurno']
@@ -1385,6 +1386,45 @@ const diaValido = (s) => {
 }
 const NOME_U = 'coalesce(u.full_name, u.username)'
 
+// trilha da escala (escala_log): grava na mesma transação da mudança, com
+// nome/login copiados do momento
+const escalaNome = async (c, id) =>
+  (await c.query(`SELECT ${NOME_U} AS nome FROM users u WHERE u.id = $1`, [id])).rows[0]?.nome || null
+async function logEscala(c, ator, { acao, dia, turno, saiId = null, entraId = null }) {
+  await c.query(
+    `INSERT INTO escala_log (ator_id, ator_login, ator_nome, acao, dia, turno, sai_id, sai_nome, entra_id, entra_nome)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+    [ator.id, ator.username, ator.full_name || null, acao, dia, turno,
+      saiId, saiId ? await escalaNome(c, saiId) : null,
+      entraId, entraId ? await escalaNome(c, entraId) : null]
+  )
+}
+// interno ativo e sem conflito no dia ("diurno" não soma com nenhum outro
+// turno); `ignorar` = plantão que está saindo numa troca. Devolve o erro ou null.
+async function checaEscalavel(c, { dia, turno, userId, ignorar = null }) {
+  const u = (await c.query('SELECT acesso_portal, active FROM users WHERE id = $1', [userId])).rows[0]
+  if (!u || !u.acesso_portal || !u.active) return [400, 'usuário não é interno ativo']
+  const ja = (await c.query(
+    'SELECT turno FROM escala_interno WHERE dia = $1 AND user_id = $2 AND id IS DISTINCT FROM $3',
+    [dia, userId, ignorar])).rows.map((r) => r.turno)
+  if (ja.includes(turno) || (ja.length && (turno === 'diurno' || ja.includes('diurno'))))
+    return [409, 'interno já escalado neste dia']
+  return null
+}
+async function emTransacao(fn) {
+  const c = await pool.connect()
+  try {
+    await c.query('BEGIN')
+    const r = await fn(c)
+    await c.query('COMMIT')
+    return r
+  } catch (e) {
+    await c.query('ROLLBACK').catch(() => {})
+    throw e
+  } finally { c.release() }
+}
+class Recusa extends Error { constructor(status, msg) { super(msg); this.status = status } }
+
 app.get('/api/escala', requireEscala, async (req, res) => {
   const de = String(req.query.de || ''), ate = String(req.query.ate || '')
   if (!diaValido(de) || !diaValido(ate) || ate < de) return res.status(400).json({ error: 'período inválido (de/ate em AAAA-MM-DD)' })
@@ -1407,12 +1447,25 @@ app.get('/api/escala', requireEscala, async (req, res) => {
             WHERE user_id = $1 AND dia >= (now() AT TIME ZONE 'America/Bahia')::date
             ORDER BY dia, turno LIMIT 8`, [req.user.id])).rows
       : []
-    res.json({ plantoes, internos, proximos })
+    // trilha das mudanças nos dias do período, para todos que veem a escala
+    const { rows: historico } = await query(
+      `SELECT id, at, ator_login, ator_nome, acao, dia::text AS dia, turno, sai_id, sai_nome, entra_id, entra_nome
+         FROM escala_log WHERE dia BETWEEN $1 AND $2
+        ORDER BY at DESC, id DESC LIMIT 300`, [de, ate]
+    )
+    res.json({ plantoes, internos, proximos, historico })
   } catch (e) {
     console.error('escala get:', e)
     res.status(500).json({ error: 'erro ao carregar a escala' })
   }
 })
+
+const falhaEscala = (res, e, oque) => {
+  if (e instanceof Recusa) return res.status(e.status).json({ error: e.message })
+  if (e.code === '23505') return res.status(409).json({ error: 'interno já escalado neste turno' })
+  console.error(`escala ${oque}:`, e)
+  res.status(500).json({ error: 'erro ao gravar a escala' })
+}
 
 app.post('/api/escala', requireEditarEscala, async (req, res) => {
   const dia = String(req.body?.dia || ''), turno = String(req.body?.turno || '')
@@ -1421,33 +1474,55 @@ app.post('/api/escala', requireEditarEscala, async (req, res) => {
   if (!TURNOS_ESCALA.includes(turno)) return res.status(400).json({ error: 'turno inválido' })
   if (!Number.isSafeInteger(userId) || userId <= 0) return res.status(400).json({ error: 'interno inválido' })
   try {
-    const u = (await query('SELECT id, acesso_portal, active FROM users WHERE id = $1', [userId])).rows[0]
-    if (!u || !u.acesso_portal || !u.active) return res.status(400).json({ error: 'usuário não é interno ativo' })
-    // "diurno" cobre manhã e tarde: não soma com nenhum outro turno do mesmo dia
-    const ja = (await query('SELECT turno FROM escala_interno WHERE dia = $1 AND user_id = $2', [dia, userId])).rows.map((r) => r.turno)
-    if (ja.includes(turno) || (ja.length && (turno === 'diurno' || ja.includes('diurno'))))
-      return res.status(409).json({ error: 'interno já escalado neste dia' })
-    const { rows } = await query(
-      `INSERT INTO escala_interno (dia, turno, user_id, created_by) VALUES ($1,$2,$3,$4)
-       RETURNING id, dia::text AS dia, turno, user_id`, [dia, turno, userId, req.user.id]
-    )
-    res.status(201).json({ plantao: rows[0] })
-  } catch (e) {
-    if (e.code === '23505') return res.status(409).json({ error: 'interno já escalado neste turno' })
-    console.error('escala post:', e)
-    res.status(500).json({ error: 'erro ao gravar a escala' })
-  }
+    const plantao = await emTransacao(async (c) => {
+      const erro = await checaEscalavel(c, { dia, turno, userId })
+      if (erro) throw new Recusa(...erro)
+      const { rows } = await c.query(
+        `INSERT INTO escala_interno (dia, turno, user_id, created_by) VALUES ($1,$2,$3,$4)
+         RETURNING id, dia::text AS dia, turno, user_id`, [dia, turno, userId, req.user.id]
+      )
+      await logEscala(c, req.user, { acao: 'escalou', dia, turno, entraId: userId })
+      return rows[0]
+    })
+    res.status(201).json({ plantao })
+  } catch (e) { falhaEscala(res, e, 'post') }
+})
+
+// troca: tira quem está no plantão e põe outro interno no mesmo turno, numa
+// operação só — fica na trilha como "tirou X e colocou Y"
+app.put('/api/escala/:id', requireEditarEscala, async (req, res) => {
+  if (!/^\d+$/.test(req.params.id)) return res.status(404).json({ error: 'plantão não encontrado' })
+  const userId = Number(req.body?.user_id)
+  if (!Number.isSafeInteger(userId) || userId <= 0) return res.status(400).json({ error: 'interno inválido' })
+  try {
+    const plantao = await emTransacao(async (c) => {
+      const p = (await c.query(
+        'SELECT id, dia::text AS dia, turno, user_id FROM escala_interno WHERE id = $1 FOR UPDATE', [req.params.id])).rows[0]
+      if (!p) throw new Recusa(404, 'plantão não encontrado')
+      if (Number(p.user_id) === userId) throw new Recusa(400, 'é a mesma pessoa')
+      const erro = await checaEscalavel(c, { dia: p.dia, turno: p.turno, userId, ignorar: p.id })
+      if (erro) throw new Recusa(...erro)
+      const { rows } = await c.query(
+        `UPDATE escala_interno SET user_id = $1, created_by = $2, created_at = now() WHERE id = $3
+         RETURNING id, dia::text AS dia, turno, user_id`, [userId, req.user.id, p.id]
+      )
+      await logEscala(c, req.user, { acao: 'trocou', dia: p.dia, turno: p.turno, saiId: p.user_id, entraId: userId })
+      return rows[0]
+    })
+    res.json({ plantao })
+  } catch (e) { falhaEscala(res, e, 'put') }
 })
 
 app.delete('/api/escala/:id', requireEditarEscala, async (req, res) => {
   if (!/^\d+$/.test(req.params.id)) return res.status(404).json({ error: 'plantão não encontrado' })
   try {
-    await query('DELETE FROM escala_interno WHERE id = $1', [req.params.id])
+    await emTransacao(async (c) => {
+      const p = (await c.query(
+        'DELETE FROM escala_interno WHERE id = $1 RETURNING dia::text AS dia, turno, user_id', [req.params.id])).rows[0]
+      if (p) await logEscala(c, req.user, { acao: 'tirou', dia: p.dia, turno: p.turno, saiId: p.user_id })
+    })
     res.json({ ok: true })
-  } catch (e) {
-    console.error('escala delete:', e)
-    res.status(500).json({ error: 'erro ao remover da escala' })
-  }
+  } catch (e) { falhaEscala(res, e, 'delete') }
 })
 
 // ---------- admin de usuários ----------

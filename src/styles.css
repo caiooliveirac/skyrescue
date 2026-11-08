@@ -1430,6 +1430,15 @@ input.req-vazio { border-color: rgba(251, 191, 36, 0.55); }
 .esc-nome.eu { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-line); }
 .esc-nome button { flex: none; display: inline-flex; padding: 0; border: 0; background: none; color: var(--faint); }
 .esc-nome button:hover { color: var(--fail); }
+.esc-nome button.esc-troca { font-size: 12px; line-height: 1; }
+.esc-nome button.esc-troca:hover { color: var(--accent); }
+.esc-historico { margin-top: 14px; }
+.esc-historico ul { list-style: none; margin: 10px 0 0; padding: 0; }
+.esc-historico li { display: flex; gap: 10px; padding: 7px 0; border-top: 1px solid var(--line); font-size: 13px; line-height: 1.4; }
+.esc-h-quando { flex: none; width: 82px; color: var(--muted); font-family: var(--mono); font-size: 12px; }
+.esc-login { color: var(--muted); font-size: 12px; }
+.esc-h-onde { color: var(--muted); }
+.esc-h-vazio { margin-top: 8px; }
 select.esc-add {
   margin-top: 6px; padding: 5px 8px; font-size: 12.5px;
   border-style: dashed; border-color: var(--accent-line); color: var(--accent); background: transparent;

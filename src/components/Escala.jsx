@@ -2,9 +2,11 @@ import { useEffect, useMemo, useState } from 'react'
 import { api } from '../lib/backend.js'
 import { IconCalendar, IconX, IconAlert } from './Icons.jsx'
 
-// Tela "Escala dos internos" (#escala). O admin e os próprios internos alocam
-// os internos nos turnos de cada dia (os plantões de quem está logado ficam em
-// destaque). Gestor só consulta.
+
+// Tela "Escala dos internos" (#escala). O admin e os próprios internos alocam,
+// tiram e trocam internos nos turnos de cada dia (os plantões de quem está
+// logado ficam em destaque). Gestor só consulta. Toda mudança aparece no
+// "Histórico de alterações" para todos — quem mexeu, quando e o quê.
 // Quem pode o quê é conferido no servidor (/api/escala), não só aqui.
 
 export const TURNOS = [['diurno', 'Diurno'], ['manha', 'Manhã'], ['tarde', 'Tarde']]
@@ -24,6 +26,29 @@ const diaCurto = (d) => `${SEMANA[idxSemana(d)]} ${ddmm(d)}`
 // mesma regra do servidor: "diurno" cobre o dia todo e não soma com outro turno
 const conflita = (turno, turnosNoDia) =>
   turnosNoDia.includes(turno) || (turnosNoDia.length > 0 && (turno === 'diurno' || turnosNoDia.includes('diurno')))
+
+const quando = (iso) => new Date(iso).toLocaleString('pt-BR', {
+  timeZone: 'America/Bahia', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+}).replace(',', '')
+
+// "Fulano (@login) tirou Beltrano e colocou Cicrano no lugar"
+function LinhaHistorico({ h }) {
+  const quem = <><b>{h.ator_nome || h.ator_login}</b> <span className="esc-login">@{h.ator_login}</span></>
+  const sai = <b>{h.sai_nome || 'interno removido'}</b>
+  const entra = <b>{h.entra_nome || 'interno removido'}</b>
+  return (
+    <li>
+      <span className="esc-h-quando">{quando(h.at)}</span>
+      <span>
+        {quem}{' '}
+        {h.acao === 'escalou' && <>escalou {entra}</>}
+        {h.acao === 'tirou' && <>tirou {sai}</>}
+        {h.acao === 'trocou' && <>tirou {sai} e colocou {entra} no lugar</>}
+        {' '}<span className="esc-h-onde">· {TURNO_LABEL[h.turno] || h.turno} de {diaCurto(h.dia)}</span>
+      </span>
+    </li>
+  )
+}
 
 function Kpi({ label, value, sub }) {
   return (
@@ -46,6 +71,7 @@ export default function Escala({ user, onClose }) {
   const [rev, setRev] = useState(0) // recarrega depois de alocar/tirar
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
+  const [trocando, setTrocando] = useState(null) // id do plantão com o seletor de troca aberto
 
   useEffect(() => {
     let vivo = true // trocar de semana rápido não deixa a resposta velha pintar a nova
@@ -74,8 +100,16 @@ export default function Escala({ user, onClose }) {
     try { await api.escalar({ dia, turno, user_id: Number(userId) }); setRev((n) => n + 1) }
     catch (e) { setErr(e.message) } finally { setBusy(false) }
   }
+  const trocar = async (p, userId) => {
+    if (!userId) return
+    const novo = internos.find((i) => i.id === Number(userId))
+    if (!confirm(`Trocar ${p.nome} por ${novo?.nome} no turno ${TURNO_LABEL[p.turno].toLowerCase()} de ${diaCurto(p.dia)}?\nA troca fica registrada no histórico com o seu login.`)) return
+    setBusy(true); setErr('')
+    try { await api.trocarEscala(p.id, Number(userId)); setTrocando(null); setRev((n) => n + 1) }
+    catch (e) { setErr(e.message) } finally { setBusy(false) }
+  }
   const tirar = async (p) => {
-    if (!confirm(`Tirar ${p.nome} do turno ${TURNO_LABEL[p.turno].toLowerCase()} de ${diaCurto(p.dia)}?`)) return
+    if (!confirm(`Tirar ${p.nome} do turno ${TURNO_LABEL[p.turno].toLowerCase()} de ${diaCurto(p.dia)}?\nFica registrado no histórico com o seu login.`)) return
     setBusy(true); setErr('')
     try { await api.desescalar(p.id); setRev((n) => n + 1) }
     catch (e) { setErr(e.message) } finally { setBusy(false) }
@@ -114,7 +148,7 @@ export default function Escala({ user, onClose }) {
 
         {!editor && (
           <div className="small esc-aviso">
-            Escala mantida pela coordenação do GOA e pelos internos — aqui é só consulta.
+            Escala mantida pela coordenação do GOA e pelos internos — aqui é só consulta. Toda alteração fica no histórico abaixo.
           </div>
         )}
 
@@ -176,6 +210,10 @@ export default function Escala({ user, onClose }) {
                             <span key={p.id} className={'esc-nome' + (p.user_id === user?.id ? ' eu' : '')}>
                               {p.nome}
                               {editor && (
+                                <button className="esc-troca" onClick={() => setTrocando(trocando === p.id ? null : p.id)} disabled={busy}
+                                  title={`Trocar ${p.nome} por outro interno`} aria-label={`Trocar ${p.nome}`}>⇄</button>
+                              )}
+                              {editor && (
                                 <button onClick={() => tirar(p)} disabled={busy} title={`Tirar ${p.nome} da escala`} aria-label={`Tirar ${p.nome}`}>
                                   <IconX size={11} />
                                 </button>
@@ -184,6 +222,17 @@ export default function Escala({ user, onClose }) {
                           ))}
                           {editor && !lista.length && !livres.length && <span className="small">—</span>}
                         </div>
+                        {editor && lista.filter((p) => p.id === trocando).map((p) => {
+                          const opcoes = internos.filter((i) => i.id !== p.user_id && !lista.some((q) => q.user_id === i.id)
+                            && !conflita(t, turnosDe(d, i.id)))
+                          return opcoes.length ? (
+                            <select key={p.id} className="esc-add esc-trocar" value="" disabled={busy} autoFocus
+                              aria-label={`Trocar ${p.nome} por`} onChange={(e) => trocar(p, e.target.value)}>
+                              <option value="">⇄ trocar {p.nome} por…</option>
+                              {opcoes.map((i) => <option key={i.id} value={i.id}>{i.nome}</option>)}
+                            </select>
+                          ) : <div key={p.id} className="small">Nenhum interno livre para trocar com {p.nome}.</div>
+                        })}
                         {editor && livres.length > 0 && (
                           <select className="esc-add" value="" disabled={busy} aria-label={`Escalar no turno ${label} de ${diaCurto(d)}`}
                             onChange={(e) => escalar(d, t, e.target.value)}>
@@ -198,6 +247,16 @@ export default function Escala({ user, onClose }) {
               )
             })}
           </div>
+        )}
+
+        {pronto && (
+          <section className="card esc-historico">
+            <h2>Histórico de alterações da semana</h2>
+            <div className="small">Quem escalou, tirou ou trocou alguém nestes dias — com login e horário.</div>
+            {data.historico?.length ? (
+              <ul>{data.historico.map((h) => <LinhaHistorico key={h.id} h={h} />)}</ul>
+            ) : <div className="small esc-h-vazio">Nenhuma alteração registrada nesta semana.</div>}
+          </section>
         )}
       </div>
     </div>

@@ -59,7 +59,10 @@ async function main() {
     inativo: await usuario('t-escala-inativo', 'operador', true),
   }
   await query('UPDATE users SET active = FALSE WHERE id = $1', [ids.inativo])
-  const limpar = () => query('DELETE FROM escala_interno WHERE user_id = ANY($1)', [Object.values(ids)])
+  const limpar = async () => {
+    await query('DELETE FROM escala_interno WHERE user_id = ANY($1)', [Object.values(ids)])
+    await query(`DELETE FROM escala_log WHERE dia >= '2099-01-01'`)
+  }
   await limpar()
 
   const admin = await sessao('t-escala-admin')
@@ -120,6 +123,25 @@ async function main() {
   ok('vê os próprios plantões da semana', meus.length === 2 && meus.every((p) => p.dia === '2099-01-05'))
   ok('vê os colegas escalados', gi.body.plantoes.some((p) => p.user_id === ids.int2 && p.nome))
   ok('próximos plantões trazem os dele', gi.body.proximos.length === 2)
+
+  console.log('=== troca e trilha ===')
+  const pt = await admin('POST', '/escala', { dia: '2099-01-07', turno: 'diurno', user_id: ids.int1 })
+  ok('troca sem login de editor: gestor (403)', (await gestor('PUT', `/escala/${pt.body.plantao.id}`, { user_id: ids.int2 })).status === 403)
+  ok('troca pela mesma pessoa (400)', (await int1('PUT', `/escala/${pt.body.plantao.id}`, { user_id: ids.int1 })).status === 400)
+  ok('troca por quem não é interno (400)', (await int1('PUT', `/escala/${pt.body.plantao.id}`, { user_id: ids.reg })).status === 400)
+  const tr = await int1('PUT', `/escala/${pt.body.plantao.id}`, { user_id: ids.int2 })
+  ok('interno troca (200), mesmo plantão com outra pessoa', tr.status === 200 && tr.body.plantao.user_id == ids.int2 && tr.body.plantao.id == pt.body.plantao.id, JSON.stringify(tr.body))
+  ok('troca por quem já está no dia (409)', (await int1('PUT', `/escala/${p1.body.plantao.id}`, { user_id: ids.int2 })).status === 409)
+  ok('troca de plantão inexistente (404)', (await int1('PUT', '/escala/999999999', { user_id: ids.int2 })).status === 404)
+  const hist = (await gestor('GET', `/escala${SEM}`)).body.historico || []
+  const troca = hist.find((h) => h.acao === 'trocou' && h.dia === '2099-01-07')
+  ok('trilha: troca com ator, quem saiu e quem entrou',
+    troca && troca.ator_login === 't-escala-int1' && troca.sai_id == ids.int1 && troca.entra_id == ids.int2 && troca.sai_nome && troca.entra_nome,
+    JSON.stringify(troca))
+  ok('trilha: o escalar do admin aparece', hist.some((h) => h.acao === 'escalou' && h.ator_login === 't-escala-admin' && h.entra_id == ids.int1))
+  ok('trilha: o tirar do interno aparece', hist.some((h) => h.acao === 'tirou' && h.ator_login === 't-escala-int1' && h.sai_id == ids.int2))
+  ok('trilha visível para o interno', ((await int1('GET', `/escala${SEM}`)).body.historico || []).length === hist.length)
+  ok('trilha restrita: regulador sem a marca não vê (403)', (await reg('GET', `/escala${SEM}`)).status === 403)
 
   console.log('=== tirar da escala ===')
   ok('admin tira (200)', (await admin('DELETE', `/escala/${p1.body.plantao.id}`)).status === 200)

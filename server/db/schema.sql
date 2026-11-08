@@ -344,9 +344,9 @@ CREATE TABLE IF NOT EXISTS crew_member (
 );
 
 -- ---------- escala dos internos ----------
--- O admin aloca os internos de medicina (users.acesso_portal) nos turnos do
--- dia; eles consultam e cumprem, sem editar. É só o acompanhamento: não há
--- troca, confirmação nem ponto. `dia` é a data de Salvador (DATE, sem fuso).
+-- O admin e os próprios internos (users.acesso_portal) alocam, tiram e trocam
+-- internos nos turnos do dia; toda mudança fica em escala_log. Não há
+-- confirmação nem ponto. `dia` é a data de Salvador (DATE, sem fuso).
 -- Usuário não é apagado (só desativado), então a escala passada fica de pé.
 CREATE TABLE IF NOT EXISTS escala_interno (
   id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -359,3 +359,23 @@ CREATE TABLE IF NOT EXISTS escala_interno (
 );
 CREATE INDEX IF NOT EXISTS escala_interno_dia_idx  ON escala_interno (dia);
 CREATE INDEX IF NOT EXISTS escala_interno_user_idx ON escala_interno (user_id, dia);
+
+-- trilha da escala: cada escalar/tirar/trocar vira uma linha, visível a todos
+-- que veem a escala (internos inclusive). Só INSERT — a API não edita nem
+-- apaga. Nomes e login são cópia do momento (sobrevivem a renomear/desativar).
+CREATE TABLE IF NOT EXISTS escala_log (
+  id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  ator_id     BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  ator_login  TEXT NOT NULL,
+  ator_nome   TEXT,
+  acao        TEXT NOT NULL CHECK (acao IN ('escalou', 'tirou', 'trocou')),
+  dia         DATE NOT NULL,
+  turno       TEXT NOT NULL,
+  sai_id      BIGINT REFERENCES users(id) ON DELETE SET NULL,  -- tirou/trocou
+  sai_nome    TEXT,
+  entra_id    BIGINT REFERENCES users(id) ON DELETE SET NULL,  -- escalou/trocou
+  entra_nome  TEXT
+);
+CREATE INDEX IF NOT EXISTS escala_log_dia_idx ON escala_log (dia);
+CREATE INDEX IF NOT EXISTS escala_log_at_idx  ON escala_log (at DESC);
