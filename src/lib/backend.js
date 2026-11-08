@@ -74,7 +74,7 @@ export const api = {
   // rastreamento da aeronave
   reportAircraft: (p) => req('POST', '/aircraft/position', p),
   getAircraft: () => req('GET', '/aircraft/position'),
-  // contatos das centrais SAMU (leitura: admin, gestor e internos; escrita: admin/gestor)
+  // contatos das centrais SAMU (ler/cadastrar: admin, gestor e internos; editar/excluir: admin/gestor)
   // checklist da base GOA (ponte com checklists.mnrs.com.br)
   getChecklistGoa: () => req('GET', '/checklist-goa'),
   sendChecklistGoa: (b) => req('POST', '/checklist-goa', b),

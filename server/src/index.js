@@ -1269,13 +1269,15 @@ app.post('/api/checklist-goa/nc', requireAuth, async (req, res) => {
   try { res.json(await checklist.enviarInconformidade({ doctorName, description, photo })) } catch (e) { falhaChecklist(res, e) }
 })
 
-// leitura: admin, gestor e internos (acesso_portal); escrita: só admin/gestor
+// ler e cadastrar: admin, gestor e internos (acesso_portal); editar e
+// excluir: só admin/gestor
 const podeVerContatos = (u) => isStaff(u) || Boolean(u?.acesso_portal)
-app.get('/api/samu-contacts', async (req, res, next) => {
+function requireContatos(req, res, next) {
   if (!req.user) return res.status(401).json({ error: 'não autenticado' })
   if (!podeVerContatos(req.user)) return res.status(403).json({ error: 'contatos restritos à coordenação e aos internos' })
   next()
-}, async (_req, res) => {
+}
+app.get('/api/samu-contacts', requireContatos, async (_req, res) => {
   const { rows } = await query('SELECT id, samu, person, phone FROM samu_contact ORDER BY lower(samu), lower(coalesce(person, \'\'))')
   res.json({ contacts: rows })
 })
@@ -1286,7 +1288,7 @@ const cleanContact = (b = {}) => ({
   phone: String(b.phone || '').trim().slice(0, 40),
 })
 
-app.post('/api/samu-contacts', requireStaff, async (req, res) => {
+app.post('/api/samu-contacts', requireContatos, async (req, res) => {
   const c = cleanContact(req.body)
   if (!c.samu || !c.phone) return res.status(400).json({ error: 'SAMU e telefone são obrigatórios' })
   const { rows } = await query(

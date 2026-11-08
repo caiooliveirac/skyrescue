@@ -94,7 +94,12 @@ async function main() {
   console.log('=== contatos SAMU ===')
   ok('interno lê os contatos', (await int1('GET', '/samu-contacts')).status === 200)
   ok('regulador sem a marca não lê os contatos (403)', (await reg('GET', '/samu-contacts')).status === 403)
-  ok('interno não cadastra contato (403)', (await int1('POST', '/samu-contacts', { samu: 'Teste', phone: '0' })).status === 403)
+  const ci = await int1('POST', '/samu-contacts', { samu: 't-escala SAMU teste', phone: '0' })
+  ok('interno cadastra contato (201)', ci.status === 201, JSON.stringify(ci.body))
+  ok('regulador sem a marca não cadastra (403)', (await reg('POST', '/samu-contacts', { samu: 'x', phone: '0' })).status === 403)
+  ok('interno não edita contato (403)', (await int1('PUT', `/samu-contacts/${ci.body?.contact?.id}`, { samu: 'x', phone: '1' })).status === 403)
+  ok('interno não exclui contato (403)', (await int1('DELETE', `/samu-contacts/${ci.body?.contact?.id}`)).status === 403)
+  ok('admin exclui o contato de teste (200)', (await admin('DELETE', `/samu-contacts/${ci.body?.contact?.id}`)).status === 200)
 
   console.log('=== regras de alocação ===')
   ok('mesmo turno de novo (409)', (await admin('POST', '/escala', novo)).status === 409)

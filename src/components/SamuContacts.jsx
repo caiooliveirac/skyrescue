@@ -3,11 +3,13 @@ import { api } from '../lib/backend.js'
 import { IconAmbulance, IconCopy, IconCheck, IconX, IconEdit } from './Icons.jsx'
 
 // Agenda de acionamento das centrais SAMU: admin, gestor e internos consultam
-// (ordem alfabética, copiar telefone com um toque); admin/gestor cadastram e editam.
+// (ordem alfabética, copiar telefone com um toque) e cadastram; editar e
+// excluir é só de admin/gestor.
 const EMPTY = { samu: '', person: '', phone: '' }
 
 export default function SamuContactsModal({ user, onClose }) {
   const canEdit = user?.role === 'admin' || user?.role === 'gestor'
+  const canAdd = canEdit || Boolean(user?.interno)
   const [list, setList] = useState([])
   const [err, setErr] = useState('')
   const [form, setForm] = useState(EMPTY)
@@ -68,7 +70,7 @@ export default function SamuContactsModal({ user, onClose }) {
             </tbody>
           </table>
         )}
-        {canEdit && (
+        {canAdd && (
           <form className="contacts-form" onSubmit={submit}>
             <h4>{editing ? 'Editar contato' : 'Novo contato'}</h4>
             <input type="text" placeholder="SAMU (ex.: SAMU Feira de Santana)" required {...field('samu')} />
