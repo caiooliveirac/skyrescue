@@ -1269,7 +1269,13 @@ app.post('/api/checklist-goa/nc', requireAuth, async (req, res) => {
   try { res.json(await checklist.enviarInconformidade({ doctorName, description, photo })) } catch (e) { falhaChecklist(res, e) }
 })
 
-app.get('/api/samu-contacts', requireStaff, async (_req, res) => {
+// leitura: admin, gestor e internos (acesso_portal); escrita: só admin/gestor
+const podeVerContatos = (u) => isStaff(u) || Boolean(u?.acesso_portal)
+app.get('/api/samu-contacts', async (req, res, next) => {
+  if (!req.user) return res.status(401).json({ error: 'não autenticado' })
+  if (!podeVerContatos(req.user)) return res.status(403).json({ error: 'contatos restritos à coordenação e aos internos' })
+  next()
+}, async (_req, res) => {
   const { rows } = await query('SELECT id, samu, person, phone FROM samu_contact ORDER BY lower(samu), lower(coalesce(person, \'\'))')
   res.json({ contacts: rows })
 })
@@ -1352,14 +1358,20 @@ app.delete('/api/crew/:id', requireAuth, async (req, res) => {
 })
 
 // ---------- escala dos internos ----------
-// O admin aloca; o interno (acesso_portal) e o gestor só consultam. Regulador
+// O admin e os internos (acesso_portal) alocam; o gestor só consulta. Regulador
 // e operador sem a marca não veem — a escala é assunto da coordenação com os
 // internos. Ver schema.sql (escala_interno).
 const TURNOS_ESCALA = ['manha', 'tarde', 'diurno']
 const podeVerEscala = (u) => isStaff(u) || Boolean(u?.acesso_portal)
+const podeEditarEscala = (u) => u?.role === 'admin' || Boolean(u?.acesso_portal)
 function requireEscala(req, res, next) {
   if (!req.user) return res.status(401).json({ error: 'não autenticado' })
   if (!podeVerEscala(req.user)) return res.status(403).json({ error: 'escala restrita aos internos e à coordenação' })
+  next()
+}
+function requireEditarEscala(req, res, next) {
+  if (!req.user) return res.status(401).json({ error: 'não autenticado' })
+  if (!podeEditarEscala(req.user)) return res.status(403).json({ error: 'só o admin e os internos editam a escala' })
   next()
 }
 // AAAA-MM-DD que existe no calendário (31/02 não passa) — validado aqui para
@@ -1382,9 +1394,9 @@ app.get('/api/escala', requireEscala, async (req, res) => {
         WHERE e.dia BETWEEN $1 AND $2
         ORDER BY e.dia, e.turno, lower(${NOME_U})`, [de, ate]
     )
-    // admin: de quem pode alocar. Interno: os próximos plantões dele, que podem
-    // cair fora da semana aberta na tela.
-    const internos = req.user.role === 'admin'
+    // quem edita (admin e internos): de quem pode alocar. Interno: os próximos
+    // plantões dele, que podem cair fora da semana aberta na tela.
+    const internos = podeEditarEscala(req.user)
       ? (await query(`SELECT u.id, ${NOME_U} AS nome FROM users u WHERE u.acesso_portal AND u.active ORDER BY lower(${NOME_U})`)).rows
       : []
     const proximos = req.user.acesso_portal
@@ -1400,7 +1412,7 @@ app.get('/api/escala', requireEscala, async (req, res) => {
   }
 })
 
-app.post('/api/escala', requireAdmin, async (req, res) => {
+app.post('/api/escala', requireEditarEscala, async (req, res) => {
   const dia = String(req.body?.dia || ''), turno = String(req.body?.turno || '')
   const userId = Number(req.body?.user_id)
   if (!diaValido(dia)) return res.status(400).json({ error: 'dia inválido' })
@@ -1425,7 +1437,7 @@ app.post('/api/escala', requireAdmin, async (req, res) => {
   }
 })
 
-app.delete('/api/escala/:id', requireAdmin, async (req, res) => {
+app.delete('/api/escala/:id', requireEditarEscala, async (req, res) => {
   if (!/^\d+$/.test(req.params.id)) return res.status(404).json({ error: 'plantão não encontrado' })
   try {
     await query('DELETE FROM escala_interno WHERE id = $1', [req.params.id])

@@ -2,9 +2,9 @@ import { useEffect, useMemo, useState } from 'react'
 import { api } from '../lib/backend.js'
 import { IconCalendar, IconX, IconAlert } from './Icons.jsx'
 
-// Tela "Escala dos internos" (#escala). O admin aloca os internos nos turnos
-// de cada dia; o interno consulta (os plantões dele em destaque) e cumpre — é
-// só o acompanhamento, sem troca nem confirmação. Gestor também só consulta.
+// Tela "Escala dos internos" (#escala). O admin e os próprios internos alocam
+// os internos nos turnos de cada dia (os plantões de quem está logado ficam em
+// destaque). Gestor só consulta.
 // Quem pode o quê é conferido no servidor (/api/escala), não só aqui.
 
 export const TURNOS = [['diurno', 'Diurno'], ['manha', 'Manhã'], ['tarde', 'Tarde']]
@@ -36,7 +36,8 @@ function Kpi({ label, value, sub }) {
 }
 
 export default function Escala({ user, onClose }) {
-  const admin = user?.role === 'admin'
+  // admin e internos editam; gestor só consulta
+  const editor = user?.role === 'admin' || Boolean(user?.interno)
   const hoje = hojeSSA()
   const [ini, setIni] = useState(() => segunda(hoje))
   const fim = somaDias(ini, 6)
@@ -111,9 +112,9 @@ export default function Escala({ user, onClose }) {
 
         {err && <div className="alert fail"><IconAlert size={15} /> {err}</div>}
 
-        {!admin && (
+        {!editor && (
           <div className="small esc-aviso">
-            Escala definida pela coordenação do GOA — aqui é só consulta. Troca ou impedimento: fale com a coordenação.
+            Escala mantida pela coordenação do GOA e pelos internos — aqui é só consulta.
           </div>
         )}
 
@@ -132,7 +133,7 @@ export default function Escala({ user, onClose }) {
           </section>
         )}
 
-        {pronto && admin && (
+        {pronto && editor && (
           <>
             <div className="st-kpis">
               <Kpi label="Plantões na semana" value={plantoes.length} />
@@ -155,18 +156,18 @@ export default function Escala({ user, onClose }) {
           <div className="esc-semana">
             {dias.map((d) => {
               const doDia = plantoes.filter((p) => p.dia === d)
-              // quem consulta vê só os turnos com gente; o admin vê todos para alocar
-              const turnos = admin ? TURNOS : TURNOS.filter(([t]) => slot.has(`${d}|${t}`))
+              // quem consulta vê só os turnos com gente; quem edita vê todos para alocar
+              const turnos = editor ? TURNOS : TURNOS.filter(([t]) => slot.has(`${d}|${t}`))
               return (
                 <section key={d} className={'card esc-dia' + (d === hoje ? ' hoje' : d < hoje ? ' passado' : '')}>
                   <h2>
                     {SEMANA[idxSemana(d)]} <span className="esc-data">{ddmm(d)}</span>
                     {d === hoje && <span className="badge info">hoje</span>}
                   </h2>
-                  {!doDia.length && !admin && <div className="small">Ninguém escalado.</div>}
+                  {!doDia.length && !editor && <div className="small">Ninguém escalado.</div>}
                   {turnos.map(([t, label]) => {
                     const lista = slot.get(`${d}|${t}`) || []
-                    const livres = admin ? internos.filter((i) => !conflita(t, turnosDe(d, i.id))) : []
+                    const livres = editor ? internos.filter((i) => !conflita(t, turnosDe(d, i.id))) : []
                     return (
                       <div className="esc-turno" key={t}>
                         <div className="esc-tl">{label}</div>
@@ -174,16 +175,16 @@ export default function Escala({ user, onClose }) {
                           {lista.map((p) => (
                             <span key={p.id} className={'esc-nome' + (p.user_id === user?.id ? ' eu' : '')}>
                               {p.nome}
-                              {admin && (
+                              {editor && (
                                 <button onClick={() => tirar(p)} disabled={busy} title={`Tirar ${p.nome} da escala`} aria-label={`Tirar ${p.nome}`}>
                                   <IconX size={11} />
                                 </button>
                               )}
                             </span>
                           ))}
-                          {admin && !lista.length && !livres.length && <span className="small">—</span>}
+                          {editor && !lista.length && !livres.length && <span className="small">—</span>}
                         </div>
-                        {admin && livres.length > 0 && (
+                        {editor && livres.length > 0 && (
                           <select className="esc-add" value="" disabled={busy} aria-label={`Escalar no turno ${label} de ${diaCurto(d)}`}
                             onChange={(e) => escalar(d, t, e.target.value)}>
                             <option value="">+ interno</option>

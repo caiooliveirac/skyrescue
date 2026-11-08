@@ -74,7 +74,7 @@ export const api = {
   // rastreamento da aeronave
   reportAircraft: (p) => req('POST', '/aircraft/position', p),
   getAircraft: () => req('GET', '/aircraft/position'),
-  // contatos das centrais SAMU (leitura: qualquer login; escrita: admin/gestor)
+  // contatos das centrais SAMU (leitura: admin, gestor e internos; escrita: admin/gestor)
   // checklist da base GOA (ponte com checklists.mnrs.com.br)
   getChecklistGoa: () => req('GET', '/checklist-goa'),
   sendChecklistGoa: (b) => req('POST', '/checklist-goa', b),
@@ -90,7 +90,7 @@ export const api = {
   createCrew: (m) => req('POST', '/crew', m),
   updateCrew: (id, m) => req('PUT', `/crew/${id}`, m),
   deleteCrew: (id) => req('DELETE', `/crew/${id}`),
-  // escala dos internos (leitura: internos, admin e gestor; escrita: admin)
+  // escala dos internos (leitura: internos, admin e gestor; escrita: admin e internos)
   escala: (de, ate) => req('GET', `/escala?de=${de}&ate=${ate}`),
   escalar: (p) => req('POST', '/escala', p),
   desescalar: (id) => req('DELETE', `/escala/${id}`),

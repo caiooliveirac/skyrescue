@@ -1,4 +1,4 @@
-// Escala dos internos (/api/escala): quem vê, quem edita e as regras de
+// Escala dos internos (/api/escala) e leitura dos contatos SAMU: quem vê, quem edita e as regras de
 // alocação. Roda contra a API de desenvolvimento ligada no MESMO banco de
 // dev/teste (a trava recusa outro banco):
 //   BASE=http://127.0.0.1:3012 DATABASE_URL=postgres://localhost/skyrescue_dev node scripts/test-escala.js
@@ -77,15 +77,24 @@ async function main() {
   const ga = await admin('GET', `/escala${SEM}`)
   ok('admin lê e recebe a lista de internos ativos',
     ga.status === 200 && ga.body.internos.some((i) => i.id === ids.int1) && !ga.body.internos.some((i) => i.id === ids.inativo))
-  ok('interno não recebe a lista para alocar', (await int1('GET', `/escala${SEM}`)).body.internos.length === 0)
+  ok('interno recebe a lista para alocar', (await int1('GET', `/escala${SEM}`)).body.internos.some((i) => i.id === ids.int2))
+  ok('gestor não recebe a lista para alocar', (await gestor('GET', `/escala${SEM}`)).body.internos.length === 0)
 
   console.log('=== quem edita ===')
   const novo = { dia: '2099-01-05', turno: 'manha', user_id: ids.int1 }
-  ok('interno não escala (403)', (await int1('POST', '/escala', novo)).status === 403)
   ok('gestor não escala (403)', (await gestor('POST', '/escala', novo)).status === 403)
+  ok('regulador sem a marca não escala (403)', (await reg('POST', '/escala', novo)).status === 403)
+  const pi = await int1('POST', '/escala', { ...novo, dia: '2099-01-06', user_id: ids.int2 })
+  ok('interno escala colega (201)', pi.status === 201, JSON.stringify(pi.body))
+  ok('interno tira da escala (200)', (await int1('DELETE', `/escala/${pi.body?.plantao?.id}`)).status === 200)
   const p1 = await admin('POST', '/escala', novo)
   ok('admin escala (201)', p1.status === 201 && p1.body.plantao.dia === '2099-01-05', JSON.stringify(p1.body))
-  ok('interno não tira da escala (403)', (await int1('DELETE', `/escala/${p1.body.plantao.id}`)).status === 403)
+  ok('gestor não tira da escala (403)', (await gestor('DELETE', `/escala/${p1.body.plantao.id}`)).status === 403)
+
+  console.log('=== contatos SAMU ===')
+  ok('interno lê os contatos', (await int1('GET', '/samu-contacts')).status === 200)
+  ok('regulador sem a marca não lê os contatos (403)', (await reg('GET', '/samu-contacts')).status === 403)
+  ok('interno não cadastra contato (403)', (await int1('POST', '/samu-contacts', { samu: 'Teste', phone: '0' })).status === 403)
 
   console.log('=== regras de alocação ===')
   ok('mesmo turno de novo (409)', (await admin('POST', '/escala', novo)).status === 409)

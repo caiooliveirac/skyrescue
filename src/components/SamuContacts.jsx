@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react'
 import { api } from '../lib/backend.js'
 import { IconAmbulance, IconCopy, IconCheck, IconX, IconEdit } from './Icons.jsx'
 
-// Agenda de acionamento das centrais SAMU: qualquer login consulta (ordem
-// alfabética, copiar telefone com um toque); admin/gestor cadastram e editam.
+// Agenda de acionamento das centrais SAMU: admin, gestor e internos consultam
+// (ordem alfabética, copiar telefone com um toque); admin/gestor cadastram e editam.
 const EMPTY = { samu: '', person: '', phone: '' }
 
 export default function SamuContactsModal({ user, onClose }) {

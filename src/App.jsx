@@ -103,8 +103,10 @@ export default function App({ user, onLogout, onRelogin }) {
   const show = (v) => wide || view === v
   // admin e gestor: Estatísticas e contatos das centrais SAMU (o servidor também barra)
   const staff = user?.role === 'admin' || user?.role === 'gestor'
-  // Escala dos internos: o admin aloca; interno e gestor só consultam
+  // Escala dos internos: admin e internos alocam; gestor só consulta
   const veEscala = staff || Boolean(user?.interno)
+  // contatos das centrais SAMU: internos também consultam (editar segue com admin/gestor)
+  const veContatos = staff || Boolean(user?.interno)
   useEffect(() => {
     if ((view === 'stats' && !staff) || (view === 'escala' && !veEscala)) go('hub')
   }, [view, staff, veEscala])
@@ -1632,7 +1634,7 @@ export default function App({ user, onLogout, onRelogin }) {
           <IconPrint size={14} /> <span className="tlabel">Imprimir</span>
         </button>
         <button className="tbtn" onClick={() => setShowChecklistGoa(true)} title="Checklist diário da base GOA"><IconCheck size={14} /> <span className="tlabel">Checklist GOA</span></button>
-        {staff && <button className="tbtn" onClick={() => setShowSamus(true)} title="Contatos das centrais SAMU"><IconAmbulance size={14} /> <span className="tlabel">SAMUs</span></button>}
+        {veContatos && <button className="tbtn" onClick={() => setShowSamus(true)} title="Contatos das centrais SAMU"><IconAmbulance size={14} /> <span className="tlabel">SAMUs</span></button>}
         <button className="tbtn" onClick={() => setShowCfg(true)} title="Configuração"><IconSettings size={14} /> <span className="tlabel">Config</span></button>
         {/* interno(a) marcado pelo admin: abre o portal mnrs.com.br já logado, com os atalhos
             dele (Frota e Quadro — só leitura), sem segunda senha (server/src/portal.js); nova aba */}
@@ -2202,7 +2204,7 @@ export default function App({ user, onLogout, onRelogin }) {
 
       {showPrint && <PrintModal goa={printGoa} conteudo={printData()} meta={{ caseId, refMs, refFrozen: refAt != null, divergencias: conflitos }} onClose={() => setShowPrint(false)} />}
       {showChecklistGoa && <ChecklistGoaModal user={user} onClose={() => setShowChecklistGoa(false)} />}
-      {showSamus && staff && <SamuContactsModal user={user} onClose={() => setShowSamus(false)} />}
+      {showSamus && veContatos && <SamuContactsModal user={user} onClose={() => setShowSamus(false)} />}
       {showRoster && <CrewRosterModal roster={roster} onChanged={refreshRoster} onClose={() => setShowRoster(false)} />}
       {showCfg && <ConfigModal cfg={cfg} user={user} onClose={() => setShowCfg(false)} onSave={(c) => { setCfg(c); saveCfg(c); setShowCfg(false) }} />}
 
